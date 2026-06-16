@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # MySQL 8.0 Database Container
+  mysql_db:
+    image: mysql:8.0
+    container_name: match_mysql_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secure_pass123
+      MYSQL_DATABASE: match_bot_db
+      MYSQL_USER: match_bot_user
+      MYSQL_PASSWORD: match_bot_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - match_bot_network
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u$$MYSQL_USER", "-p$$MYSQL_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis In-Memory Sync, Matching & Cache Container
+  redis_cache:
+    image: redis:7-alpine
+    container_name: match_redis_cache
+    restart: always
+    command: redis-server --requirepass redis_secure_pass123 --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - match_bot_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secure_pass123", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Web Server + Telegram aiogram bot container
+  fastapi_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: match_fastapi_bot
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      mysql_db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+    networks:
+      - match_bot_network
+
+networks:
+  match_bot_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
