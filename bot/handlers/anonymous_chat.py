@@ -242,10 +242,15 @@ async def register_chat_consent(
         await state.clear()
         return
 
-    # ── Fetch and validate the MatchHistory record ────────────────────────── #
-    match_history: MatchHistory | None = await db_session.get(
-        MatchHistory, match_history_id
+    from sqlalchemy import select
+
+    # ── Fetch and validate the MatchHistory record with Row Lock ──────────── #
+    result = await db_session.execute(
+        select(MatchHistory)
+        .where(MatchHistory.id == match_history_id)
+        .with_for_update()
     )
+    match_history: MatchHistory | None = result.scalar_one_or_none()
 
     if not match_history or not match_history.is_active:
         logger.warning(
@@ -542,13 +547,13 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             # to prevent malicious callback-payload injection.
             reply_markup=None,
         )
-        except TelegramForbiddenError:
-            logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
-            await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
-            await state.clear()
-        except TelegramAPIError as exc:
-            logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")
-            await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
+    except TelegramForbiddenError:
+        logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
+        await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+        await state.clear()
+    except TelegramAPIError as exc:
+        logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")
+        await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
     except Exception as exc:
         logger.error(
             "Failed to forward media from user %d to partner %d: %s",
