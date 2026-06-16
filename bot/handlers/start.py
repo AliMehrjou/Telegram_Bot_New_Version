@@ -24,9 +24,9 @@ REQUIRED CHANGES IN OTHER FILES BEFORE THIS MODULE IS FULLY FUNCTIONAL:
 2. database/models/models.py — add new columns to the User model:
 
     province:              Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    coins:                 Mapped[int]           = mapped_column(Integer, default=5,  nullable=False)
-    coins_from_referrals:  Mapped[int]           = mapped_column(Integer, default=0,  nullable=False)
-    coins_spent:           Mapped[int]           = mapped_column(Integer, default=0,  nullable=False)
+    coin_balance:          Mapped[int]           = mapped_column(Integer, default=3,  nullable=False)
+    total_earned_coins:    Mapped[int]           = mapped_column(Integer, default=3,  nullable=False)
+    total_spent_coins:     Mapped[int]           = mapped_column(Integer, default=0,  nullable=False)
 
 3. database/queries/crud.py — update `complete_user_registration` signature to:
 
@@ -42,13 +42,13 @@ REQUIRED CHANGES IN OTHER FILES BEFORE THIS MODULE IS FULLY FUNCTIONAL:
         user.province = province
         ...
         # Give 5 coins to the new user
-        user.coins += 5
+        user.coin_balance += 5
         # Give 5 coins to the referrer
         if user.referrer_id:
             referrer = await get_user_by_tg_id(session, user.referrer_id)
             if referrer:
-                referrer.coins += 5
-                referrer.coins_from_referrals += 5
+                referrer.coin_balance += 5
+                referrer.total_earned_coins += 5
 
     Also implement:
     async def get_user_friends(session: AsyncSession, tg_id: int) -> list[User]:
@@ -545,9 +545,9 @@ async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
         (getattr(user, "province", None) or "").replace("_", " ")
     ) or "—"
 
-    # Use new `coins` field; fall back to legacy `vip_quota` so the profile
+    # Use new `coin_balance` field; fall back to legacy `vip_quota` so the profile
     # doesn't break before the migration is applied.
-    coin_balance: int = getattr(user, "coins", user.vip_quota)
+    coin_balance: int = getattr(user, "coin_balance", user.vip_quota)
 
     profile_card = (
         "👤 <b>پروفایل کاربری شما:</b>\n\n"
@@ -666,10 +666,9 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         return
 
     # Safe fallbacks for columns that may not exist before migration
-    coin_balance: int = getattr(user, "coins", user.vip_quota)
-    coins_from_invites: int = getattr(user, "coins_from_referrals", 0)
-    coins_spent: int = getattr(user, "coins_spent", 0)
-    total_earned: int = coin_balance + coins_spent
+    coin_balance: int = getattr(user, "coin_balance", user.vip_quota)
+    coins_spent: int = getattr(user, "total_spent_coins", 0)
+    total_earned: int = getattr(user, "total_earned_coins", coin_balance + coins_spent)
 
     try:
         bot_me = await bot.get_me()
@@ -682,7 +681,6 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         "🪙 <b>کیف پول سکه شما:</b>\n\n"
         f"💰 موجودی فعلی: <b>{coin_balance}</b> سکه\n"
         f"📈 مجموع درآمد: <b>{total_earned}</b> سکه\n"
-        f"🎁 از طریق دعوت دوستان: <b>{coins_from_invites}</b> سکه\n"
         f"📉 مجموع مصرف‌شده: <b>{coins_spent}</b> سکه\n\n"
         "──────────────────────────────\n"
         "🔗 <b>لینک دعوت اختصاصی شما:</b>\n"

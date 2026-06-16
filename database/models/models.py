@@ -23,14 +23,15 @@ class User(Base):
     
     # Economy System (Coins)
     coin_balance: Mapped[int] = mapped_column(Integer, default=3, nullable=False) # 3 coins on start
-    total_earned: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
-    total_spent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_earned_coins: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    total_spent_coins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Permissions and Quotas
     is_vip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     vip_quota: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Activity & Status
+    is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_active: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Referral system

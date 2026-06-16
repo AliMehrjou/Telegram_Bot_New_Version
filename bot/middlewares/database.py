@@ -20,6 +20,23 @@ class DbSessionMiddleware(BaseMiddleware):
         async with async_session_factory() as session:
             data["db_session"] = session
             try:
+                # Update user online status
+                from matching_bot_project.database.models.models import User
+                from sqlalchemy import select
+                from datetime import datetime
+
+                user_id = None
+                if hasattr(event, "from_user") and event.from_user:
+                    user_id = event.from_user.id
+
+                if user_id:
+                    result = await session.execute(select(User).where(User.tg_id == user_id))
+                    user = result.scalar_one_or_none()
+                    if user:
+                        user.is_online = True
+                        user.last_active = datetime.utcnow()
+                        await session.commit()
+
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)
             except Exception as e:

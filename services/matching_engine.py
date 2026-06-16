@@ -48,6 +48,7 @@ class MatchingEngine:
             normalized_gender = gender.strip().lower()
             return f"match:queue:want_{normalized_target}:{normalized_gender}"
         
+        # Random Date allows any gender matching without strict filters.
         return "match:queue:random"
 
     def _get_target_queue_key(self, gender: str, target_gender: Optional[str] = None, province: Optional[str] = None) -> str:
@@ -64,6 +65,7 @@ class MatchingEngine:
             # If I am X looking for Y, I must pop from the queue of Y looking for X
             return f"match:queue:want_{normalized_gender}:{normalized_target}"
         
+        # Random Date allows any gender matching without strict filters.
         return "match:queue:random"
 
     async def add_to_queue(
@@ -145,6 +147,17 @@ class MatchingEngine:
 
             # Prevent self-matching (edge case if queue configuration overlaps)
             if candidate_id == tg_id:
+                continue
+
+            # Check if users blocked each other BEFORE pipeline
+            # SISMEMBER user:{id}:blocks {target_id}
+            is_candidate_blocked_by_user = await self.redis.sismember(f"user:{tg_id}:blocks", str(candidate_id))
+            is_user_blocked_by_candidate = await self.redis.sismember(f"user:{candidate_id}:blocks", str(tg_id))
+
+            if is_candidate_blocked_by_user or is_user_blocked_by_candidate:
+                logger.debug(f"Block collision detected between {tg_id} and {candidate_id}. Discarding match.")
+                # LPUSH candidate back to queue
+                await self.redis.lpush(target_queue_key, candidate_id_str)
                 continue
 
             candidate_state_key = f"user:state:{candidate_id}"

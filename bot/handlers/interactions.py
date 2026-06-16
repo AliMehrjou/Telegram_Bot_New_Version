@@ -140,20 +140,20 @@ async def view_partner_profile(
 
     profile_card = _build_profile_card(user)
 
-    # ── Send ONLY to the caller — never to the partner ──────────────────────
+    # ── Send ONLY to the caller via alert card ─────────────────────────────
+    # Convert HTML tags to plain text for the alert card, as Telegram alerts don't support HTML.
+    import re
+    plain_text_profile = re.sub(r'<[^>]+>', '', profile_card)
+
     try:
-        await bot.send_message(
-            chat_id=call.from_user.id,
-            text=profile_card,
-            parse_mode="HTML",
+        await call.answer(
+            text=plain_text_profile,
+            show_alert=True,
         )
     except Exception as exc:
         logger.error(
-            "Failed to send profile card to user %s: %s", call.from_user.id, exc
+            "Failed to send profile alert card to user %s: %s", call.from_user.id, exc
         )
-
-    # Always acknowledge the tap so the spinner disappears
-    await call.answer()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,7 +216,21 @@ async def end_date_early(
 
     await call.answer()
 
-    # ── 3 & 4. Clear state and notify both participants ──────────────────────
+    # ── 3. Stop timeout tracking from scheduler ──────────────────────────────
+    from matching_bot_project.bot.core.loader import dating_scheduler
+
+    redis_key = f"date:timeout:{match_id}"
+    try:
+        await dating_scheduler.redis.delete(redis_key)
+        await dating_scheduler.redis.delete(f"match:questions:{match_id}")
+        await dating_scheduler.redis.delete(f"match:current_q_index:{match_id}")
+        # Clean up users from matching queue / state
+        await dating_scheduler.redis.delete(f"user:state:{match_history.user_one_id}")
+        await dating_scheduler.redis.delete(f"user:state:{match_history.user_two_id}")
+    except Exception as exc:
+        logger.warning(f"Could not delete Redis keys for match cancellation {match_id}: {exc}")
+
+    # ── 4 & 5. Clear state and notify both participants ──────────────────────
     for uid in (match_history.user_one_id, match_history.user_two_id):
         # Clear FSM regardless of which state the user is currently in
         ctx = get_user_state(uid)
@@ -231,11 +245,19 @@ async def end_date_early(
 
         # Notify and return to main menu
         try:
-            await bot.send_message(
-                chat_id=uid,
-                text=_DATE_CANCELLED_TEXT,
-                reply_markup=get_main_menu_keyboard(),
-            )
+            if uid != call.from_user.id:
+                # Target partner
+                await bot.send_message(
+                    chat_id=uid,
+                    text="طرف مقابل دیت را پایان داد.",
+                    reply_markup=get_main_menu_keyboard(),
+                )
+            else:
+                await bot.send_message(
+                    chat_id=uid,
+                    text=_DATE_CANCELLED_TEXT,
+                    reply_markup=get_main_menu_keyboard(),
+                )
         except Exception as exc:
             logger.error(
                 "Failed to send cancellation notice to user %s: %s", uid, exc
@@ -273,10 +295,14 @@ async def block_user(
         await call.answer("❌ نمی‌توانید خودتان را مسدود کنید.", show_alert=True)
         return
 
+    from matching_bot_project.bot.core.loader import redis_client
+
     db_session.add(BlockList(blocker_id=caller_id, blocked_id=target_id))
 
     try:
         await db_session.commit()
+        # Add to Redis Sets for atomic evaluation in matching engine
+        await redis_client.sadd(f"user:{caller_id}:blocks", str(target_id))
     except IntegrityError:
         # The unique constraint on (blocker_id, blocked_id) was violated —
         # the user is already blocked; no further action needed.
@@ -340,7 +366,7 @@ async def request_direct_message(
         return
 
     # ── Coin balance check ───────────────────────────────────────────────────
-    if caller.coins < 1:
+    if caller.coin_balance < 1:
         await call.answer(
             "❌ سکه‌های شما کافی نیست! برای دریافت سکه از منوی اصلی اقدام کنید.",
             show_alert=True,
@@ -348,7 +374,8 @@ async def request_direct_message(
         return
 
     # ── Deduct coin and commit ───────────────────────────────────────────────
-    caller.coins -= 1
+    caller.coin_balance -= 1
+    caller.total_spent_coins += 1
     try:
         await db_session.commit()
         await db_session.refresh(caller)

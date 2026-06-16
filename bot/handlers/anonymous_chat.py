@@ -491,11 +491,19 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
                 "موارد ممنوع حذف شده و پیام ارسال گردید."
             )
 
+        from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
         try:
             await bot.send_message(
                 chat_id=partner_id,
                 text=f"💬: {filtered_text}",
             )
+        except TelegramForbiddenError:
+            logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
+            await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+            await state.clear()
+        except TelegramAPIError as exc:
+            logger.error(f"Telegram API Error relaying text from {tg_id} to {partner_id}: {exc}")
+            await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
         except Exception as exc:
             logger.error(
                 "Failed to relay text from user %d to partner %d: %s",
@@ -534,6 +542,13 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             # to prevent malicious callback-payload injection.
             reply_markup=None,
         )
+        except TelegramForbiddenError:
+            logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
+            await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+            await state.clear()
+        except TelegramAPIError as exc:
+            logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")
+            await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
     except Exception as exc:
         logger.error(
             "Failed to forward media from user %d to partner %d: %s",

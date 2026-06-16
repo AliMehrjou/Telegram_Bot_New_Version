@@ -528,6 +528,7 @@ async def _deliver_next_question(
             # receives the question even if FSM write failed.
 
         # ── Deliver question message ──────────────────────────────────────────
+        from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
         try:
             await bot.send_message(
                 chat_id=uid,
@@ -535,6 +536,10 @@ async def _deliver_next_question(
                 reply_markup=keyboard,
                 parse_mode="Markdown",
             )
+        except TelegramForbiddenError:
+            logger.warning(f"User {uid} blocked the bot. Questionnaire stalled in match {match_history_id}.")
+        except TelegramAPIError as exc:
+            logger.error(f"Telegram API Error delivering question to {uid} in match {match_history_id}: {exc}")
         except Exception as exc:
             logger.error(
                 "Failed to send question %s (index %s) to user %s in match %s: %s",
@@ -658,6 +663,10 @@ async def finalize_questionnaire_and_request_approval(
                 reply_markup=approval_keyboard,
                 parse_mode="Markdown",
             )
+        except TelegramForbiddenError:
+            logger.warning(f"User {uid} blocked the bot before approval prompt in match {match_id}.")
+        except TelegramAPIError as exc:
+            logger.error(f"Telegram API error delivering approval prompt to {uid} in match {match_id}: {exc}")
         except Exception as exc:
             logger.error(
                 "Failed to deliver approval prompt to user %s in match %s: %s",

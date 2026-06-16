@@ -30,6 +30,15 @@ class ForceJoinMiddleware(BaseMiddleware):
         if user_id in settings.parsed_admin_ids:
             return await handler(event, data)
 
+        # 1.5. Bypass for users in an active match / chat (Check Redis user state)
+        try:
+            user_state = await redis_client.hget(f"user:state:{user_id}", "status")
+            if user_state in ("matched", "chatting"):
+                # Bypass ForceJoin so ongoing sessions do not freeze mid-way
+                return await handler(event, data)
+        except Exception as e:
+            logger.warning("Redis HGET failed in ForceJoinMiddleware bypass check for user %s: %s", user_id, e)
+
         cache_key = f"user:force_join_cache:{user_id}"
 
         # 2. Safely check Redis cache
