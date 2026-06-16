@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Security
+from fastapi.security.api_key import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Dict, List
@@ -7,14 +8,25 @@ import logging
 from matching_bot_project.database.session import get_db_session
 from matching_bot_project.database.models.models import User, MatchHistory, Question
 from matching_bot_project.bot.core.loader import bot
+from matching_bot_project.bot.core.config import settings
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin Control Panel"])
 
+api_key_header = APIKeyHeader(name="X-Admin-Token", auto_error=True)
+
+async def get_admin_token(api_key_header: str = Security(api_key_header)):
+    if api_key_header != settings.BOT_TOKEN: # Using bot token as admin secret for simplicity, or ideally a separate ADMIN_SECRET
+        raise HTTPException(status_code=403, detail="Could not validate credentials")
+    return api_key_header
+
 
 @router.get("/stats")
-async def get_bot_statistics(db: AsyncSession = Depends(get_db_session)) -> Dict:
+async def get_bot_statistics(
+    db: AsyncSession = Depends(get_db_session),
+    admin_token: str = Depends(get_admin_token)
+) -> Dict:
     """Provides high-level analytical performance logs for the registration metrics."""
     try:
         total_users = await db.scalar(select(func.count(User.id)))
@@ -40,7 +52,8 @@ async def get_bot_statistics(db: AsyncSession = Depends(get_db_session)) -> Dict
 @router.post("/broadcast")
 async def trigger_admin_broadcast(
     text: str = Query(..., min_length=5),
-    db: AsyncSession = Depends(get_db_session)
+    db: AsyncSession = Depends(get_db_session),
+    admin_token: str = Depends(get_admin_token)
 ) -> Dict:
     """Dispatches a global notification message without blocking main thread flow."""
     try:

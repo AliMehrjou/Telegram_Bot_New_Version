@@ -145,13 +145,13 @@ async def enter_match_queue(
         cost_display = "رایگان"
     elif match_type == "boy":
         cost = 1
-        target_gender = "boy"
+        target_gender = "Male"
         province = None
         search_label = "👦 دیت با پسر"
         cost_display = "۱ سکه"
     elif match_type == "girl":
         cost = 1
-        target_gender = "girl"
+        target_gender = "Female"
         province = None
         search_label = "👧 دیت با دختر"
         cost_display = "۱ سکه"
@@ -225,30 +225,47 @@ async def enter_match_queue(
 
     # ── 10. Valid match found ────────────────────────────────────────────────
     if matched_partner_id:
-        # Clear the partner's queue state (they were waiting; we matched them).
-        partner_ctx = get_user_state(matched_partner_id)
-        await partner_ctx.clear()
-
-        # Clear our own queue state before handing off.
-        await state.clear()
-
         if cost > 0:
             # Deduct coin ONLY after a successful match is established for both users.
             try:
+                partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
+
+                # Check partner balance before committing match.
+                # If partner lacks coins, refund caller (if deducted) and abort match.
+                if not partner or partner.coin_balance < cost:
+                    logger.warning(f"Partner {matched_partner_id} has insufficient coins for match. Aborting match.")
+                    await matching_engine.remove_from_queue(matched_partner_id)
+
+                    partner_ctx = get_user_state(matched_partner_id)
+                    await partner_ctx.clear()
+
+                    await call.message.answer(
+                        text=(
+                            "⚠️ متاسفانه کاربری که یافت شد موجودی کافی نداشت. "
+                            "لطفاً دوباره جستجو کنید."
+                        ),
+                        reply_markup=get_main_menu_keyboard(),
+                    )
+                    await state.clear()
+                    return
+
                 # Deduct from caller
                 user.coin_balance -= cost
                 user.total_spent_coins += cost
 
-                # Based on the user prompt: "If a match succeeds, the atomic transaction must deduce exactly 1 coin from each user once."
-                partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
-                if partner and partner.coin_balance >= 1:
-                    partner.coin_balance -= 1
-                    partner.total_spent_coins += 1
+                # Deduct from partner
+                partner.coin_balance -= cost
+                partner.total_spent_coins += cost
 
                 await db_session.commit()
             except Exception as e:
                 logger.error(f"Error deducting coins for match {tg_id} and {matched_partner_id}: {e}")
                 await db_session.rollback()
+                # Clear FSM states to avoid lock
+                partner_ctx = get_user_state(matched_partner_id)
+                await partner_ctx.clear()
+                await state.clear()
+                return
 
         await handle_successful_match(db_session, tg_id, matched_partner_id)
 

@@ -8,15 +8,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["Telegram Webhook Feed"])
 
 
+from fastapi import Header
+
 @router.post("/webhook", status_code=status.HTTP_200_OK)
-async def telegram_webhook_endpoint(request: Request, token: str = None):
+async def telegram_webhook_endpoint(
+    request: Request,
+    x_telegram_bot_api_secret_token: str = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")
+):
     """
     Acts as the target security receiver for incoming Telegram server updates.
     Feeds the events recursively to aiogram dispatcher.
     """
-    # Enforce token security constraint if token is passed
-    if token and token != settings.BOT_TOKEN:
-        logger.error("Security alert! Ingestion attempted with invalid Telegram Token.")
+    # Strictly validate secret token (either passing in path query for legacy support or header for modern support)
+    secret_token = x_telegram_bot_api_secret_token or request.query_params.get("token")
+    if secret_token != settings.BOT_TOKEN:
+        logger.error("Security alert! Ingestion attempted with invalid or missing Telegram Token.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Forbidden security token mismatch."

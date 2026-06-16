@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.services.matching_engine import MatchingEngine
 from matching_bot_project.services.scheduler import DatingScheduler
+from matching_bot_project.database.session import async_session_factory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +43,8 @@ matching_engine = MatchingEngine(
 # Scheduler instance to clean stale active questionnaires
 dating_scheduler = DatingScheduler(
     bot=bot,
+    dp=dp,
     redis_client=redis_client,
+    session_factory=async_session_factory,
     timeout_seconds=180
 )
