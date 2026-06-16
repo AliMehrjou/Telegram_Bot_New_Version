@@ -3,7 +3,7 @@ from typing import Optional, List
 from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.database.models.models import (
-    User, MatchHistory, Question, UserAnswer, CoinTransaction, FriendList, BlockList
+    User, MatchHistory, Question, UserAnswer, CoinTransaction, FriendList, BlockList, UserLike, UserReport
 )
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,80 @@ async def get_random_questions(session: AsyncSession, limit: int = 20) -> List[Q
     stmt = select(Question).order_by(func.rand()).limit(limit)
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+
+async def update_user_profile(
+    session: AsyncSession,
+    tg_id: int,
+    bio: Optional[str] = None,
+    interests: Optional[str] = None,
+    trust_score: Optional[int] = None,
+    invisible_mode: Optional[bool] = None,
+    is_banned: Optional[bool] = None,
+    report_count: Optional[int] = None,
+) -> bool:
+    """Updates user profile fields including the newly added model fields."""
+    user = await get_user_by_tg_id(session, tg_id)
+    if not user:
+        return False
+
+    if bio is not None:
+        user.bio = bio
+    if interests is not None:
+        user.interests = interests
+    if trust_score is not None:
+        user.trust_score = trust_score
+    if invisible_mode is not None:
+        user.invisible_mode = invisible_mode
+    if is_banned is not None:
+        user.is_banned = is_banned
+    if report_count is not None:
+        user.report_count = report_count
+
+    await session.flush()
+    return True
+
+
+async def create_user_like(
+    session: AsyncSession,
+    liker_id: int,
+    liked_id: int,
+    is_pass: bool = False
+) -> UserLike:
+    """Creates a new like or pass record between two users."""
+    like_record = UserLike(
+        liker_id=liker_id,
+        liked_id=liked_id,
+        is_pass=is_pass
+    )
+    session.add(like_record)
+    await session.flush()
+    return like_record
+
+
+async def create_user_report(
+    session: AsyncSession,
+    reporter_id: int,
+    reported_id: int,
+    reason: str,
+    match_history_id: Optional[int] = None
+) -> UserReport:
+    """Creates a new report record for a user."""
+    report_record = UserReport(
+        reporter_id=reporter_id,
+        reported_id=reported_id,
+        reason=reason,
+        match_history_id=match_history_id
+    )
+    session.add(report_record)
+
+    # Increment reported user's report_count
+    reported_user = await get_user_by_tg_id(session, reported_id)
+    if reported_user:
+        reported_user.report_count += 1
+
+    await session.flush()
+    return report_record
 
 
 async def save_user_answer(
