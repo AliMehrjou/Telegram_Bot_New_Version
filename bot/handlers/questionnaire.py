@@ -80,6 +80,15 @@ _PARTNER_WAIT_ALERT: str = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+
+def build_progress_bar(current: int, total: int = 20) -> str:
+    if total == 0:
+        return ""
+    filled = round((current / total) * 10)
+    bar = "▓" * filled + "░" * (10 - filled)
+    return f"[{bar}] {current}/{total}\n\n"
+
+
 def get_user_state(user_id: int) -> FSMContext:
     """
     Resolve an FSMContext for *any* Telegram user by ID.
@@ -500,7 +509,9 @@ async def _deliver_next_question(
         )
         return
 
+    progress = build_progress_bar(next_q_index + 1, TOTAL_QUESTIONS)
     question_text = (
+        f"{progress}"
         f"❓ *سوال {next_q_index + 1} از {TOTAL_QUESTIONS}:*\n\n"
         f"{next_question.question_text}\n\n"
         f"🅰️ گزینه اول: {next_question.option_a}\n"

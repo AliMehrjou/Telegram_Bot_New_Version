@@ -10,7 +10,7 @@ from matching_bot_project.bot.middlewares.force_join import ForceJoinMiddleware
 from matching_bot_project.bot.middlewares.anti_spam import ThrottlingMiddleware
 
 # Import handlers to register them on dispatcher
-from matching_bot_project.bot.handlers import start, profile, matching, questionnaire, anonymous_chat, explore, interactions
+from matching_bot_project.bot.handlers import start, profile, matching, questionnaire, anonymous_chat, explore, interactions, admin, discovery, profile_edit, safety
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +39,10 @@ def register_bot_middlewares_and_routers():
     dp.callback_query.middleware(ForceJoinMiddleware())
 
     # Attach feature handlers to the core stack
+    dp.include_router(safety.router)
+    dp.include_router(profile_edit.router)
+    dp.include_router(discovery.router)
+    dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(matching.router)

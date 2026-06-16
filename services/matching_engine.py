@@ -73,7 +73,11 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        interests: Optional[str] = None,
+        min_age: Optional[int] = None,
+        max_age: Optional[int] = None,
+        caller_age: Optional[int] = None
     ) -> bool:
         """
         Registers a user in the matching pool. Removes them from any prior queues 
@@ -90,6 +94,10 @@ class MatchingEngine:
                 "gender": gender,
                 "target_gender": target_gender or "",
                 "province": province or "",
+                "interests": interests or "",
+                "min_age": min_age or "",
+                "max_age": max_age or "",
+                "age": caller_age or "",
                 "queue_key": queue_key,
                 "status": "queuing"
             })
@@ -121,7 +129,11 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        interests: Optional[str] = None,
+        min_age: Optional[int] = None,
+        max_age: Optional[int] = None,
+        caller_age: Optional[int] = None
     ) -> Optional[int]:
         """
         Attempts to match an active user with an opposing queue participant atomically.
@@ -173,6 +185,39 @@ class MatchingEngine:
                         await pipe.reset()
                         continue
 
+
+                    # VIP interest filter (optional strictness or just priority)
+                    # If caller has interests, prioritize. We implement a simple filter: if interests provided, must intersect at least 1.
+                    if interests:
+                        candidate_interests = await pipe.hget(candidate_state_key, "interests")
+                        if candidate_interests:
+                            caller_ints = set(interests.split(","))
+                            cand_ints = set(candidate_interests.split(","))
+                            if not caller_ints.intersection(cand_ints):
+                                await pipe.reset()
+                                # Reject this candidate and put them back
+                                await self.redis.lpush(target_queue_key, candidate_id_str)
+                                continue
+
+
+                    # VIP Age filter (bilateral)
+                    candidate_min_age = await pipe.hget(candidate_state_key, "min_age")
+                    candidate_max_age = await pipe.hget(candidate_state_key, "max_age")
+                    candidate_age_str = await pipe.hget(candidate_state_key, "age")
+                    candidate_age = int(candidate_age_str) if candidate_age_str else None
+
+                    if min_age and max_age and candidate_age:
+                        if not (min_age <= candidate_age <= max_age):
+                            await pipe.reset()
+                            await self.redis.lpush(target_queue_key, candidate_id_str)
+                            continue
+
+                    if candidate_min_age and candidate_max_age and caller_age:
+                        if not (int(candidate_min_age) <= caller_age <= int(candidate_max_age)):
+                            await pipe.reset()
+                            await self.redis.lpush(target_queue_key, candidate_id_str)
+                            continue
+
                     # Begin atomic transaction
                     pipe.multi()
 
@@ -182,6 +227,10 @@ class MatchingEngine:
                         "gender": gender,
                         "target_gender": target_gender or "",
                         "province": province or "",
+                        "interests": interests or "",
+                        "min_age": min_age or "",
+                        "max_age": max_age or "",
+                        "age": caller_age or "",
                         "queue_key": caller_queue_key,
                         "status": "matched",
                         "matched_with": str(candidate_id)
@@ -208,7 +257,7 @@ class MatchingEngine:
                 continue
 
         # No valid candidate found after all attempts; add self to queue
-        await self.add_to_queue(tg_id, gender, target_gender, province)
+        await self.add_to_queue(tg_id, gender, target_gender, province, interests, min_age, max_age, caller_age)
         return None
 
     async def get_user_match_partner(self, tg_id: int) -> Optional[int]:

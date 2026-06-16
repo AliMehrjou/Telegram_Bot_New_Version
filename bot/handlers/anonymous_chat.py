@@ -402,7 +402,7 @@ async def register_chat_consent(
                 await bot.send_message(
                     chat_id=uid,
                     text=activation_text,
-                    reply_markup=get_active_chat_controls(),
+                    reply_markup=get_active_chat_controls(partner_id),
                     parse_mode="Markdown",
                 )
             except Exception as exc:
@@ -675,3 +675,4 @@ async def end_active_anonymous_chat(
         "🛑 پارتنر شما گفتگو را خاتمه داد. به منوی اصلی بازگشتید.",
         with_main_menu=True,
     )
+

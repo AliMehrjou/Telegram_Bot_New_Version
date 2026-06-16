@@ -215,3 +215,79 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
         
     await session.commit()
     logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")
+
+# --- Admin Stats Additions ---
+async def get_registrations_by_day(session: AsyncSession, days: int) -> int:
+    from datetime import datetime, timedelta
+    from sqlalchemy import func
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    stmt = select(func.count(User.id)).where(User.created_at >= cutoff)
+    return await session.scalar(stmt) or 0
+
+async def get_peak_hours(session: AsyncSession) -> list:
+    from sqlalchemy import func
+    # Using func.hour for MySQL. SQLite/Postgres might need different functions.
+    stmt = select(func.hour(User.last_active).label('hr'), func.count(User.id).label('cnt')).group_by('hr').order_by(func.count(User.id).desc()).limit(5)
+    res = await session.execute(stmt)
+    return res.all()
+
+async def get_top_provinces(session: AsyncSession, limit: int = 10) -> list:
+    from sqlalchemy import func
+    stmt = select(User.province, func.count(User.id)).group_by(User.province).order_by(func.count(User.id).desc()).limit(limit)
+    res = await session.execute(stmt)
+    return res.all()
+
+async def get_chat_conversion_rate(session: AsyncSession) -> float:
+    from sqlalchemy import func
+    # chat_approved=True / questionnaire_completed=True
+    total_completed = await session.scalar(select(func.count(MatchHistory.id)).where(MatchHistory.questionnaire_completed == True))
+    if not total_completed:
+        return 0.0
+    total_approved = await session.scalar(select(func.count(MatchHistory.id)).where(MatchHistory.chat_approved == True))
+    return (total_approved / total_completed) * 100.0
+
+# --- Discovery / Likes ---
+async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
+    from database.models.models import UserLike
+    from sqlalchemy.exc import IntegrityError
+
+    like_record = UserLike(liker_id=liker_id, liked_id=liked_id, is_pass=is_pass)
+    session.add(like_record)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Already liked/passed
+        await session.rollback()
+        # You could also update it here, but generally first action stands
+    return like_record
+
+async def check_mutual_like(session: AsyncSession, user_one_id: int, user_two_id: int) -> bool:
+    from database.models.models import UserLike
+    from sqlalchemy import and_
+
+    stmt = select(UserLike).where(
+        and_(
+            UserLike.liker_id == user_two_id,
+            UserLike.liked_id == user_one_id,
+            UserLike.is_pass == False
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+async def get_daily_like_count(redis_client, tg_id: int) -> int:
+    count = await redis_client.get(f"user:{tg_id}:likes_today")
+    return int(count) if count else 0
+
+async def increment_daily_like_count(redis_client, tg_id: int) -> None:
+    from datetime import datetime, timedelta
+
+    key = f"user:{tg_id}:likes_today"
+    count = await redis_client.incr(key)
+
+    if count == 1:
+        # Set expiration to midnight
+        now = datetime.utcnow()
+        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_midnight = int((midnight - now).total_seconds())
+        await redis_client.expire(key, seconds_until_midnight)

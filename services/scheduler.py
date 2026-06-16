@@ -68,6 +68,62 @@ class DatingScheduler:
         await self.redis.hset(key, "last_activity", str(now_epoch))
         await self.redis.expire(key, 300)
 
+
+    async def check_vip_expiry(self):
+        """Checks and revokes expired VIPs"""
+        from sqlalchemy import select, update, true
+        from database.models.models import User
+
+        while True:
+            try:
+                now_utc = datetime.utcnow()
+                async with self.session_factory() as session:
+                    # Find users whose vip_expires_at is in the past and are currently VIP
+                    stmt = select(User.tg_id).where(
+                        (User.is_vip == true()) &
+                        (User.vip_expires_at != None) &
+                        (User.vip_expires_at < now_utc)
+                    )
+                    result = await session.execute(stmt)
+                    expired_users = [row[0] for row in result.all()]
+
+                    if expired_users:
+                        # Revoke VIP
+                        await session.execute(
+                            update(User)
+                            .where(User.tg_id.in_(expired_users))
+                            .values(is_vip=False, vip_expires_at=None)
+                        )
+                        await session.commit()
+
+                        # Notify users
+                        for tg_id in expired_users:
+                            try:
+                                await self.bot.send_message(
+                                    chat_id=tg_id,
+                                    text="⚠️ اشتراک VIP شما به پایان رسید."
+                                )
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.error(f"Error checking VIP expiry: {e}")
+
+            await asyncio.sleep(3600)  # Check every hour
+
+
+    async def run_notifications(self):
+        """Runs smart notifications periodically"""
+        from services.notification_service import NotificationService
+        ns = NotificationService(self.bot, self.session_factory, self.redis)
+
+        while True:
+            try:
+                await ns.run_all()
+            except Exception as e:
+                logger.error(f"Error running notifications: {e}")
+
+            await asyncio.sleep(3600)  # Check every hour
+
     async def verify_timeout_loops(self):
         """
         Background polling task scanning all active timeout keys in Redis.
@@ -187,4 +243,6 @@ class DatingScheduler:
         """Launches the background runner attached to the active event loop."""
         if not self._running_task or self._running_task.done():
             self._running_task = asyncio.create_task(self.verify_timeout_loops())
+            asyncio.create_task(self.check_vip_expiry())
+            asyncio.create_task(self.run_notifications())
             logger.info("Dating Scheduler background polling successfully started.")

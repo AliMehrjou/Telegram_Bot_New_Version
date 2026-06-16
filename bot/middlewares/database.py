@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Callable, Dict, Awaitable
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import TelegramObject, CallbackQuery
 from matching_bot_project.database.session import async_session_factory
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,11 @@ class DbSessionMiddleware(BaseMiddleware):
                     result = await session.execute(select(User).where(User.tg_id == user_id))
                     user = result.scalar_one_or_none()
                     if user:
+                        if getattr(user, 'is_banned', False):
+                            if isinstance(event, CallbackQuery):
+                                await event.answer("حساب شما مسدود شده است.", show_alert=True)
+                            return None
+
                         user.is_online = True
                         user.last_active = datetime.utcnow()
                         await session.commit()

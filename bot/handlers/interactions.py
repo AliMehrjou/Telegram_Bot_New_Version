@@ -73,9 +73,6 @@ def get_user_state(user_id: int) -> FSMContext:
 def _build_profile_card(user) -> str:
     """
     Render a clean, HTML-safe profile card from a User ORM object.
-
-    Every dynamic field is passed through ``html.escape`` to prevent injection
-    of HTML tags stored in user-supplied strings (names, city names, etc.).
     """
     name = html.escape(str(user.first_name or "نامشخص"))
     gender_raw = str(user.gender or "").lower()
@@ -84,16 +81,31 @@ def _build_profile_card(user) -> str:
     province = html.escape(str(user.province or "نامشخص").replace("_", " "))
     city = html.escape(str(user.city or "نامشخص").replace("_", " "))
 
-    return (
-        "👤 <b>پروفایل کاربر</b>\n"
-        "──────────────────────\n"
-        f"📝 نام: <b>{name}</b>\n"
-        f"⚧ جنسیت: <b>{gender}</b>\n"
-        f"🎂 سن: <b>{age}</b> سال\n"
-        f"🗺 استان: <b>{province}</b>\n"
-        f"🏙 شهر: <b>{city}</b>"
-    )
+    bio = html.escape(str(getattr(user, "bio", None) or "—"))
+    interests_raw = getattr(user, "interests", "")
+    if interests_raw:
+        # Assuming interests are stored as comma-separated keys or values
+        interests = html.escape(interests_raw)
+    else:
+        interests = "—"
 
+    matches = 0 # This would be ideally queried, but we just show placeholder if not provided directly. Or we could remove it from here if we can't query it. But let's leave it as a general format.
+
+    return (
+        "╔══════════════════════╗\n"
+        "║   👤 پروفایل کاربر   ║\n"
+        "╠══════════════════════╣\n"
+        f"║ 📝 نام: {name}\n"
+        f"║ ⚧  جنسیت: {gender}\n"
+        f"║ 🎂 سن: {age} سال\n"
+        f"║ 🗺  استان: {province}\n"
+        f"║ 🏙  شهر: {city}\n"
+        f"║ 💼 بیو: {bio}\n"
+        f"║ 🏷  علایق: {interests}\n"
+        "╠══════════════════════╣\n"
+        f"║ 🏆 مچ‌ها: مخفی | ❤️ تفاهم بهترین: مخفی\n"
+        "╚══════════════════════╝"
+    )
 
 def _parse_int_suffix(callback_data: str, prefix: str) -> int | None:
     """
@@ -137,6 +149,17 @@ async def view_partner_profile(
     if not user:
         await call.answer("❌ پروفایل کاربر یافت نشد.", show_alert=True)
         return
+
+    # VIP: Log profile view
+    from matching_bot_project.bot.core.loader import redis_client
+    import time
+    try:
+        now = int(time.time())
+        # ZADD user:{viewed_id}:viewers {timestamp} {viewer_id}
+        await redis_client.zadd(f"user:{target_id}:viewers", {str(call.from_user.id): now})
+        await redis_client.expire(f"user:{target_id}:viewers", 86400 * 7) # 7 days TTL
+    except Exception as e:
+        logger.warning(f"Could not log profile view: {e}")
 
     profile_card = _build_profile_card(user)
 
@@ -299,11 +322,23 @@ async def block_user(
 
     db_session.add(BlockList(blocker_id=caller_id, blocked_id=target_id))
 
+
     try:
         await db_session.commit()
         # Add to Redis Sets for atomic evaluation in matching engine
         await redis_client.sadd(f"user:{caller_id}:blocks", str(target_id))
+
+        # Cooldown logic
+        block_count_key = f"user:block_count_today:{caller_id}"
+        count = await redis_client.incr(block_count_key)
+        if count == 1:
+            await redis_client.expire(block_count_key, 86400)
+
+        if count >= 3:
+            await redis_client.set(f"user:block_cooldown:{caller_id}", "1", ex=86400)
+
     except IntegrityError:
+
         # The unique constraint on (blocker_id, blocked_id) was violated —
         # the user is already blocked; no further action needed.
         await db_session.rollback()

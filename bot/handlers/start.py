@@ -475,7 +475,7 @@ async def register_city(
 #  Main Menu — 🎯 شروع دیت ناشناس
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "🎯 شروع دیت ناشناس")
+@router.message(F.text == "⚡️ شروع دیت ناشناس")
 async def start_anonymous_dating(
     message: Message, db_session: AsyncSession
 ) -> None:
@@ -520,18 +520,18 @@ async def start_anonymous_dating(
 #  Main Menu — 👤 پروفایل من
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "👤 پروفایل من")
+@router.message(F.text == "🪬 پروفایل من")
 async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
     """
     Renders the authenticated user's profile card in HTML.
-    Falls back gracefully when new model columns (province, coins) are absent.
     """
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     if not user or not user.completed_registration:
         await message.answer(
-            "⚠️ شما هنوز ثبت‌نام نکرده‌اید!\n"
+            "⚠️ شما هنوز ثبت‌نام نکرده‌اید!
+"
             "لطفاً دستور /start را ارسال کنید."
         )
         return
@@ -545,29 +545,54 @@ async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
         (getattr(user, "province", None) or "").replace("_", " ")
     ) or "—"
 
-    # Use new `coin_balance` field; fall back to legacy `vip_quota` so the profile
-    # doesn't break before the migration is applied.
+    bio = html.escape(str(getattr(user, "bio", None) or "—"))
+    interests = html.escape(str(getattr(user, "interests", None) or "—"))
+
     coin_balance: int = getattr(user, "coin_balance", user.vip_quota)
 
     profile_card = (
-        "👤 <b>پروفایل کاربری شما:</b>\n\n"
-        f"🆔 شناسه تلگرام: <code>{tg_id}</code>\n"
-        f"🏷️ نام: <b>{safe_name}</b>\n"
-        f"🙋 جنسیت: <b>{gender_label}</b>\n"
-        f"🎂 سن: <b>{user.age}</b> سال\n"
-        f"🗺️ استان: <b>{safe_province}</b>\n"
-        f"📍 شهر: <b>{safe_city}</b>\n"
-        f"⚡ وضعیت اشتراک: <b>{vip_badge}</b>\n"
-        f"🪙 موجودی سکه: <b>{coin_balance}</b> سکه\n"
+        "╔══════════════════════╗
+"
+        "║   👤 پروفایل کاربر   ║
+"
+        "╠══════════════════════╣
+"
+        f"║ 📝 نام: {safe_name}
+"
+        f"║ ⚧  جنسیت: {gender_label}
+"
+        f"║ 🎂 سن: {user.age} سال
+"
+        f"║ 🗺  استان: {safe_province}
+"
+        f"║ 🏙  شهر: {safe_city}
+"
+        f"║ 💼 بیو: {bio}
+"
+        f"║ 🏷  علایق: {interests}
+"
+        "╠══════════════════════╣
+"
+        f"║ ⚡ وضعیت اشتراک: {vip_badge}
+"
+        f"║ 🪙 موجودی سکه: {coin_balance} سکه
+"
+        "╚══════════════════════╝"
     )
-    await message.answer(profile_card)
 
+    from matching_bot_project.bot.keyboards.inline import get_profile_edit_keyboard
 
+    try:
+        markup = get_profile_edit_keyboard(user.is_vip)
+    except Exception:
+        markup = None
+
+    await message.answer(profile_card, reply_markup=markup)
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Main Menu — 📍 افراد نزدیک من
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "📍 افراد نزدیک من")
+@router.message(F.text == "📍 نزدیک من")
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
     """Presents gender-filter options for nearby-user discovery."""
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
@@ -585,7 +610,7 @@ async def show_nearby_people(message: Message, db_session: AsyncSession) -> None
 #  Main Menu — 🔍 جستجوی کاربران
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "🔍 جستجوی کاربران")
+@router.message(F.text == "🔍 جستجو")
 async def show_user_search(message: Message, db_session: AsyncSession) -> None:
     """Presents advanced user-search category options."""
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
@@ -603,7 +628,7 @@ async def show_user_search(message: Message, db_session: AsyncSession) -> None:
 #  Main Menu — 👥 دوستان من
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "👥 دوستان من")
+@router.message(F.text == "👥 دوستان")
 async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
     """
     Fetches and renders the user's friends list.
@@ -647,7 +672,7 @@ async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
 #  Main Menu — 🪙 سکه‌های من
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "🪙 سکه‌های من")
+@router.message(F.text == "🪙 سکه‌ها")
 async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
     """
     Renders the user's full wallet summary:

@@ -50,6 +50,15 @@ _MATCH_FOUND_TEXT = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+
+def build_progress_bar(current: int, total: int = 20) -> str:
+    if total == 0:
+        return ""
+    filled = round((current / total) * 10)
+    bar = "▓" * filled + "░" * (10 - filled)
+    return f"[{bar}] {current}/{total}\n\n"
+
+
 def get_user_state(user_id: int) -> FSMContext:
     """
     Resolve an FSMContext for *any* Telegram user by ID.
@@ -133,7 +142,15 @@ async def enter_match_queue(
         await call.answer("⚠️ شما در حال حاضر در صف انتظار هستید!", show_alert=True)
         return
 
+
+    # ── Check block cooldown ──────────────────────────────────────────────────
+    cooldown_active = await matching_engine.redis.get(f"user:block_cooldown:{tg_id}")
+    if cooldown_active:
+        await call.answer("⚠️ شما به دلیل مسدود کردن بیش از حد کاربران، فعلاً نمی‌توانید وارد صف مچ شوید. فردا تلاش کنید.", show_alert=True)
+        return
+
     # ── 2. Fetch user ────────────────────────────────────────────────────────
+
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     # ── 3. Routing parameters per match type ─────────────────────────────────
@@ -173,6 +190,34 @@ async def enter_match_queue(
         )
         return
 
+    # VIP Age filter handling
+    if getattr(user, 'is_vip', False) and not call.data.startswith("match_vip_age_"):
+        # We need to ask for age
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="۱۸-۲۵", callback_data=f"match_vip_age_18_25_{match_type}"),
+                InlineKeyboardButton(text="۲۵-۳۰", callback_data=f"match_vip_age_25_30_{match_type}")
+            ],
+            [
+                InlineKeyboardButton(text="۳۰-۴۰", callback_data=f"match_vip_age_30_40_{match_type}"),
+                InlineKeyboardButton(text="هر سنی", callback_data=f"match_vip_age_all_all_{match_type}")
+            ],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel_queue")]
+        ])
+        await call.message.edit_text("لطفاً بازه سنی مورد نظر پارتنر خود را انتخاب کنید:", reply_markup=kb)
+        await call.answer()
+        return
+
+    min_age = None
+    max_age = None
+    if call.data.startswith("match_vip_age_"):
+        parts = call.data.split("_")
+        # match_vip_age_18_25_type
+        if parts[3] != "all":
+            min_age = int(parts[3])
+            max_age = int(parts[4])
+
     # ── 5. Lock state (Defer cost deduction) ─────────────────────────────────
     # State is set BEFORE any further action so a second rapid tap is rejected
     await state.set_state(MatchingStates.waiting_in_queue)
@@ -199,6 +244,10 @@ async def enter_match_queue(
         gender=user.gender,
         target_gender=target_gender,
         province=province,
+        interests=user.interests,
+        min_age=min_age,
+        max_age=max_age,
+        caller_age=user.age
     )
 
     # ── 9. Ghost-match guard ─────────────────────────────────────────────────
@@ -308,6 +357,11 @@ async def handle_successful_match(
     match_history = await crud.create_match_history(session, user_one_id, user_two_id)
     await session.commit()
     await dating_scheduler.register_match_timeout(match_history.id, user_one_id, user_two_id)
+
+    # ── Step 1.5: store last partner for VIP rematch ─────────────────────────
+    await matching_engine.redis.set(f"user:{user_one_id}:last_match_partner", str(user_two_id), ex=86400)
+    await matching_engine.redis.set(f"user:{user_two_id}:last_match_partner", str(user_one_id), ex=86400)
+
     # ── Step 2: cache question pool in Redis ─────────────────────────────────
     pool = await crud.get_random_questions(session, 20)
 
@@ -406,10 +460,14 @@ async def handle_successful_match(
             )
 
         # Step 9 — send first question
+
+        progress = build_progress_bar(1, 20)
         try:
             await bot.send_message(
                 chat_id=target_id,
-                text=f"❓ *سوال اول:*\n\n{first_question.question_text}",
+                text=f"{progress}❓ *سوال اول:*
+
+{first_question.question_text}",
                 reply_markup=get_question_reply_keyboard(first_question.id),
                 parse_mode="Markdown",
             )
@@ -417,3 +475,9 @@ async def handle_successful_match(
             logger.error(
                 "Could not send first question to user %s: %s", target_id, exc
             )
+
+@router.callback_query(F.data == "cancel_queue")
+async def cancel_queue_inline(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("عملیات لغو شد.")
+    await call.answer()

@@ -19,6 +19,8 @@ class User(Base):
     province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     tags: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bio: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    interests: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     profile_photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # Economy System (Coins)
@@ -29,8 +31,14 @@ class User(Base):
     # Permissions and Quotas
     is_vip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     vip_quota: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    vip_quota: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    vip_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Activity & Status
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    report_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    trust_score: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    invisible_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_active: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
@@ -126,3 +134,11 @@ class UserAnswer(Base):
     
     selected_option: Mapped[str] = mapped_column(String(5), nullable=False)
     answered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+class UserLike(Base):
+    __tablename__ = "user_likes"
+    __table_args__ = (UniqueConstraint("liker_id", "liked_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    liker_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"))
+    liked_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"))
+    is_pass: Mapped[bool] = mapped_column(Boolean, default=False)  # True = Pass, False = Like
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
