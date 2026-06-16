@@ -27,9 +27,9 @@ async def process_coin_transaction(
         
     user.coin_balance += amount
     if amount > 0:
-        user.total_earned += amount
+        user.total_earned_coins += amount
     else:
-        user.total_spent += abs(amount)
+        user.total_spent_coins += abs(amount)
         
     transaction = CoinTransaction(
         user_id=user.tg_id,
@@ -55,7 +55,7 @@ async def create_user(
         referrer_id=referrer_id,
         completed_registration=False,
         coin_balance=3,
-        total_earned=3
+        total_earned_coins=3
     )
     session.add(user)
     await session.flush()
@@ -201,7 +201,7 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
     ]
     
     # Add dummy/real lines to reach 60 items so user gets exact rich schema seeded
-    for i in range(11, 61):
+    for i in range(11, 81):
         questions_data.append((
             f"سوال نمونه {i}: نظر شما در مورد معیار زندگی مشترک برای انتخاب {i} چیست؟",
             "گزینه اول و ملاک تفاهم اصولی",
@@ -214,4 +214,4 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
         session.add(q)
         
     await session.commit()
-    logger.info("Successfully seeded 60 questions into MySQL database Questions schema.")
+    logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")

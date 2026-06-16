@@ -166,23 +166,17 @@ async def enter_match_queue(
         return
 
     # ── 4. Coin balance check ────────────────────────────────────────────────
-    if user.coins < cost:
+    if user.coin_balance < cost:
         await call.answer(
             "❌ سکه‌های شما کافی نیست! برای دریافت سکه از منوی اصلی اقدام کنید.",
             show_alert=True,
         )
         return
 
-    # ── 5. Lock state & deduct cost ──────────────────────────────────────────
-    # State is set BEFORE the DB commit so a second rapid tap is rejected by
-    # the guard above even if the commit is still in flight.
+    # ── 5. Lock state (Defer cost deduction) ─────────────────────────────────
+    # State is set BEFORE any further action so a second rapid tap is rejected
     await state.set_state(MatchingStates.waiting_in_queue)
     await call.answer()
-
-    if cost > 0:
-        user.coins -= cost
-        await db_session.commit()
-        await db_session.refresh(user)
 
     # ── 6 & 7. Inform user that search is active ─────────────────────────────
     await call.message.edit_text(
@@ -209,7 +203,7 @@ async def enter_match_queue(
 
     # ── 9. Ghost-match guard ─────────────────────────────────────────────────
     # The engine should never return the caller's own ID; treat it as a fatal
-    # engine bug, clean up, refund, and notify the user.
+    # engine bug, clean up, and notify the user.
     if matched_partner_id == tg_id:
         logger.error(
             "Ghost match detected — user %s was matched with themselves.", tg_id
@@ -217,18 +211,17 @@ async def enter_match_queue(
         await matching_engine.remove_from_queue(tg_id)
         await state.clear()
 
-        if cost > 0:
-            user.coins += cost
-            await db_session.commit()
-
         await call.message.answer(
             text=(
                 "⚠️ خطای سیستم در مچ‌یابی. "
-                "سکه شما بازگردانده شد. لطفاً دوباره تلاش کنید."
+                "لطفاً دوباره تلاش کنید."
             ),
             reply_markup=get_main_menu_keyboard(),
         )
         return
+
+    # If valid match is found, matching_engine handles deducting coins
+    # to avoid double deduction or deducting without matching.
 
     # ── 10. Valid match found ────────────────────────────────────────────────
     if matched_partner_id:
@@ -238,6 +231,24 @@ async def enter_match_queue(
 
         # Clear our own queue state before handing off.
         await state.clear()
+
+        if cost > 0:
+            # Deduct coin ONLY after a successful match is established for both users.
+            try:
+                # Deduct from caller
+                user.coin_balance -= cost
+                user.total_spent_coins += cost
+
+                # Based on the user prompt: "If a match succeeds, the atomic transaction must deduce exactly 1 coin from each user once."
+                partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
+                if partner and partner.coin_balance >= 1:
+                    partner.coin_balance -= 1
+                    partner.total_spent_coins += 1
+
+                await db_session.commit()
+            except Exception as e:
+                logger.error(f"Error deducting coins for match {tg_id} and {matched_partner_id}: {e}")
+                await db_session.rollback()
 
         await handle_successful_match(db_session, tg_id, matched_partner_id)
 

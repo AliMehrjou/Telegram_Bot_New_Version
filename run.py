@@ -10,7 +10,7 @@ from matching_bot_project.bot.middlewares.force_join import ForceJoinMiddleware
 from matching_bot_project.bot.middlewares.anti_spam import ThrottlingMiddleware
 
 # Import handlers to register them on dispatcher
-from matching_bot_project.bot.handlers import start, profile, matching, questionnaire, anonymous_chat
+from matching_bot_project.bot.handlers import start, profile, matching, questionnaire, anonymous_chat, explore, interactions
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,13 +24,17 @@ logger = logging.getLogger("launcher")
 
 def register_bot_middlewares_and_routers():
     """Attaches all routers and intermediate global middlewares to aiogram dispatcher."""
-    # Register core middlewares
-    dp.message.outer_middleware(DbSessionMiddleware())
-    dp.callback_query.outer_middleware(DbSessionMiddleware())
+    # The correct middleware hierarchy: ThrottlingMiddleware -> DbSessionMiddleware -> ForceJoinMiddleware
     
-    dp.message.middleware(ThrottlingMiddleware())
-    dp.callback_query.middleware(ThrottlingMiddleware())
+    # 1. ThrottlingMiddleware (must be outer so it catches before session is created if spammed)
+    dp.message.outer_middleware(ThrottlingMiddleware())
+    dp.callback_query.outer_middleware(ThrottlingMiddleware())
     
+    # 2. DbSessionMiddleware
+    dp.message.middleware(DbSessionMiddleware())
+    dp.callback_query.middleware(DbSessionMiddleware())
+
+    # 3. ForceJoinMiddleware
     dp.message.middleware(ForceJoinMiddleware())
     dp.callback_query.middleware(ForceJoinMiddleware())
 
@@ -38,6 +42,8 @@ def register_bot_middlewares_and_routers():
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(matching.router)
+    dp.include_router(explore.router)
+    dp.include_router(interactions.router)
     dp.include_router(questionnaire.router)
     dp.include_router(anonymous_chat.router)
     

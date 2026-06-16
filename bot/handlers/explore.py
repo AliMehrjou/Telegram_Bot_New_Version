@@ -417,6 +417,7 @@ async def forward_direct_message(message: Message, state: FSMContext) -> None:
         )
         return
 
+    from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
     # ── 3. Deliver anonymous DM to the target ────────────────────────────────
     # html.escape() prevents the sender from injecting HTML tags into the
     # message rendered on the target's side (e.g. <b>bold</b> spoofing).
@@ -429,6 +430,12 @@ async def forward_direct_message(message: Message, state: FSMContext) -> None:
             text=anonymous_text,
             parse_mode="HTML",
         )
+    except TelegramForbiddenError:
+        delivery_ok = False
+        logger.warning(f"Target user {target_id} has blocked the bot. DM from {sender_id} failed.")
+    except TelegramAPIError as exc:
+        delivery_ok = False
+        logger.error(f"Telegram API Error delivering DM from {sender_id} to {target_id}: {exc}")
     except Exception as exc:
         delivery_ok = False
         logger.error(
