@@ -622,6 +622,8 @@ async def end_active_anonymous_chat(
     # ── Clean up the caller's Redis key and FSM state ────────────────────── #
     try:
         await redis_client.delete(f"user:state:{tg_id}")
+        if partner_id:
+            await redis_client.setex(f"user:{tg_id}:last_match_partner", 86400, str(partner_id))
     except Exception as exc:
         logger.error("Redis delete failed for caller %d: %s", tg_id, exc)
 
@@ -654,6 +656,7 @@ async def end_active_anonymous_chat(
 
     try:
         await redis_client.delete(f"user:state:{partner_id}")
+        await redis_client.setex(f"user:{partner_id}:last_match_partner", 86400, str(tg_id))
     except Exception as exc:
         logger.error("Redis delete failed for partner %d: %s", partner_id, exc)
 

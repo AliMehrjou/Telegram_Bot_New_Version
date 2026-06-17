@@ -156,6 +156,18 @@ async def view_partner_profile(
 
     profile_card = _build_profile_card(user)
 
+    # ── Log View for VIP Target ───────────────────────────────────────────────
+    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
+    if is_target_vip and call.from_user.id != target_id:
+        from matching_bot_project.bot.core.loader import redis_client
+        from datetime import timedelta
+        import time
+        key = f"user:{target_id}:viewers"
+        # Log view with Unix timestamp as score
+        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
+        # TTL of 7 days (604800 seconds)
+        await redis_client.expire(key, 604800)
+
     # ── Send ONLY to the caller ───────────────────────────────────────────────
     # We will send it as a message instead of an alert card to preserve formatting and HTML.
     try:

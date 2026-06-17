@@ -255,6 +255,7 @@ async def _query_user(
         .where(
             User.tg_id != caller_tg_id,
             User.completed_registration.is_(True),
+            getattr(User, "invisible_mode", False) == False,
             User.tg_id.not_in(blocked_by_caller_sq),
             User.tg_id.not_in(blockers_of_caller_sq),
         )

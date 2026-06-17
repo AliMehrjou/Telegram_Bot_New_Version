@@ -29,7 +29,9 @@ from matching_bot_project.bot.keyboards.reply import (
     get_cancel_keyboard,
     get_main_menu_keyboard,
 )
-from matching_bot_project.bot.states.states import MatchingStates, QuestionnaireStates
+from matching_bot_project.bot.states.states import MatchingStates, QuestionnaireStates, VIPStates
+from matching_bot_project.bot.keyboards.inline import get_vip_age_filter_keyboard
+from datetime import datetime
 from matching_bot_project.database.queries import crud
 
 logger = logging.getLogger(__name__)
@@ -180,6 +182,25 @@ async def enter_match_queue(
         )
         return
 
+    # ── VIP Age Filter Interception ──────────────────────────────────────────
+    is_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
+    if is_vip and match_type != "nearby":
+        await state.set_state(VIPStates.waiting_for_age_filter)
+        await state.update_data(
+            match_type=match_type,
+            target_gender=target_gender,
+            province=province,
+            search_label=search_label,
+            cost=cost,
+            cost_display=cost_display
+        )
+        await call.message.edit_text(
+            "شما کاربر VIP هستید! 💎\nلطفاً محدوده سنی مورد نظر خود را برای مچ انتخاب کنید:",
+            reply_markup=get_vip_age_filter_keyboard(match_type)
+        )
+        await call.answer()
+        return
+
     # ── 5. Lock state (Defer cost deduction) ─────────────────────────────────
     # State is set BEFORE any further action so a second rapid tap is rejected
     await state.set_state(MatchingStates.waiting_in_queue)
@@ -207,6 +228,10 @@ async def enter_match_queue(
         target_gender=target_gender,
         province=province,
         is_vip=user.is_vip,
+        caller_age=user.age,
+        caller_min_age=0,
+        caller_max_age=99,
+        caller_interests_str=user.interests
     )
 
     # ── 9. Ghost-match guard ─────────────────────────────────────────────────
@@ -263,6 +288,93 @@ async def enter_match_queue(
     # If matched_partner_id is None the user has been placed in the queue and
     # will be notified when the engine finds a counterpart.  No action needed
     # here; the state remains MatchingStates.waiting_in_queue.
+
+
+@router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_filter_"))
+async def process_vip_age_filter(
+    call: CallbackQuery,
+    state: FSMContext,
+    db_session: AsyncSession,
+) -> None:
+    """Processes the VIP age filter selection and delegates to the matching engine."""
+    parts = call.data.split("_")
+    min_age = int(parts[3])
+    max_age = int(parts[4])
+    match_type = parts[5]
+
+    data = await state.get_data()
+    target_gender = data.get("target_gender")
+    province = data.get("province")
+    search_label = data.get("search_label")
+    cost = data.get("cost", 0)
+    cost_display = data.get("cost_display")
+
+    tg_id = call.from_user.id
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
+
+    # Lock state
+    await state.set_state(MatchingStates.waiting_in_queue)
+
+    # Store filters for the matching engine
+    await state.update_data(min_age_filter=min_age, max_age_filter=max_age)
+
+    await call.message.edit_text(
+        text=(
+            f"🔍 *جستجوی پارتنر آغاز شد!*\n\n"
+            f"نوع مچ: {search_label}\n"
+            f"محدوده سنی: {min_age} تا {max_age} سال\n"
+            f"هزینه: {cost_display}\n\n"
+            "به محض یافتن پارتنر مناسب اطلاع‌رسانی می‌شود. 🙏"
+        ),
+        parse_mode="Markdown",
+    )
+    await call.message.answer(
+        text="در صورت تمایل به خروج از صف:",
+        reply_markup=get_cancel_keyboard(),
+    )
+
+    # Invoke engine
+    matched_partner_id: int | None = await matching_engine.find_match(
+        tg_id=tg_id,
+        gender=user.gender,
+        target_gender=target_gender,
+        province=province,
+        is_vip=True,
+        caller_age=user.age,
+        caller_min_age=min_age,
+        caller_max_age=max_age,
+        caller_interests_str=user.interests
+    )
+
+    if matched_partner_id == tg_id:
+        logger.error("Ghost match detected — user %s was matched with themselves.", tg_id)
+        await matching_engine.remove_from_queue(tg_id)
+        await state.clear()
+        await call.message.answer(
+            text="⚠️ خطای سیستم در مچ‌یابی. لطفاً دوباره تلاش کنید.",
+            reply_markup=get_main_menu_keyboard(),
+        )
+        return
+
+    if matched_partner_id:
+        partner_ctx = get_user_state(matched_partner_id)
+        await partner_ctx.clear()
+        await state.clear()
+
+        if cost > 0:
+            try:
+                user.coin_balance -= cost
+                user.total_spent_coins += cost
+                partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
+                if partner and partner.coin_balance >= 1:
+                    partner.coin_balance -= 1
+                    partner.total_spent_coins += 1
+                await db_session.commit()
+            except Exception as e:
+                logger.error(f"Error deducting coins for match {tg_id} and {matched_partner_id}: {e}")
+                await db_session.rollback()
+
+        await handle_successful_match(db_session, tg_id, matched_partner_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

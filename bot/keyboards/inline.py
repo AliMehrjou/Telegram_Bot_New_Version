@@ -68,3 +68,20 @@ def get_coins_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📜 تاریخچه تراکنش‌ها", callback_data="coins_history")],
         [InlineKeyboardButton(text="💎 خرید سکه", callback_data="coins_purchase")]
     ])
+
+# --- VIP Panel ---
+def get_vip_panel_keyboard(invisible_mode: bool) -> InlineKeyboardMarkup:
+    invisible_text = "👁 حالت مخفی: روشن 🟢" if invisible_mode else "👁 حالت مخفی: خاموش 🔴"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👀 بینندگان پروفایل", callback_data="vip_viewers")],
+        [InlineKeyboardButton(text=invisible_text, callback_data="vip_toggle_invisible")],
+        [InlineKeyboardButton(text="🔁 مچ مجدد با نفر قبلی", callback_data="vip_rematch")]
+    ])
+
+def get_vip_age_filter_keyboard(match_type: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="[۱۸-۲۵]", callback_data=f"vip_age_filter_18_25_{match_type}")],
+        [InlineKeyboardButton(text="[۲۵-۳۰]", callback_data=f"vip_age_filter_25_30_{match_type}")],
+        [InlineKeyboardButton(text="[۳۰-۴۰]", callback_data=f"vip_age_filter_30_40_{match_type}")],
+        [InlineKeyboardButton(text="[هر سنی]", callback_data=f"vip_age_filter_0_99_{match_type}")]
+    ])
