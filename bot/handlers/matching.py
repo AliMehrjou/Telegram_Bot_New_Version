@@ -133,6 +133,13 @@ async def enter_match_queue(
         await call.answer("⚠️ شما در حال حاضر در صف انتظار هستید!", show_alert=True)
         return
 
+    # ── Guard: block cooldown ────────────────────────────────────────────────
+    from matching_bot_project.bot.core.loader import redis_client
+    cooldown = await redis_client.get(f"user:block_cooldown:{tg_id}")
+    if cooldown:
+        await call.answer("🚫 به دلیل گزارش/بلاک بیش از حد در ۲۴ ساعت گذشته، حساب شما موقتاً از ورود به صف مچینگ محروم شده است. ⏳", show_alert=True)
+        return
+
     # ── 2. Fetch user ────────────────────────────────────────────────────────
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
@@ -199,6 +206,7 @@ async def enter_match_queue(
         gender=user.gender,
         target_gender=target_gender,
         province=province,
+        is_vip=user.is_vip,
     )
 
     # ── 9. Ghost-match guard ─────────────────────────────────────────────────

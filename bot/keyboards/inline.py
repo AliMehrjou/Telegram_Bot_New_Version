@@ -40,9 +40,10 @@ def get_chat_approval_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ خیر؛ لغو", callback_data="approve_chat_no")]
     ])
 
-def get_active_chat_controls() -> InlineKeyboardMarkup:
+def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛑 پایان دادن به چت", callback_data="end_active_chat")]
+        [InlineKeyboardButton(text="🛑 پایان دادن به چت", callback_data="end_active_chat")],
+        [InlineKeyboardButton(text="🚩 گزارش کاربر", callback_data=f"trigger_report_{target_id}")]
     ])
 
 # --- Main Menu Sub-menus (Search & Explore) ---

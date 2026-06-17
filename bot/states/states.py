@@ -29,3 +29,6 @@ class ProfileEditStates(StatesGroup):
 
 class DiscoveryStates(StatesGroup):
     navigating = State()
+
+class ReportStates(StatesGroup):
+    selecting_reason = State()
