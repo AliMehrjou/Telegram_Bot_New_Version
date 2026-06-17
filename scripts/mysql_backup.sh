@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 
 # This script is scheduled to run daily via cron for full-scale MySQL database hot backups.
-# Configuration settings are extracted in-situ or loaded from environment variables.
+# It reads database configuration from the .env file.
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Load environment variables from .env
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
+else
+    echo "Error: .env file not found in $PROJECT_ROOT"
+    exit 1
+fi
 
 BACKUP_DIR="/var/backups/match_bot"
 DATE_FORMAT=$(date +"%Y-%m-%d_%H%M%S")
@@ -9,9 +20,10 @@ BACKUP_FILE="${BACKUP_DIR}/match_bot_backup_${DATE_FORMAT}.sql"
 
 # Docker container identification parameters
 CONTAINER_NAME="match_mysql_db"
-MYSQL_USER="match_bot_user"
-MYSQL_PASSWORD="match_bot_password"
-MYSQL_DATABASE="match_bot_db"
+# Use environment variables loaded from .env
+MYSQL_USER="${DB_USER}"
+MYSQL_PASSWORD="${DB_PASSWORD}"
+MYSQL_DATABASE="${DB_NAME}"
 
 # Create storage backup path
 mkdir -p "$BACKUP_DIR"
