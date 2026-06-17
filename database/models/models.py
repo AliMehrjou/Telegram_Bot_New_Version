@@ -44,14 +44,14 @@ class User(Base):
     last_active: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Referral system
-    referrer_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="SET NULL"), nullable=True)
+    referrer_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    referred_users = relationship("User", backref="referrer", remote_side=[tg_id])
+    referred_users = relationship("User", backref="referrer", remote_side=[id])
 
 
 class CoinTransaction(Base):

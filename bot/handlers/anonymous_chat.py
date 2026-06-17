@@ -40,12 +40,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.core.loader import bot, dp, redis_client
-from bot.states.states import ChatStates
-from bot.keyboards.inline import get_active_chat_controls
-from bot.keyboards.reply import get_main_menu_keyboard
-from database.models.models import MatchHistory
-from database.queries import crud  # noqa: F401 – available for callers / future use
+from matching_bot_project.bot.core.loader import bot, dp, redis_client
+from matching_bot_project.bot.states.states import ChatStates
+from matching_bot_project.bot.keyboards.inline import get_active_chat_controls
+from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
+from matching_bot_project.database.models.models import MatchHistory
+from matching_bot_project.database.queries import crud  # noqa: F401 – available for callers / future use
 
 logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")

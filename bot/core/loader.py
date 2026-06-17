@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.services.matching_engine import MatchingEngine
 from matching_bot_project.services.scheduler import DatingScheduler
+from matching_bot_project.database.session import async_session_factory as session_factory_instance
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,7 +14,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize raw Bot instance using HTML formatting constraints
-bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
+from aiogram.client.default import DefaultBotProperties
+bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 
 # Setup safe Redis connection for FSM states, throttling and matching sessions
 redis_client = Redis(
@@ -40,8 +42,11 @@ matching_engine = MatchingEngine(
 )
 
 # Scheduler instance to clean stale active questionnaires
+
 dating_scheduler = DatingScheduler(
     bot=bot,
+    dp=dp,
     redis_client=redis_client,
+    session_factory=session_factory_instance,
     timeout_seconds=180
 )

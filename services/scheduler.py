@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from database.models.models import MatchHistory
+from matching_bot_project.database.models.models import MatchHistory
 
 logger = logging.getLogger(__name__)
 
