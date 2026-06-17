@@ -57,6 +57,12 @@ router = Router(name="questionnaire_handler")
 
 TOTAL_QUESTIONS: int = 20
 
+def build_progress_bar(current: int, total: int = TOTAL_QUESTIONS) -> str:
+    """Creates a text-based progress bar."""
+    filled_length = int(10 * current / total)
+    bar = '▓' * filled_length + '░' * (10 - filled_length)
+    return f"[{bar}] {current}/{total}\n\n"
+
 # Safety TTL on sync keys prevents memory leaks when a match is abandoned
 # mid-questionnaire and the key never reaches a count of 2.
 _SYNC_KEY_TTL_SECONDS: int = 3600
@@ -500,7 +506,9 @@ async def _deliver_next_question(
         )
         return
 
+    progress_bar = build_progress_bar(next_q_index + 1, TOTAL_QUESTIONS)
     question_text = (
+        f"{progress_bar}"
         f"❓ *سوال {next_q_index + 1} از {TOTAL_QUESTIONS}:*\n\n"
         f"{next_question.question_text}\n\n"
         f"🅰️ گزینه اول: {next_question.option_a}\n"

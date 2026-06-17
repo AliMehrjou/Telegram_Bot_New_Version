@@ -73,7 +73,11 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        interests: Optional[str] = None,
+        age: Optional[int] = None,
+        min_age_filter: Optional[int] = None,
+        max_age_filter: Optional[int] = None
     ) -> bool:
         """
         Registers a user in the matching pool. Removes them from any prior queues 
@@ -90,6 +94,10 @@ class MatchingEngine:
                 "gender": gender,
                 "target_gender": target_gender or "",
                 "province": province or "",
+                "interests": interests or "",
+                "age": age or 0,
+                "min_age_filter": min_age_filter or 0,
+                "max_age_filter": max_age_filter or 99,
                 "queue_key": queue_key,
                 "status": "queuing"
             })
@@ -121,7 +129,12 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        is_vip: bool = False,
+        caller_age: Optional[int] = 0,
+        caller_min_age: Optional[int] = 0,
+        caller_max_age: Optional[int] = 99,
+        caller_interests_str: Optional[str] = ""
     ) -> Optional[int]:
         """
         Attempts to match an active user with an opposing queue participant atomically.
@@ -132,20 +145,67 @@ class MatchingEngine:
         user_state_key = f"user:state:{tg_id}"
         target_queue_key = self._get_target_queue_key(gender, target_gender, province)
 
+        # Use passed parameters for VIP matching
+        caller_interests = set(caller_interests_str.split(",")) if caller_interests_str else set()
+
+        caller_age = int(caller_age or 0)
+        caller_min_age = int(caller_min_age or 0)
+        caller_max_age = int(caller_max_age or 99)
+
         max_attempts = 50
         attempts = 0
 
         while attempts < max_attempts:
             attempts += 1
             
-            # Pop a candidate from the target queue
-            candidate_id_str = await self.redis.rpop(target_queue_key)
+            # We peek at the queue to find a match that satisfies bilateral age filters and shared interests for VIPs
+            candidate_id_str = None
+            queue_length = await self.redis.llen(target_queue_key)
+
+            # Check up to 15 candidates in the queue to find a valid match
+            for i in range(min(15, queue_length)):
+                # LINDEX counts from head (left). We want to check from the tail (right) which is next to pop.
+                idx = -(i + 1)
+                peeked_id_str = await self.redis.lindex(target_queue_key, idx)
+                if not peeked_id_str:
+                    continue
+
+                peeked_state_key = f"user:state:{peeked_id_str}"
+                peeked_state = await self.redis.hgetall(peeked_state_key)
+                if not peeked_state:
+                    continue
+
+                candidate_age = int(peeked_state.get("age", 0))
+                candidate_min_age = int(peeked_state.get("min_age_filter", 0))
+                candidate_max_age = int(peeked_state.get("max_age_filter", 99))
+
+                # Check bilateral age constraints
+                if not (caller_min_age <= candidate_age <= caller_max_age):
+                    continue
+                if not (candidate_min_age <= caller_age <= candidate_max_age):
+                    continue
+
+                # If VIP, try to match interests if both have them
+                if is_vip and caller_interests:
+                    peeked_interests_str = peeked_state.get("interests", "")
+                    peeked_interests = set(peeked_interests_str.split(",")) if peeked_interests_str else set()
+
+                    if not caller_interests.intersection(peeked_interests):
+                        # Skip if no shared interests for VIP
+                        continue
+
+                # Found a valid candidate, pull them out of the list
+                await self.redis.lrem(target_queue_key, 1, peeked_id_str)
+                candidate_id_str = peeked_id_str
+                break
+
+            # If no candidate found after peeking constraints, break
             if not candidate_id_str:
-                break  # Queue is empty
+                break
 
             candidate_id = int(candidate_id_str)
 
-            # Prevent self-matching (edge case if queue configuration overlaps)
+            # Prevent self-matching
             if candidate_id == tg_id:
                 continue
 
@@ -207,8 +267,18 @@ class MatchingEngine:
                 logger.debug("WatchError on candidate %s during match attempt, skipping.", candidate_id)
                 continue
 
-        # No valid candidate found after all attempts; add self to queue
-        await self.add_to_queue(tg_id, gender, target_gender, province)
+        # No valid candidate found after all attempts; add self to queue.
+        # Ensure we fetch existing state data to preserve them when adding to queue
+        await self.add_to_queue(
+            tg_id,
+            gender,
+            target_gender,
+            province,
+            interests=caller_interests_str,
+            age=caller_age,
+            min_age_filter=caller_min_age,
+            max_age_filter=caller_max_age
+        )
         return None
 
     async def get_user_match_partner(self, tg_id: int) -> Optional[int]:

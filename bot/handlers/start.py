@@ -549,18 +549,38 @@ async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
     # doesn't break before the migration is applied.
     coin_balance: int = getattr(user, "coin_balance", user.vip_quota)
 
+    bio = html.escape(str(getattr(user, "bio", None) or "تنظیم نشده"))
+    interests = html.escape(str(getattr(user, "interests", None) or "تنظیم نشده"))
+
     profile_card = (
-        "👤 <b>پروفایل کاربری شما:</b>\n\n"
-        f"🆔 شناسه تلگرام: <code>{tg_id}</code>\n"
-        f"🏷️ نام: <b>{safe_name}</b>\n"
-        f"🙋 جنسیت: <b>{gender_label}</b>\n"
-        f"🎂 سن: <b>{user.age}</b> سال\n"
-        f"🗺️ استان: <b>{safe_province}</b>\n"
-        f"📍 شهر: <b>{safe_city}</b>\n"
-        f"⚡ وضعیت اشتراک: <b>{vip_badge}</b>\n"
-        f"🪙 موجودی سکه: <b>{coin_balance}</b> سکه\n"
+        "╔═════════════════════════╗\n"
+        "║       👤 <b>پروفایل کاربری شما</b>       ║\n"
+        "╠═════════════════════════╣\n"
+        f"║ 🆔 شناسه تلگرام: <code>{tg_id}</code>\n"
+        f"║ 🏷️ نام: <b>{safe_name}</b>\n"
+        f"║ 🙋 جنسیت: <b>{gender_label}</b>\n"
+        f"║ 🎂 سن: <b>{user.age}</b> سال\n"
+        f"║ 🗺️ استان: <b>{safe_province}</b>\n"
+        f"║ 📍 شهر: <b>{safe_city}</b>\n"
+        "╠═════════════════════════╣\n"
+        f"║ 📝 بیوگرافی:\n"
+        f"║ <i>{bio}</i>\n"
+        "║\n"
+        f"║ 🎯 علایق:\n"
+        f"║ <i>{interests}</i>\n"
+        "╠═════════════════════════╣\n"
+        f"║ ⚡ وضعیت اشتراک: <b>{vip_badge}</b>\n"
+        f"║ 🪙 موجودی سکه: <b>{coin_balance}</b> سکه\n"
+        "╚═════════════════════════╝"
     )
-    await message.answer(profile_card)
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    edit_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ ویرایش پروفایل", callback_data="edit_profile_triggered")],
+        [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")]
+    ])
+
+    await message.answer(profile_card, parse_mode="HTML", reply_markup=edit_keyboard)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

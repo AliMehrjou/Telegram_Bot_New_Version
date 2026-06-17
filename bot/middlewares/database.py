@@ -33,6 +33,10 @@ class DbSessionMiddleware(BaseMiddleware):
                     result = await session.execute(select(User).where(User.tg_id == user_id))
                     user = result.scalar_one_or_none()
                     if user:
+                        if getattr(user, "is_banned", False):
+                            logger.info(f"Blocked request from banned user {user_id}")
+                            return None
+
                         user.is_online = True
                         user.last_active = datetime.utcnow()
                         await session.commit()

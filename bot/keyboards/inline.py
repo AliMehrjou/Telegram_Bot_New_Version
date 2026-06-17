@@ -40,9 +40,10 @@ def get_chat_approval_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ خیر؛ لغو", callback_data="approve_chat_no")]
     ])
 
-def get_active_chat_controls() -> InlineKeyboardMarkup:
+def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛑 پایان دادن به چت", callback_data="end_active_chat")]
+        [InlineKeyboardButton(text="🛑 پایان دادن به چت", callback_data="end_active_chat")],
+        [InlineKeyboardButton(text="🚩 گزارش کاربر", callback_data=f"trigger_report_{target_id}")]
     ])
 
 # --- Main Menu Sub-menus (Search & Explore) ---
@@ -66,4 +67,21 @@ def get_coins_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📜 تاریخچه تراکنش‌ها", callback_data="coins_history")],
         [InlineKeyboardButton(text="💎 خرید سکه", callback_data="coins_purchase")]
+    ])
+
+# --- VIP Panel ---
+def get_vip_panel_keyboard(invisible_mode: bool) -> InlineKeyboardMarkup:
+    invisible_text = "👁 حالت مخفی: روشن 🟢" if invisible_mode else "👁 حالت مخفی: خاموش 🔴"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👀 بینندگان پروفایل", callback_data="vip_viewers")],
+        [InlineKeyboardButton(text=invisible_text, callback_data="vip_toggle_invisible")],
+        [InlineKeyboardButton(text="🔁 مچ مجدد با نفر قبلی", callback_data="vip_rematch")]
+    ])
+
+def get_vip_age_filter_keyboard(match_type: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="[۱۸-۲۵]", callback_data=f"vip_age_filter_18_25_{match_type}")],
+        [InlineKeyboardButton(text="[۲۵-۳۰]", callback_data=f"vip_age_filter_25_30_{match_type}")],
+        [InlineKeyboardButton(text="[۳۰-۴۰]", callback_data=f"vip_age_filter_30_40_{match_type}")],
+        [InlineKeyboardButton(text="[هر سنی]", callback_data=f"vip_age_filter_0_99_{match_type}")]
     ])

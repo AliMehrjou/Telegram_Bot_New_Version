@@ -70,7 +70,7 @@ def get_user_state(user_id: int) -> FSMContext:
     )
 
 
-def _build_profile_card(user) -> str:
+def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
     """
     Render a clean, HTML-safe profile card from a User ORM object.
 
@@ -84,15 +84,31 @@ def _build_profile_card(user) -> str:
     province = html.escape(str(user.province or "نامشخص").replace("_", " "))
     city = html.escape(str(user.city or "نامشخص").replace("_", " "))
 
-    return (
-        "👤 <b>پروفایل کاربر</b>\n"
-        "──────────────────────\n"
-        f"📝 نام: <b>{name}</b>\n"
-        f"⚧ جنسیت: <b>{gender}</b>\n"
-        f"🎂 سن: <b>{age}</b> سال\n"
-        f"🗺 استان: <b>{province}</b>\n"
-        f"🏙 شهر: <b>{city}</b>"
+    bio = html.escape(str(user.bio or "تنظیم نشده"))
+    interests = html.escape(str(user.interests or "تنظیم نشده"))
+
+    card = (
+        "╔═════════════════════════╗\n"
+        "║       👤 <b>پروفایل کاربر</b>       ║\n"
+        "╠═════════════════════════╣\n"
+        f"║ 📝 نام: <b>{name}</b>\n"
+        f"║ ⚧ جنسیت: <b>{gender}</b>\n"
+        f"║ 🎂 سن: <b>{age}</b> سال\n"
+        f"║ 🗺 استان: <b>{province}</b>\n"
+        f"║ 🏙 شهر: <b>{city}</b>\n"
+        "╠═════════════════════════╣\n"
+        f"║ 📝 بیوگرافی:\n"
+        f"║ <i>{bio}</i>\n"
+        "║\n"
+        f"║ 🎯 علایق:\n"
+        f"║ <i>{interests}</i>\n"
+        "╚═════════════════════════╝"
     )
+
+    if compatibility is not None:
+        card += f"\n\n💞 میزان تفاهم: <b>{compatibility}%</b>"
+
+    return card
 
 
 def _parse_int_suffix(callback_data: str, prefix: str) -> int | None:
@@ -140,51 +156,44 @@ async def view_partner_profile(
 
     profile_card = _build_profile_card(user)
 
-    # ── Send ONLY to the caller via alert card ─────────────────────────────
-    # Convert HTML tags to plain text for the alert card, as Telegram alerts don't support HTML.
-    import re
-    plain_text_profile = re.sub(r'<[^>]+>', '', profile_card)
+    # ── Log View for VIP Target ───────────────────────────────────────────────
+    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
+    if is_target_vip and call.from_user.id != target_id:
+        from matching_bot_project.bot.core.loader import redis_client
+        from datetime import timedelta
+        import time
+        key = f"user:{target_id}:viewers"
+        # Log view with Unix timestamp as score
+        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
+        # TTL of 7 days (604800 seconds)
+        await redis_client.expire(key, 604800)
 
+    # ── Send ONLY to the caller ───────────────────────────────────────────────
+    # We will send it as a message instead of an alert card to preserve formatting and HTML.
     try:
-        await call.answer(
-            text=plain_text_profile,
-            show_alert=True,
+        await bot.send_message(
+            chat_id=call.from_user.id,
+            text=profile_card,
+            parse_mode="HTML"
         )
+        await call.answer()
     except Exception as exc:
         logger.error(
-            "Failed to send profile alert card to user %s: %s", call.from_user.id, exc
+            "Failed to send profile message to user %s: %s", call.from_user.id, exc
         )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Section 2 – End Date Early
+# Section 2 – End Date Early (and Extracted Helpers)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.callback_query(F.data.startswith("end_date_early_"))
-async def end_date_early(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
+async def execute_chat_termination(db_session: AsyncSession, match_id: int, caller_id: int) -> bool:
     """
-    Terminate a match that is either in its 5-second countdown or mid-questionnaire.
-
-    Either participant may trigger this.  The handler is idempotent: a second
-    tap (from the other user or a double-tap) receives an alert rather than
-    producing a double-cancel.
-
-    Steps
-    ─────
-    1. Fetch MatchHistory; return early if already inactive.
-    2. Deactivate and timestamp the record, commit.
-    3. Clear FSM state for both users.
-    4. Notify both users and return them to the main menu.
+    Core logic to safely terminate an active match, update the database,
+    clean up Redis keys, clear FSM states, and notify both users.
+    Returns True if successfully terminated, False if not found or already inactive.
     """
-    match_id = _parse_int_suffix(call.data, "end_date_early_")
-    if match_id is None:
-        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-        return
-
     # ── 1. Fetch match record ────────────────────────────────────────────────
     result = await db_session.execute(
         select(MatchHistory).where(MatchHistory.id == match_id)
@@ -192,13 +201,11 @@ async def end_date_early(
     match_history: MatchHistory | None = result.scalar_one_or_none()
 
     if not match_history:
-        await call.answer("❌ دیت موردنظر یافت نشد.", show_alert=True)
-        return
+        return False
 
     # ── Guard: already cancelled ─────────────────────────────────────────────
     if not match_history.is_active:
-        await call.answer("⚠️ این دیت قبلا لغو شده است.", show_alert=True)
-        return
+        return False
 
     # ── 2. Deactivate the match ──────────────────────────────────────────────
     match_history.is_active = False
@@ -211,10 +218,7 @@ async def end_date_early(
             "Failed to deactivate match %s in the database: %s", match_id, exc
         )
         await db_session.rollback()
-        await call.answer("❌ خطای سرور. لطفاً دوباره تلاش کنید.", show_alert=True)
-        return
-
-    await call.answer()
+        return False
 
     # ── 3. Stop timeout tracking from scheduler ──────────────────────────────
     from matching_bot_project.bot.core.loader import dating_scheduler
@@ -245,7 +249,7 @@ async def end_date_early(
 
         # Notify and return to main menu
         try:
-            if uid != call.from_user.id:
+            if uid != caller_id:
                 # Target partner
                 await bot.send_message(
                     chat_id=uid,
@@ -263,10 +267,62 @@ async def end_date_early(
                 "Failed to send cancellation notice to user %s: %s", uid, exc
             )
 
+    return True
+
+
+@router.callback_query(F.data.startswith("end_date_early_"))
+async def end_date_early(
+    call: CallbackQuery,
+    db_session: AsyncSession,
+) -> None:
+    """Callback wrapper for terminate date early logic."""
+    match_id = _parse_int_suffix(call.data, "end_date_early_")
+    if match_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+
+    success = await execute_chat_termination(db_session, match_id, call.from_user.id)
+    if not success:
+        await call.answer("⚠️ این دیت قبلا لغو شده یا وجود ندارد.", show_alert=True)
+    else:
+        await call.answer()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Section 3 – Block User
+# Section 3 – Block User (and Extracted Helpers)
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, blocked_id: int) -> tuple[bool, str]:
+    """
+    Core logic to block a user, updating MySQL BlockList and Redis block sets.
+    Returns (Success: bool, Message: str).
+    """
+    if blocker_id == blocked_id:
+        return False, "❌ نمی‌توانید خودتان را مسدود کنید."
+
+    from matching_bot_project.bot.core.loader import redis_client
+
+    db_session.add(BlockList(blocker_id=blocker_id, blocked_id=blocked_id))
+
+    try:
+        await db_session.commit()
+        # Add to Redis Sets for atomic evaluation in matching engine
+        await redis_client.sadd(f"user:{blocker_id}:blocks", str(blocked_id))
+        return True, "🚫 کاربر مسدود شد و دیگر به شما متصل نخواهد شد."
+    except IntegrityError:
+        # The unique constraint on (blocker_id, blocked_id) was violated —
+        # the user is already blocked; no further action needed.
+        await db_session.rollback()
+        return False, "⚠️ این کاربر قبلاً مسدود شده است."
+    except Exception as exc:
+        await db_session.rollback()
+        logger.error(
+            "Unexpected error while user %s attempted to block user %s: %s",
+            blocker_id,
+            blocked_id,
+            exc,
+        )
+        return False, "❌ خطای سرور. لطفاً دوباره تلاش کنید."
 
 
 @router.callback_query(F.data.startswith("block_user_"))
@@ -274,56 +330,41 @@ async def block_user(
     call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Add the target user to the caller's block list.
-
-    The matching engine is expected to consult the BlockList table to exclude
-    blocked pairs from future matches.
-
-    An ``IntegrityError`` is caught gracefully when the row already exists
-    (e.g. user double-taps or taps after navigating back to the same card).
-    """
+    """Callback wrapper for block user logic, with rate limiting."""
     target_id = _parse_int_suffix(call.data, "block_user_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
 
     caller_id = call.from_user.id
-
-    # Self-block guard
-    if caller_id == target_id:
-        await call.answer("❌ نمی‌توانید خودتان را مسدود کنید.", show_alert=True)
-        return
-
     from matching_bot_project.bot.core.loader import redis_client
 
-    db_session.add(BlockList(blocker_id=caller_id, blocked_id=target_id))
+    # Execute core block
+    success, msg = await execute_user_blocking(db_session, caller_id, target_id)
 
-    try:
-        await db_session.commit()
-        # Add to Redis Sets for atomic evaluation in matching engine
-        await redis_client.sadd(f"user:{caller_id}:blocks", str(target_id))
-    except IntegrityError:
-        # The unique constraint on (blocker_id, blocked_id) was violated —
-        # the user is already blocked; no further action needed.
-        await db_session.rollback()
-        await call.answer("⚠️ این کاربر قبلاً مسدود شده است.", show_alert=True)
-        return
-    except Exception as exc:
-        await db_session.rollback()
-        logger.error(
-            "Unexpected error while user %s attempted to block user %s: %s",
-            caller_id,
-            target_id,
-            exc,
-        )
-        await call.answer("❌ خطای سرور. لطفاً دوباره تلاش کنید.", show_alert=True)
-        return
+    if success:
+        # Track manual blocks for cooldown
+        from datetime import datetime, timedelta
+        limit_key = f"user:blocks_today:{caller_id}"
 
-    await call.answer(
-        "🚫 کاربر مسدود شد و دیگر به شما متصل نخواهد شد.",
-        show_alert=True,
-    )
+        blocks_count_str = await redis_client.get(limit_key)
+        blocks_count = int(blocks_count_str) if blocks_count_str else 0
+
+        pipe = redis_client.pipeline()
+        pipe.incr(limit_key)
+        if blocks_count == 0:
+            now = datetime.utcnow()
+            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            seconds_to_midnight = int((midnight - now).total_seconds())
+            pipe.expire(limit_key, seconds_to_midnight)
+
+        # Set cooldown if reached limit
+        if blocks_count + 1 >= 3:
+            pipe.setex(f"user:block_cooldown:{caller_id}", 86400, "1")  # 24h cooldown
+
+        await pipe.execute()
+
+    await call.answer(msg, show_alert=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

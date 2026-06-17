@@ -394,10 +394,11 @@ async def register_chat_consent(
                 partner_id=peer_id,
             )
             try:
+                partner_for_uid = user_one_id if uid == user_two_id else user_two_id
                 await bot.send_message(
                     chat_id=uid,
                     text=activation_text,
-                    reply_markup=get_active_chat_controls(),
+                    reply_markup=get_active_chat_controls(partner_for_uid),
                     parse_mode="Markdown",
                 )
             except Exception as exc:
@@ -542,13 +543,13 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             # to prevent malicious callback-payload injection.
             reply_markup=None,
         )
-        except TelegramForbiddenError:
-            logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
-            await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
-            await state.clear()
-        except TelegramAPIError as exc:
-            logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")
-            await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
+    except TelegramForbiddenError:
+        logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
+        await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+        await state.clear()
+    except TelegramAPIError as exc:
+        logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")
+        await message.reply("⚠️ خطای تلگرام در ارسال پیام.")
     except Exception as exc:
         logger.error(
             "Failed to forward media from user %d to partner %d: %s",
@@ -621,6 +622,8 @@ async def end_active_anonymous_chat(
     # ── Clean up the caller's Redis key and FSM state ────────────────────── #
     try:
         await redis_client.delete(f"user:state:{tg_id}")
+        if partner_id:
+            await redis_client.setex(f"user:{tg_id}:last_match_partner", 86400, str(partner_id))
     except Exception as exc:
         logger.error("Redis delete failed for caller %d: %s", tg_id, exc)
 
@@ -653,6 +656,7 @@ async def end_active_anonymous_chat(
 
     try:
         await redis_client.delete(f"user:state:{partner_id}")
+        await redis_client.setex(f"user:{partner_id}:last_match_partner", 86400, str(tg_id))
     except Exception as exc:
         logger.error("Redis delete failed for partner %d: %s", partner_id, exc)
 

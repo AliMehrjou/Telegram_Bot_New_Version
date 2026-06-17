@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     # Administrator user lists (comma separated strings)
     ADMIN_USER_IDS: str = "12345678"
+    ADMIN_SECRET_TOKEN: str
 
     @property
     def parsed_admin_ids(self) -> list[int]:
