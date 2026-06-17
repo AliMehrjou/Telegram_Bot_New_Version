@@ -573,7 +573,13 @@ async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
         f"║ 🪙 موجودی سکه: <b>{coin_balance}</b> سکه\n"
         "╚═════════════════════════╝"
     )
-    await message.answer(profile_card, parse_mode="HTML")
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    edit_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ ویرایش پروفایل", callback_data="edit_profile_triggered")]
+    ])
+
+    await message.answer(profile_card, parse_mode="HTML", reply_markup=edit_keyboard)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

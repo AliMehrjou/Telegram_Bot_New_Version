@@ -73,7 +73,8 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        interests: Optional[str] = None
     ) -> bool:
         """
         Registers a user in the matching pool. Removes them from any prior queues 
@@ -90,6 +91,7 @@ class MatchingEngine:
                 "gender": gender,
                 "target_gender": target_gender or "",
                 "province": province or "",
+                "interests": interests or "",
                 "queue_key": queue_key,
                 "status": "queuing"
             })
@@ -121,7 +123,8 @@ class MatchingEngine:
         tg_id: int, 
         gender: str, 
         target_gender: Optional[str] = None, 
-        province: Optional[str] = None
+        province: Optional[str] = None,
+        is_vip: bool = False
     ) -> Optional[int]:
         """
         Attempts to match an active user with an opposing queue participant atomically.
@@ -132,14 +135,45 @@ class MatchingEngine:
         user_state_key = f"user:state:{tg_id}"
         target_queue_key = self._get_target_queue_key(gender, target_gender, province)
 
+        # Get caller's interests for VIP matching
+        caller_interests_str = await self.redis.hget(user_state_key, "interests")
+        caller_interests = set(caller_interests_str.split(",")) if caller_interests_str else set()
+
         max_attempts = 50
         attempts = 0
 
         while attempts < max_attempts:
             attempts += 1
             
-            # Pop a candidate from the target queue
-            candidate_id_str = await self.redis.rpop(target_queue_key)
+            # For VIPs with interests, we peek at the queue to find a match with shared interests
+            candidate_id_str = None
+            if is_vip and caller_interests:
+                queue_length = await self.redis.llen(target_queue_key)
+                # Check up to 10 candidates in the queue
+                for i in range(min(10, queue_length)):
+                    # LINDEX counts from head (left). We want to check from the tail (right) which is next to pop.
+                    # Index -1 is the last element (next to pop in RPOP). Index -(i+1) checks from tail backwards.
+                    idx = -(i + 1)
+                    peeked_id_str = await self.redis.lindex(target_queue_key, idx)
+                    if not peeked_id_str:
+                        continue
+
+                    peeked_state_key = f"user:state:{peeked_id_str}"
+                    peeked_interests_str = await self.redis.hget(peeked_state_key, "interests")
+                    peeked_interests = set(peeked_interests_str.split(",")) if peeked_interests_str else set()
+
+                    if caller_interests.intersection(peeked_interests):
+                        # Found a candidate with common interests, pull them out of the list
+                        # LREM removes the element. Count 1 removes the first occurrence from head to tail.
+                        # Since we want a specific element we just found, we can remove it.
+                        await self.redis.lrem(target_queue_key, 1, peeked_id_str)
+                        candidate_id_str = peeked_id_str
+                        break
+
+            # Fallback to standard popping if no candidate found via VIP interest matching or if not VIP
+            if not candidate_id_str:
+                candidate_id_str = await self.redis.rpop(target_queue_key)
+
             if not candidate_id_str:
                 break  # Queue is empty
 
@@ -207,8 +241,10 @@ class MatchingEngine:
                 logger.debug("WatchError on candidate %s during match attempt, skipping.", candidate_id)
                 continue
 
-        # No valid candidate found after all attempts; add self to queue
-        await self.add_to_queue(tg_id, gender, target_gender, province)
+        # No valid candidate found after all attempts; add self to queue.
+        # Ensure we fetch interests from state to preserve them when adding to queue
+        caller_interests_str = await self.redis.hget(user_state_key, "interests")
+        await self.add_to_queue(tg_id, gender, target_gender, province, interests=caller_interests_str)
         return None
 
     async def get_user_match_partner(self, tg_id: int) -> Optional[int]:

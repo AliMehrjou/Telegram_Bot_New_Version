@@ -22,3 +22,7 @@ class ChatStates(StatesGroup):
 
 class SupportStates(StatesGroup):
     waiting_for_support_message = State()  # جدید
+
+class ProfileEditStates(StatesGroup):
+    editing_bio = State()
+    selecting_interests = State()
