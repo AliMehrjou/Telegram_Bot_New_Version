@@ -130,11 +130,9 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
     from matching_bot_project.bot.handlers.matching import handle_successful_match
 
     # Remove both from any queue if they are in it
-    from matching_bot_project.bot.core.config import settings
-    from matching_bot_project.services.matching_engine import MatchingEngine
-    engine = MatchingEngine(settings.REDIS_HOST, settings.REDIS_PORT, settings.REDIS_PASSWORD)
-    await engine.remove_from_queue(tg_id)
-    await engine.remove_from_queue(partner_id)
+    from matching_bot_project.bot.core.loader import matching_engine
+    await matching_engine.remove_from_queue(tg_id)
+    await matching_engine.remove_from_queue(partner_id)
 
     await call.message.answer("🔁 در حال اتصال مجدد به پارتنر قبلی...")
     await handle_successful_match(db_session, tg_id, partner_id)
