@@ -1,46 +1,71 @@
 version: '3.8'
 
 services:
+  # Traefik Reverse Proxy
+  traefik:
+    image: traefik:v2.10
+    container_name: match_traefik
+    command:
+      - "--api.insecure=false"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      # Global redirect to https
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - match_bot_network
+    restart: always
+
   # MySQL 8.0 Database Container
   mysql_db:
     image: mysql:8.0
     container_name: match_mysql_db
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root_secure_pass123
-      MYSQL_DATABASE: match_bot_db
-      MYSQL_USER: match_bot_user
-      MYSQL_PASSWORD: match_bot_password
-    ports:
-      - "3306:3306"
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
       - match_bot_network
     command: --default-authentication-plugin=mysql_native_password
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u$$MYSQL_USER", "-p$$MYSQL_PASSWORD"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 5s
       timeout: 5s
       retries: 5
+    # No ports exposed to host for security
 
   # Redis In-Memory Sync, Matching & Cache Container
   redis_cache:
     image: redis:7-alpine
     container_name: match_redis_cache
     restart: always
-    command: redis-server --requirepass redis_secure_pass123 --appendonly yes
-    ports:
-      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
     volumes:
       - redis_data:/data
     networks:
       - match_bot_network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "redis_secure_pass123", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    # No ports exposed to host for security
 
   # FastAPI Web Server + Telegram aiogram bot container
   fastapi_bot:
@@ -51,10 +76,6 @@ services:
     restart: always
     env_file:
       - .env
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
     depends_on:
       mysql_db:
         condition: service_healthy
@@ -62,6 +83,19 @@ services:
         condition: service_healthy
     networks:
       - match_bot_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bot.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.bot.entrypoints=websecure"
+      - "traefik.http.routers.bot.tls.certresolver=myresolver"
+      - "traefik.http.services.bot.loadbalancer.server.port=8000"
+      # Traefik Dashboard protection (Basic Auth)
+      - "traefik.http.routers.dashboard.rule=Host(`dashboard.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=myresolver"
+      - "traefik.http.routers.dashboard.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=${DASHBOARD_AUTH}"
 
 networks:
   match_bot_network:
