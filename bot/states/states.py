@@ -26,3 +26,6 @@ class SupportStates(StatesGroup):
 class ProfileEditStates(StatesGroup):
     editing_bio = State()
     selecting_interests = State()
+
+class DiscoveryStates(StatesGroup):
+    navigating = State()

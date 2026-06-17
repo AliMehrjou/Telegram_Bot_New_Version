@@ -218,6 +218,99 @@ async def create_user_report(
     return report_record
 
 
+async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
+    """Saves a like or pass interaction into the database."""
+    from sqlalchemy.exc import IntegrityError
+    like_rec = UserLike(liker_id=liker_id, liked_id=liked_id, is_pass=is_pass)
+    session.add(like_rec)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Ignore if it already exists to avoid crashing
+        await session.rollback()
+        stmt = select(UserLike).where(
+            and_(UserLike.liker_id == liker_id, UserLike.liked_id == liked_id)
+        )
+        res = await session.execute(stmt)
+        like_rec = res.scalar_one_or_none()
+    return like_rec
+
+
+async def check_mutual_like(session: AsyncSession, user_one_id: int, user_two_id: int) -> bool:
+    """Checks if two users have both liked each other (is_pass=False)."""
+    stmt = select(func.count(UserLike.id)).where(
+        or_(
+            and_(UserLike.liker_id == user_one_id, UserLike.liked_id == user_two_id, UserLike.is_pass == False),
+            and_(UserLike.liker_id == user_two_id, UserLike.liked_id == user_one_id, UserLike.is_pass == False)
+        )
+    )
+    result = await session.execute(stmt)
+    count = result.scalar()
+    return count == 2
+
+
+async def get_discovery_candidate(session: AsyncSession, current_user_id: int, current_user_gender: str) -> Optional[User]:
+    """
+    Fetches the next random profile for discovery based on strict filtering:
+    - Opposite gender
+    - Not self
+    - completed_registration = True
+    - Not in BlockList (mutual)
+    - Not already liked/passed by the current user
+    - Not invisible mode
+    - Orders by (Target Liked Caller DESC), RAND()
+    """
+    target_gender = "Female" if current_user_gender.lower() == "male" else "Male"
+    if current_user_gender.lower() == "boy": target_gender = "girl"
+    if current_user_gender.lower() == "girl": target_gender = "boy"
+
+    # Subquery: Users who have already liked the current user
+    liked_me_sq = select(UserLike.liker_id).where(
+        and_(UserLike.liked_id == current_user_id, UserLike.is_pass == False)
+    ).scalar_subquery()
+
+    # Subquery: Users the current user has already acted upon
+    acted_by_me_sq = select(UserLike.liked_id).where(
+        UserLike.liker_id == current_user_id
+    ).scalar_subquery()
+
+    # Subquery: Users who blocked the current user
+    blocked_me_sq = select(BlockList.blocker_id).where(
+        BlockList.blocked_id == current_user_id
+    ).scalar_subquery()
+
+    # Subquery: Users the current user blocked
+    blocked_by_me_sq = select(BlockList.blocked_id).where(
+        BlockList.blocker_id == current_user_id
+    ).scalar_subquery()
+
+    from sqlalchemy import case, func
+
+    # Priority condition: If target user is IN the list of users who liked the current user, priority = 1, else 0
+    priority_expr = case(
+        (User.tg_id.in_(liked_me_sq), 1),
+        else_=0
+    )
+
+    stmt = select(User).where(
+        and_(
+            User.tg_id != current_user_id,
+            func.lower(User.gender) == target_gender.lower(),
+            User.completed_registration == True,
+            getattr(User, "invisible_mode", False) == False,
+            ~User.tg_id.in_(acted_by_me_sq),
+            ~User.tg_id.in_(blocked_by_me_sq),
+            ~User.tg_id.in_(blocked_me_sq)
+        )
+    ).order_by(
+        priority_expr.desc(),
+        func.rand()
+    ).limit(1)
+
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def save_user_answer(
     session: AsyncSession, 
     user_id: int, 
