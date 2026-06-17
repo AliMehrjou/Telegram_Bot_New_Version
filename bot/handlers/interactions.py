@@ -70,7 +70,7 @@ def get_user_state(user_id: int) -> FSMContext:
     )
 
 
-def _build_profile_card(user) -> str:
+def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
     """
     Render a clean, HTML-safe profile card from a User ORM object.
 
@@ -84,15 +84,31 @@ def _build_profile_card(user) -> str:
     province = html.escape(str(user.province or "نامشخص").replace("_", " "))
     city = html.escape(str(user.city or "نامشخص").replace("_", " "))
 
-    return (
-        "👤 <b>پروفایل کاربر</b>\n"
-        "──────────────────────\n"
-        f"📝 نام: <b>{name}</b>\n"
-        f"⚧ جنسیت: <b>{gender}</b>\n"
-        f"🎂 سن: <b>{age}</b> سال\n"
-        f"🗺 استان: <b>{province}</b>\n"
-        f"🏙 شهر: <b>{city}</b>"
+    bio = html.escape(str(user.bio or "تنظیم نشده"))
+    interests = html.escape(str(user.interests or "تنظیم نشده"))
+
+    card = (
+        "╔═════════════════════════╗\n"
+        "║       👤 <b>پروفایل کاربر</b>       ║\n"
+        "╠═════════════════════════╣\n"
+        f"║ 📝 نام: <b>{name}</b>\n"
+        f"║ ⚧ جنسیت: <b>{gender}</b>\n"
+        f"║ 🎂 سن: <b>{age}</b> سال\n"
+        f"║ 🗺 استان: <b>{province}</b>\n"
+        f"║ 🏙 شهر: <b>{city}</b>\n"
+        "╠═════════════════════════╣\n"
+        f"║ 📝 بیوگرافی:\n"
+        f"║ <i>{bio}</i>\n"
+        "║\n"
+        f"║ 🎯 علایق:\n"
+        f"║ <i>{interests}</i>\n"
+        "╚═════════════════════════╝"
     )
+
+    if compatibility is not None:
+        card += f"\n\n💞 میزان تفاهم: <b>{compatibility}%</b>"
+
+    return card
 
 
 def _parse_int_suffix(callback_data: str, prefix: str) -> int | None:
@@ -140,19 +156,18 @@ async def view_partner_profile(
 
     profile_card = _build_profile_card(user)
 
-    # ── Send ONLY to the caller via alert card ─────────────────────────────
-    # Convert HTML tags to plain text for the alert card, as Telegram alerts don't support HTML.
-    import re
-    plain_text_profile = re.sub(r'<[^>]+>', '', profile_card)
-
+    # ── Send ONLY to the caller ───────────────────────────────────────────────
+    # We will send it as a message instead of an alert card to preserve formatting and HTML.
     try:
-        await call.answer(
-            text=plain_text_profile,
-            show_alert=True,
+        await bot.send_message(
+            chat_id=call.from_user.id,
+            text=profile_card,
+            parse_mode="HTML"
         )
+        await call.answer()
     except Exception as exc:
         logger.error(
-            "Failed to send profile alert card to user %s: %s", call.from_user.id, exc
+            "Failed to send profile message to user %s: %s", call.from_user.id, exc
         )
 
 
