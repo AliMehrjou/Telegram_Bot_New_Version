@@ -31,6 +31,10 @@ def get_question_reply_keyboard(question_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🅰️ گزینه اول", callback_data=f"ans_a_{question_id}"),
             InlineKeyboardButton(text="🅱️ گزینه دوم", callback_data=f"ans_b_{question_id}")
+        ],
+        [
+            InlineKeyboardButton(text="🇨 گزینه سوم", callback_data=f"ans_c_{question_id}"),
+            InlineKeyboardButton(text="🇩 گزینه چهارم", callback_data=f"ans_d_{question_id}")
         ]
     ])
 

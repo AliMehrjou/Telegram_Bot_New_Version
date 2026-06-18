@@ -3,7 +3,7 @@ import asyncio
 import logging
 import sys
 
-from matching_bot_project.bot.core.config import settings
+from matching_bot_project.bot.core.config import Settings
 from matching_bot_project.bot.core.loader import dp, bot
 from matching_bot_project.bot.middlewares.database import DbSessionMiddleware
 from matching_bot_project.bot.middlewares.force_join import ForceJoinMiddleware

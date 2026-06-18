@@ -67,7 +67,7 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         except TelegramAPIError as e:
             logger.error("ForceJoin membership lookup failed for user %s: %s", user_id, e)
-            
+
             error_msg = "⚠️ در حال حاضر بررسی وضعیت عضویت امکان‌پذیر نیست. لطفاً چند دقیقه دیگر مجدداً تلاش کنید."
             if isinstance(event, Message):
                 await event.answer(text=error_msg)
@@ -77,7 +77,7 @@ class ForceJoinMiddleware(BaseMiddleware):
                 else:
                     await bot.send_message(chat_id=user_id, text=error_msg)
                 await event.answer("خطا در بررسی عضویت", show_alert=True)
-                
+
             return None
 
         # 4. Handle Unauthorized User
@@ -91,6 +91,9 @@ class ForceJoinMiddleware(BaseMiddleware):
             "پس از عضویت در کانال از دکمه زیر جهت فعالسازی ربات استفاده کنید."
         )
 
+        if isinstance(event, Message):
+            await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
+
         elif isinstance(event, CallbackQuery):
             # Guard against InaccessibleMessage exceptions on old inline keyboards
             if event.message:
@@ -101,7 +104,7 @@ class ForceJoinMiddleware(BaseMiddleware):
                     pass
             else:
                 await bot.send_message(chat_id=user_id, text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-            
+
             await event.answer("نیاز به تایید عضویت!", show_alert=True)
 
         return None

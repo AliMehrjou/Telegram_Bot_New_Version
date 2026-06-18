@@ -11,7 +11,7 @@ class DbSessionMiddleware(BaseMiddleware):
     Injects an active async SQLAlchemy Database Session into the routing stack.
     Each handler can access the session by defining a `db_session` parameter.
     """
-async def __call__(
+    async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
@@ -29,13 +29,13 @@ async def __call__(
                 if user_id:
                     result = await session.execute(select(User).where(User.tg_id == user_id))
                     user = result.scalar_one_or_none()
-                    
+
                     if user:
                         if getattr(user, "is_banned", False):
                             logger.info(f"Blocked request from banned user {user_id}")
                             return None
 
-                        redis_client = data.get("redis") 
+                        redis_client = data.get("redis")
                         redis_key = f"user:online:{user_id}"
 
                         # Update DB state and set Redis TTL only if the cache key has expired
@@ -43,9 +43,9 @@ async def __call__(
                             user.is_online = True
                             user.last_active = datetime.utcnow()
                             await redis_client.setex(redis_key, 300, "1")
-                            
-                            # session.commit() removed. The user object is now marked as 'dirty' 
-                            # in SQLAlchemy's unit of work and will only flush/commit if the 
+
+                            # session.commit() removed. The user object is now marked as 'dirty'
+                            # in SQLAlchemy's unit of work and will only flush/commit if the
                             # downstream handler explicitly commits the session.
 
                 # Handlers are strictly responsible for their own session.commit()

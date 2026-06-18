@@ -116,7 +116,7 @@ from matching_bot_project.bot.states.states import (
     QuestionnaireStates,
 )
 from matching_bot_project.database.queries import crud
-from matching_bot_project.bot.core.matching import matching_engine
+from matching_bot_project.services import matching_engine
 logger = logging.getLogger(__name__)
 router = Router(name="start_handler")
 
@@ -710,7 +710,7 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         markup = None
 
     await message.answer(wallet_text, reply_markup=markup)
-      
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Main Menu — 📜 قوانین
 # ═══════════════════════════════════════════════════════════════════════════════

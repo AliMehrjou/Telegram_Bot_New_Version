@@ -2,7 +2,7 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# config.py
+
 class Settings(BaseSettings):
     """
     Manages robust strongly-typed environment configurations for the bot workspace.
@@ -50,3 +50,5 @@ class Settings(BaseSettings):
             return [int(uid.strip()) for uid in self.ADMIN_USER_IDS.split(",") if uid.strip()]
         except ValueError:
             return []
+        
+settings = Settings()
