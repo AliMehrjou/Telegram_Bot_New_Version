@@ -36,6 +36,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

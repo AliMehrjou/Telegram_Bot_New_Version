@@ -216,8 +216,8 @@ class MatchingEngine:
 
             if is_candidate_blocked_by_user or is_user_blocked_by_candidate:
                 logger.debug(f"Block collision detected between {tg_id} and {candidate_id}. Discarding match.")
-                # LPUSH candidate back to queue
-                await self.redis.lpush(target_queue_key, candidate_id_str)
+                # RPUSH candidate back to queue to prevent data loss
+                await self.redis.rpush(target_queue_key, candidate_id_str)
                 continue
 
             candidate_state_key = f"user:state:{candidate_id}"
@@ -265,6 +265,8 @@ class MatchingEngine:
                 # Candidate's state was modified by another process.
                 # Safe to retry picking another candidate.
                 logger.debug("WatchError on candidate %s during match attempt, skipping.", candidate_id)
+                # RPUSH candidate back to queue to prevent data loss
+                await self.redis.rpush(target_queue_key, candidate_id_str)
                 continue
 
         # No valid candidate found after all attempts; add self to queue.

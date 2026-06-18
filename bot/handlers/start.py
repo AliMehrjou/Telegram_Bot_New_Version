@@ -116,7 +116,7 @@ from matching_bot_project.bot.states.states import (
     QuestionnaireStates,
 )
 from matching_bot_project.database.queries import crud
-
+from matching_bot_project.bot.core.matching import matching_engine
 logger = logging.getLogger(__name__)
 router = Router(name="start_handler")
 
@@ -178,7 +178,7 @@ async def handle_start_command(
     Handles the /start command.
 
     Flow:
-      1. Block execution if the user is in a live match / questionnaire / chat.
+      1. Check FSM state: Remove from queue if waiting, or block if in active chat/questionnaire.
       2. Clear any stale FSM state.
       3. Send returning registered users straight to the main menu.
       4. Parse optional referral deep link (/start ref_<TGID>).
@@ -186,12 +186,16 @@ async def handle_start_command(
       6. Start the onboarding FSM sequence.
     """
     tg_id = message.from_user.id
-
-    # ── Guard: reject /start mid-pipeline ─────────────────────────────────────
     current_state = await state.get_state()
-    if current_state in _ACTIVE_PIPELINE_STATES:
+
+    # ── Guard: Manage queue escapes or reject /start mid-pipeline ─────────────
+    if current_state == MatchingStates.waiting_in_queue.state:
+        # Gracefully remove from queue instead of trapping the user
+        await matching_engine.remove_from_queue(tg_id)
+        await state.clear()
+    elif current_state in _ACTIVE_PIPELINE_STATES:
         await message.answer(
-            "⚠️ شما در میانه یک فرآیند فعال (مچینگ، پرسشنامه یا چت ناشناس) هستید.\n"
+            "⚠️ شما در میانه یک فرآیند فعال (پرسشنامه یا چت ناشناس) هستید.\n"
             "لطفاً ابتدا فرآیند جاری را پایان دهید و سپس مجدداً /start را ارسال کنید."
         )
         return
@@ -260,7 +264,6 @@ async def handle_start_command(
         reply_markup=get_gender_keyboard(),
     )
     await state.set_state(OnboardingStates.waiting_for_gender)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Onboarding FSM — Step 1: Gender
@@ -670,14 +673,8 @@ async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
 @router.message(F.text == "🪙 سکه‌های من")
 async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
     """
-    Renders the user's full wallet summary:
-      • Current balance
-      • Total earned
-      • Earned via referrals
-      • Total spent
-      • Unique referral invite link
-
-    Falls back safely when new model columns haven't been migrated yet.
+    Renders the user's full wallet summary.
+    Uses settings.BOT_USERNAME to fetch the bot username statically, avoiding API rate limits.
     """
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -690,12 +687,9 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
     coins_spent: int = getattr(user, "total_spent_coins", 0)
     total_earned: int = getattr(user, "total_earned_coins", coin_balance + coins_spent)
 
-    try:
-        bot_me = await bot.get_me()
-        invite_link = f"https://t.me/{bot_me.username}?start=ref_{tg_id}"
-    except Exception:
-        logger.exception("Failed to fetch bot username for invite link; using placeholder.")
-        invite_link = f"https://t.me/YOUR_BOT_USERNAME?start=ref_{tg_id}"
+    # Retrieve bot username securely from environment/settings config
+    # rather than blocking with an extra network call (bot.get_me())
+    invite_link = f"https://t.me/{settings.BOT_USERNAME}?start=ref_{tg_id}"
 
     wallet_text = (
         "🪙 <b>کیف پول سکه شما:</b>\n\n"
@@ -716,8 +710,7 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         markup = None
 
     await message.answer(wallet_text, reply_markup=markup)
-
-
+      
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Main Menu — 📜 قوانین
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -127,12 +127,19 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
         return
 
     # Trigger instant match!
-    from matching_bot_project.bot.handlers.matching import handle_successful_match
+    from matching_bot_project.bot.handlers.matching import handle_successful_match, get_user_state
 
     # Remove both from any queue if they are in it
     from matching_bot_project.bot.core.loader import matching_engine
     await matching_engine.remove_from_queue(tg_id)
     await matching_engine.remove_from_queue(partner_id)
+
+    # Clear FSM states to prevent trapping users in previous states
+    caller_ctx = get_user_state(tg_id)
+    await caller_ctx.clear()
+    
+    partner_ctx = get_user_state(partner_id)
+    await partner_ctx.clear()
 
     await call.message.answer("🔁 در حال اتصال مجدد به پارتنر قبلی...")
     await handle_successful_match(db_session, tg_id, partner_id)

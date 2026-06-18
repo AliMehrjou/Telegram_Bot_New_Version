@@ -32,6 +32,8 @@ from matching_bot_project.bot.states.states import (
 from matching_bot_project.database.models.models import BlockList, MatchHistory
 from matching_bot_project.database.queries import crud
 
+from typing import Optional
+
 logger = logging.getLogger(__name__)
 router = Router(name="interactions_handler")
 
@@ -223,16 +225,13 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
     # ── 3. Stop timeout tracking from scheduler ──────────────────────────────
     from matching_bot_project.bot.core.loader import dating_scheduler
 
-    redis_key = f"date:timeout:{match_id}"
     try:
-        await dating_scheduler.redis.delete(redis_key)
-        await dating_scheduler.redis.delete(f"match:questions:{match_id}")
-        await dating_scheduler.redis.delete(f"match:current_q_index:{match_id}")
+        await dating_scheduler.redis.delete(f"date:timeout:{match_id}")
         # Clean up users from matching queue / state
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_one_id}")
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_two_id}")
     except Exception as exc:
-        logger.warning(f"Could not delete Redis keys for match cancellation {match_id}: {exc}")
+        logger.warning("Could not delete core Redis tracking keys for match cancellation %s: %s", match_id, exc)
 
     # ── 4 & 5. Clear state and notify both participants ──────────────────────
     for uid in (match_history.user_one_id, match_history.user_two_id):
@@ -269,7 +268,6 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
 
     return True
 
-
 @router.callback_query(F.data.startswith("end_date_early_"))
 async def end_date_early(
     call: CallbackQuery,
@@ -295,11 +293,13 @@ async def end_date_early(
 async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, blocked_id: int) -> tuple[bool, str]:
     """
     Core logic to block a user, updating MySQL BlockList and Redis block sets.
+    Terminates any active match between the two users.
     Returns (Success: bool, Message: str).
     """
     if blocker_id == blocked_id:
         return False, "❌ نمی‌توانید خودتان را مسدود کنید."
 
+    from sqlalchemy import select, or_, and_
     from matching_bot_project.bot.core.loader import redis_client
 
     db_session.add(BlockList(blocker_id=blocker_id, blocked_id=blocked_id))
@@ -308,6 +308,21 @@ async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, block
         await db_session.commit()
         # Add to Redis Sets for atomic evaluation in matching engine
         await redis_client.sadd(f"user:{blocker_id}:blocks", str(blocked_id))
+        
+        # Check for active match and terminate if exists
+        match_query = await db_session.execute(
+            select(MatchHistory).where(
+                MatchHistory.is_active == True,
+                or_(
+                    and_(MatchHistory.user_one_id == blocker_id, MatchHistory.user_two_id == blocked_id),
+                    and_(MatchHistory.user_one_id == blocked_id, MatchHistory.user_two_id == blocker_id)
+                )
+            )
+        )
+        active_match = match_query.scalar_one_or_none()
+        if active_match:
+            await execute_chat_termination(db_session, active_match.id, blocker_id)
+
         return True, "🚫 کاربر مسدود شد و دیگر به شما متصل نخواهد شد."
     except IntegrityError:
         # The unique constraint on (blocker_id, blocked_id) was violated —
@@ -323,8 +338,8 @@ async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, block
             exc,
         )
         return False, "❌ خطای سرور. لطفاً دوباره تلاش کنید."
-
-
+    
+    
 @router.callback_query(F.data.startswith("block_user_"))
 async def block_user(
     call: CallbackQuery,

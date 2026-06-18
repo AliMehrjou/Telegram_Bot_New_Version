@@ -11,7 +11,7 @@ from matching_bot_project.bot.middlewares.anti_spam import ThrottlingMiddleware
 
 # Import handlers to register them on dispatcher
 from matching_bot_project.bot.handlers import start, profile, matching, questionnaire, anonymous_chat, explore, interactions
-
+from matching_bot_project.bot.core.loader import dp, bot, matching_engine
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -67,10 +67,14 @@ async def run_fastapi_server():
 async def run_bot_polling():
     """Fall-back long polling listener when webhook is disabled or not configured."""
     logger.info("Launching aiogram in long updates polling mode...")
+    
+    # Await background connections (DB/Redis lifespan) to be fully ready
+    while not matching_engine.redis:
+        await asyncio.sleep(0.2)
+        
     # Clean any hanging webhook before start
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, skip_updates=True)
-
 
 async def main():
     """Root async entrypoint coordinating both services."""

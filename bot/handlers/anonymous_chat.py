@@ -46,7 +46,7 @@ from matching_bot_project.bot.keyboards.inline import get_active_chat_controls
 from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.models.models import MatchHistory
 from matching_bot_project.database.queries import crud  # noqa: F401 – available for callers / future use
-
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")
 
@@ -189,37 +189,6 @@ async def register_chat_consent(
 ) -> None:
     """
     Processes one participant's consent decision after the questionnaire ends.
-
-    This handler is guarded by ``ChatStates.waiting_for_approval`` which must
-    be set by ``finalize_questionnaire_and_request_approval`` (in
-    ``questionnaire.py``) before the approval keyboard is dispatched.
-
-    Rejection flow
-    ~~~~~~~~~~~~~~
-    * Sets ``match_history.is_active = False`` and commits.
-    * Clears FSM for **both** the caller and the partner.
-    * Returns both to the main menu with localised Persian notices.
-
-    Approval flow
-    ~~~~~~~~~~~~~
-    * Persists the caller's ``user_one_approved`` or ``user_two_approved``
-      flag and commits to the database.
-    * Immediately calls ``db_session.refresh`` to capture a concurrent approval
-      that the partner may have committed within the same millisecond (race
-      condition prevention).
-    * **If both flags are now ``True``:**
-
-      - Sets ``match_history.chat_approved = True`` and commits.
-      - Updates Redis tracking keys for both users to ``"chatting"``.
-      - Transitions **both** users to ``ChatStates.anonymous_chat_active`` and
-        stores ``(match_history_id, partner_id)`` in each user's FSM data.
-      - Sends the chat-activation notice with ``get_active_chat_controls()``
-        to both participants.
-
-    * **If only this party has approved so far:**
-
-      - The approval keyboard was already stripped earlier in this handler.
-      - Edits the caller's message to a "waiting for partner" notice.
     """
     await call.answer()
 
@@ -262,10 +231,11 @@ async def register_chat_consent(
         await state.clear()
         return
 
+    # Guard against double-taps causing race conditions and multiple activation messages
+    if match_history.chat_approved:
+        return
+
     # ── Identify the caller's role and the partner's Telegram ID ─────────── #
-    # Note: user_one_id / user_two_id store Telegram user IDs in this
-    # codebase; the FK to users.id is intentionally overloaded this way
-    # throughout the project.
     is_user_one: bool = match_history.user_one_id == tg_id
     partner_id: int = (
         match_history.user_two_id if is_user_one else match_history.user_one_id
@@ -394,7 +364,8 @@ async def register_chat_consent(
                 partner_id=peer_id,
             )
             try:
-                partner_for_uid = user_one_id if uid == user_two_id else user_two_id
+                partner_for_uid = match_history.user_one_id if uid == match_history.user_two_id else match_history.user_two_id
+                
                 await bot.send_message(
                     chat_id=uid,
                     text=activation_text,
@@ -420,7 +391,6 @@ async def register_chat_consent(
                 "Failed to edit waiting-confirmation for user %d: %s", tg_id, exc
             )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler 2 – Live anonymous message routing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -430,32 +400,6 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
     """
     Intercepts **every** inbound message from an active participant and relays
     it to their partner after applying all privacy and security filters.
-
-    Content-type blocking
-    ~~~~~~~~~~~~~~~~~~~~~
-    Contacts, locations, venues, polls, dice rolls, and stories are rejected
-    with an explanatory reply and are **never** forwarded.  These types can
-    reveal the sender's real-world identity or physical whereabouts.
-
-    Text filtering
-    ~~~~~~~~~~~~~~
-    All text bodies and media captions are scanned with three compiled regular
-    expressions.  Matching substrings are replaced with ``"[⚠️ فیلتر شد]"``:
-
-    * Telegram username handles (``@username``)
-    * Web URLs (``https://…``, ``www.…``, bare TLD links)
-    * Iranian phone numbers (leading ``09`` or ``+98``)
-
-    The sender receives a single notice if any substitution was performed.
-
-    Relay strategy
-    ~~~~~~~~~~~~~~
-    * *Text messages* – forwarded via ``bot.send_message`` prefixed with
-      ``"💬: "`` to visually differentiate peer messages from system notices.
-    * *Media messages* – forwarded via ``bot.copy_message``.  The caption
-      (if present) is filtered before forwarding, and ``reply_markup=None``
-      is always passed to strip any inline keyboard from the original message,
-      preventing callback-payload injection by a malicious sender.
     """
     tg_id: int = message.from_user.id
     fsm_data: dict = await state.get_data()
@@ -492,7 +436,9 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
                 "موارد ممنوع حذف شده و پیام ارسال گردید."
             )
 
-        from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+        # Truncate to ensure the final payload (including "💬: ") stays within Telegram's 4096 limit
+        filtered_text = filtered_text[:4090]
+
         try:
             await bot.send_message(
                 chat_id=partner_id,
@@ -517,7 +463,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
                 "احتمالاً ربات را بلاک کرده است."
             )
         return
-
+    
     # ── Media messages (photo, video, audio, document, sticker, voice, …) ── #
     raw_caption: str = message.caption or ""
     sanitized_caption: str | None = None
@@ -535,12 +481,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             chat_id=partner_id,
             from_chat_id=message.chat.id,
             message_id=message.message_id,
-            # Provide the sanitised caption only when the original had one.
-            # Passing None for caption-less media (stickers, GIFs, etc.)
-            # lets Telegram preserve the natural absence of a caption.
             caption=sanitized_caption if raw_caption else None,
-            # ⚠️ CRITICAL: Always strip inline keyboards from forwarded media
-            # to prevent malicious callback-payload injection.
             reply_markup=None,
         )
     except TelegramForbiddenError:
@@ -561,7 +502,6 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             "⚠️ ارسال این فایل پشتیبانی نمی‌شود "
             "یا پارتنر ربات را بلاک کرده است."
         )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler 3 – Voluntary chat termination

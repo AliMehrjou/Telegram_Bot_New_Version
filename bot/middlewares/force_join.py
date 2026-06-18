@@ -67,8 +67,18 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         except TelegramAPIError as e:
             logger.error("ForceJoin membership lookup failed for user %s: %s", user_id, e)
-            # Fail open if the channel ID is invalid or bot was kicked
-            return await handler(event, data)
+            
+            error_msg = "⚠️ در حال حاضر بررسی وضعیت عضویت امکان‌پذیر نیست. لطفاً چند دقیقه دیگر مجدداً تلاش کنید."
+            if isinstance(event, Message):
+                await event.answer(text=error_msg)
+            elif isinstance(event, CallbackQuery):
+                if event.message:
+                    await event.message.answer(text=error_msg)
+                else:
+                    await bot.send_message(chat_id=user_id, text=error_msg)
+                await event.answer("خطا در بررسی عضویت", show_alert=True)
+                
+            return None
 
         # 4. Handle Unauthorized User
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -81,13 +91,14 @@ class ForceJoinMiddleware(BaseMiddleware):
             "پس از عضویت در کانال از دکمه زیر جهت فعالسازی ربات استفاده کنید."
         )
 
-        if isinstance(event, Message):
-            await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-        
         elif isinstance(event, CallbackQuery):
             # Guard against InaccessibleMessage exceptions on old inline keyboards
             if event.message:
-                await event.message.answer(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
+                try:
+                    await event.message.edit_text(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
+                except TelegramAPIError:
+                    # Silently ignore MessageNotModified errors if the user mashes the check button
+                    pass
             else:
                 await bot.send_message(chat_id=user_id, text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
             

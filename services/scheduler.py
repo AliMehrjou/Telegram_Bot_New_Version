@@ -77,6 +77,8 @@ class DatingScheduler:
             try:
                 cursor = 0
                 while True:
+
+                    await asyncio.sleep(0)
                     # Non-blocking scan across matching keys
                     cursor, keys = await self.redis.scan(
                         cursor=cursor, match="date:timeout:*", count=100

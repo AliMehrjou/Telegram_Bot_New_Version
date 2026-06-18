@@ -371,19 +371,24 @@ async def execute_search(
 
 
 @router.message(StateFilter(ChatStates.typing_direct_message))
-async def forward_direct_message(message: Message, state: FSMContext) -> None:
+async def forward_direct_message(
+    message: Message, 
+    state: FSMContext, 
+    db_session: AsyncSession
+) -> None:
     """
     Accept and forward a text DM while the sender is in the
     ``ChatStates.typing_direct_message`` FSM state.
 
     Flow
     ────
-    1. Reject non-text content (photos, videos, stickers, etc.) and prompt
+    1. Check for cancellation buttons; refund coin and abort if detected.
+    2. Reject non-text content (photos, videos, stickers, etc.) and prompt
        for plain text.  The state is NOT cleared so the user can try again.
-    2. Retrieve ``target_direct_id`` from the FSM data bag.  If missing
+    3. Retrieve ``target_direct_id`` from the FSM data bag.  If missing
        (corrupted state), clear and abort gracefully.
-    3. Forward the HTML-escaped message body to the target anonymously.
-    4. Acknowledge the sender, clear their FSM state, and return them to the
+    4. Forward the HTML-escaped message body to the target anonymously.
+    5. Acknowledge the sender, clear their FSM state, and return them to the
        main menu.
 
     Error isolation
@@ -394,14 +399,29 @@ async def forward_direct_message(message: Message, state: FSMContext) -> None:
     """
     sender_id = message.from_user.id
 
-    # ── 1. Media guard ────────────────────────────────────────────────────────
+    # ── 1. Cancellation guard ─────────────────────────────────────────────────
+    if message.text in ["❌ انصراف", "❌ انصراف و منوی اصلی"]:
+        caller = await crud.get_user_by_tg_id(db_session, sender_id)
+        if caller:
+            caller.coin_balance += 1
+            caller.total_spent_coins -= 1
+            await db_session.commit()
+            
+        await state.clear()
+        await message.answer(
+            "❌ عملیات لغو شد. ۱ سکه به حساب شما بازگردانده شد.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+    # ── 2. Media guard ────────────────────────────────────────────────────────
     # Any update that carries a non-text payload must be rejected.
     # We do NOT clear FSM state here; the sender is allowed to retry.
     if not message.text:
         await message.answer(_MEDIA_REJECTED_TEXT, parse_mode="HTML")
         return
 
-    # ── 2. Retrieve target ID from FSM data ───────────────────────────────────
+    # ── 3. Retrieve target ID from FSM data ───────────────────────────────────
     fsm_data: dict = await state.get_data()
     target_id: int | None = fsm_data.get("target_direct_id")
 
@@ -419,7 +439,7 @@ async def forward_direct_message(message: Message, state: FSMContext) -> None:
         return
 
     from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
-    # ── 3. Deliver anonymous DM to the target ────────────────────────────────
+    # ── 4. Deliver anonymous DM to the target ────────────────────────────────
     # html.escape() prevents the sender from injecting HTML tags into the
     # message rendered on the target's side (e.g. <b>bold</b> spoofing).
     anonymous_text = _DM_ANONYMOUS_TEMPLATE.format(body=html.escape(message.text))
@@ -446,7 +466,7 @@ async def forward_direct_message(message: Message, state: FSMContext) -> None:
             exc,
         )
 
-    # ── 4. Notify sender, clear state, return to main menu ───────────────────
+    # ── 5. Notify sender, clear state, return to main menu ───────────────────
     # Clear the FSM state unconditionally: whether delivery succeeded or failed,
     # the sender should not remain in the DM input state.
     await state.clear()

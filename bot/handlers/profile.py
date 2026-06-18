@@ -50,6 +50,7 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
     await message.answer(text=profile_card, parse_mode=ParseMode.HTML)
 
 
+# profile.py
 @router.message(F.text == "🎁 زیرمجموعه‌گیری & VIP")
 async def view_referral_panel(message: Message, db_session: AsyncSession):
     """Displays user invite link, rewards, and total referrals."""
@@ -77,7 +78,6 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
     )
 
     await message.answer(text=ref_text, parse_mode=ParseMode.HTML)
-
 
 @router.message(F.text == "❔ راهنما و پشتیبانی")
 async def view_help_panel(message: Message):

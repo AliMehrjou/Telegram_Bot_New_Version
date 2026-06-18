@@ -141,9 +141,9 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
 
     # 5. Alert the admins via BroadcastWorker
     admin_alert_text = (
-        "🚨 *گزارش جدید:*\n"
-        f"گزارش‌دهنده: `{reporter_id}`\n"
-        f"گزارش‌شده: `{reported_id}`\n"
+        "🚨 <b>گزارش جدید:</b>\n"
+        f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
+        f"گزارش‌شده: <code>{reported_id}</code>\n"
         f"دلیل: {persian_reason}\n"
         f"مچ: #{match_id}"
     )

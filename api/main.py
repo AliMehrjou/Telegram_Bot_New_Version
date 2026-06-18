@@ -17,15 +17,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Handles critical microservice startup and teardown lifecycles:
-    - Verifies database schemas and constructs tables if missing.
     - Connects to the Redis queuing pools.
     - Configures Telegram Bot Webhook URLs.
     - Launches background activity polling tasks.
     """
-    # Create DB schemas automatically (if not using migration system Alembic)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    
     # Seeds question repository
     async with async_session_factory() as session:
         await seed_sixty_question_bank_if_empty(session)
@@ -43,7 +38,8 @@ async def lifespan(app: FastAPI):
         await bot.set_webhook(
             url=webhook_url,
             allowed_updates=["message", "callback_query", "my_chat_member"],
-            drop_pending_updates=True
+            drop_pending_updates=True,
+            secret_token=settings.ADMIN_SECRET_TOKEN
         )
     else:
         logger.warning("No BASE_URL configured or still using default. Bot will require getUpdates Polling mode.")
@@ -56,7 +52,6 @@ async def lifespan(app: FastAPI):
     await bot.session.close()
     await engine.dispose()
     logger.info("Lifespan teardown finished successfully.")
-
 
 # Instantiating server base
 app = FastAPI(
