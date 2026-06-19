@@ -3,7 +3,7 @@ import asyncio
 import logging
 import sys
 
-from matching_bot_project.bot.core.config import Settings
+from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import dp, bot
 from matching_bot_project.bot.middlewares.database import DbSessionMiddleware
 from matching_bot_project.bot.middlewares.force_join import ForceJoinMiddleware
@@ -82,7 +82,7 @@ async def main():
 
     # If domain contains default value, run both FastAPI (for admin API) and Polling (for bot updates) concurrently.
     # Otherwise Webhook router handles bot updates, so FastAPI is sufficient.
-    if "yourdomain.com" in settings.BASE_URL:
+    if "funlinknow.ir" in settings.BASE_URL:
         # Development mode
         logger.info("Running under DEVELOPMENT configuration with concurrent Polling & Web Server.")
         await asyncio.gather(

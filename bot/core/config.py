@@ -1,16 +1,19 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
+# Get the project root directory (where .env file is located)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent  # Goes up 3 levels from config.py location
 
 class Settings(BaseSettings):
     """
     Manages robust strongly-typed environment configurations for the bot workspace.
-    Loads automatically from .env if present.
+    Loads automatically from .env if present, then from environment variables.
     """
     model_config = SettingsConfigDict(
-        env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"),
+        env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",
+        case_sensitive=False,  # Makes it case-insensitive for env vars
         extra="ignore"
     )
 
@@ -35,7 +38,7 @@ class Settings(BaseSettings):
 
     # API endpoints
     WEBHOOK_PATH: str = "/api/v1/webhook"
-    BASE_URL: str = "https://yourdomain.com"
+    BASE_URL: str = "https://funlinknow.ir"
     PORT: int = 8000
     HOST: str = "0.0.0.0"
 
@@ -50,5 +53,4 @@ class Settings(BaseSettings):
             return [int(uid.strip()) for uid in self.ADMIN_USER_IDS.split(",") if uid.strip()]
         except ValueError:
             return []
-        
 settings = Settings()
