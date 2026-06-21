@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, List
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer, CoinTransaction, FriendList, BlockList, UserLike, UserReport
@@ -403,3 +403,33 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
         
     await session.commit()
     logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")
+
+async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
+
+    user = await get_user_by_tg_id(session, tg_id)
+    if not user:
+        return 0
+    stmt = select(func.count(User.id)).where(User.referrer_id == user.id)
+    result = await session.execute(stmt)
+    return result.scalar() or 0
+
+
+
+async def get_nearby_candidates(session: AsyncSession, current_user: User, limit: int = 5) -> List[User]:
+    """کاربران جنس مخالف که در همون استان و شهر کاربر هستن رو پیدا میکنه"""
+    target_gender = "Female" if current_user.gender == "Male" else "Male"
+    
+    stmt = select(User).where(
+        and_(
+            User.tg_id != current_user.tg_id,
+            User.completed_registration == True,
+            User.gender == target_gender,
+            User.province == current_user.province,
+            User.city == current_user.city,
+            User.invisible_mode == False,
+            User.is_banned == False
+        )
+    ).order_by(User.last_active.desc()).limit(limit)
+    
+    res = await session.execute(stmt)
+    return list(res.scalars().all())

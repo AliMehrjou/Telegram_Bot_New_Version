@@ -1,8 +1,13 @@
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Awaitable
 from aiogram import BaseMiddleware
+
+from sqlalchemy import select
+
 from aiogram.types import TelegramObject
 from matching_bot_project.database.session import async_session_factory
+from matching_bot_project.database.models.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +25,6 @@ class DbSessionMiddleware(BaseMiddleware):
         async with async_session_factory() as session:
             data["db_session"] = session
             try:
-                from matching_bot_project.database.models.models import User
-                from sqlalchemy import select
-                from datetime import datetime
-
                 user_id = event.from_user.id if hasattr(event, "from_user") and event.from_user else None
 
                 if user_id:
@@ -36,17 +37,18 @@ class DbSessionMiddleware(BaseMiddleware):
                             return None
 
                         redis_client = data.get("redis")
-                        redis_key = f"user:online:{user_id}"
+                        if redis_client:
+                            redis_key = f"user:online:{user_id}"
 
-                        # Update DB state and set Redis TTL only if the cache key has expired
-                        if redis_client and not await redis_client.exists(redis_key):
-                            user.is_online = True
-                            user.last_active = datetime.utcnow()
-                            await redis_client.setex(redis_key, 300, "1")
+                            # Update DB state and set Redis TTL only if the cache key has expired
+                            if not await redis_client.exists(redis_key):
+                                user.is_online = True
+                                user.last_active = datetime.now(timezone.utc)
+                                await redis_client.setex(redis_key, 300, "1")
 
-                            # session.commit() removed. The user object is now marked as 'dirty'
-                            # in SQLAlchemy's unit of work and will only flush/commit if the
-                            # downstream handler explicitly commits the session.
+                                # session.commit() removed. The user object is now marked as 'dirty'
+                                # in SQLAlchemy's unit of work and will only flush/commit if the
+                                # downstream handler explicitly commits the session.
 
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)

@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,8 +8,10 @@ from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import bot, dp, matching_engine, dating_scheduler
 from matching_bot_project.api.routes import webhook, admin
 from matching_bot_project.database.session import engine, Base
-from matching_bot_project.database.queries.crud import seed_sixty_question_bank_if_empty
+from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.database.session import async_session_factory
+from matching_bot_project.database.models import models
+from matching_bot_project.bot.handlers.admin import _daily_report_loop
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,18 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Handles critical microservice startup and teardown lifecycles:
+    - Creates database tables if they don't exist.
     - Connects to the Redis queuing pools.
     - Configures Telegram Bot Webhook URLs.
     - Launches background activity polling tasks.
     """
-    # Seeds question repository
+    
+    # ۱. ابتدا ساخت تمامی جداول دیتابیس (رفع خطای Table doesn't exist)
+    logger.info("Initializing database tables...")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    
     async with async_session_factory() as session:
         await seed_sixty_question_bank_if_empty(session)
 
@@ -31,8 +41,11 @@ async def lifespan(app: FastAPI):
     # Active 3-mins date timeout scanner activation
     dating_scheduler.start_polling()
 
+    asyncio.create_task(_daily_report_loop(async_session_factory))
+
+    is_production_domain = settings.BASE_URL and any(ext in settings.BASE_URL for ext in [".com", ".ir", ".net", ".org"])
     # Webhook setup rule in production, fallback to deletion during local test ranges
-    if settings.BASE_URL and "yourdomain.com" not in settings.BASE_URL:
+    if is_production_domain and "yourdomain.com" not in settings.BASE_URL:
         webhook_url = f"{settings.BASE_URL}{settings.WEBHOOK_PATH}"
         logger.info(f"Setting Telegram webhook url: {webhook_url}")
         await bot.set_webhook(
@@ -42,11 +55,11 @@ async def lifespan(app: FastAPI):
             secret_token=settings.ADMIN_SECRET_TOKEN
         )
     else:
-        logger.warning("No BASE_URL configured or still using default. Bot will require getUpdates Polling mode.")
+        
+        logger.warning("Running in LOCAL/POLLING mode. Deleting active webhooks to prevent conflicts...")
         await bot.delete_webhook(drop_pending_updates=True)
 
-    yield # Lifespan execution margin (App continues serving)
-
+    yield # Lifespan execution margin
     # Tear-down connections
     await matching_engine.disconnect()
     await bot.session.close()

@@ -14,7 +14,6 @@ services:
       - mysql_data:/var/lib/mysql
     networks:
       - match_bot_network
-    # پورت 3306 رو expose نکن به بیرون در production
     command: --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -31,7 +30,6 @@ services:
       - redis_data:/data
     networks:
       - match_bot_network
-    # پورت 6379 رو expose نکن
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -47,7 +45,8 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:8001:8000"   # فقط localhost — nginx پروکسی میکنه
+      - "127.0.0.1:8001:8000"
+
     depends_on:
       mysql_db:
         condition: service_healthy

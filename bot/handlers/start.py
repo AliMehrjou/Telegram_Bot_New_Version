@@ -84,6 +84,10 @@ import html
 import logging
 from typing import Optional
 
+import os
+import json
+from pathlib import Path
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.fsm.state import State, StatesGroup
@@ -91,8 +95,12 @@ from aiogram.types import (
     CallbackQuery,
     Message,
     ReplyKeyboardRemove,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -150,22 +158,21 @@ GENDER_LABELS: dict[str, str] = {
     "Female": "خانم 🙋‍♀️",
 }
 
-_BOT_RULES_TEXT = (
-    "📜 <b>قوانین و مقررات استفاده از ربات:</b>\n\n"
-    "۱. استفاده از کلمات رکیک، توهین‌آمیز یا نژادپرستانه ممنوع است.\n"
-    "۲. ارسال محتوای غیراخلاقی یا مستهجن منجر به بن دائمی می‌شود.\n"
-    "۳. افشای اطلاعات شخصی دیگران (شماره، آدرس، تصویر) بدون رضایت ممنوع است.\n"
-    "۴. هرگونه تبلیغات تجاری یا اسپم در چت‌ها ممنوع می‌باشد.\n"
-    "۵. کاربران زیر ۱۸ سال اجازه استفاده ندارند.\n"
-    "۶. استفاده از ربات برای اهداف غیرقانونی باعث گزارش به مراجع قضایی می‌شود.\n"
-    "۷. تیم پشتیبانی حق بررسی و مسدودسازی حساب‌های متخلف را دارد.\n\n"
-    "✅ با ادامه استفاده از ربات، تمامی قوانین بالا را پذیرفته‌اید."
-)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  /start  — Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
+def get_gender_reply_keyboard() -> ReplyKeyboardMarkup:
+    """ساخت کیبورد متنی معمولی برای انتخاب جنسیت موقع ثبت‌نام"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="جنسیت خود را انتخاب کنید..."
+    )
+
 
 @router.message(CommandStart())
 async def handle_start_command(
@@ -257,11 +264,22 @@ async def handle_start_command(
             return
 
     # ── Begin onboarding — step 1: gender selection ───────────────────────────
+
+    gender_reply_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="جنسیت خود را انتخاب کنید..."
+    )
+
     await message.answer(
         "🎉 <b>به ربات دیتینگ ناشناس خوش آمدید!</b>\n\n"
         "برای شروع و دریافت <b>۵ سکه هدیه اولیه</b>، لطفاً اطلاعات هویتی خود را ثبت کنید.\n\n"
         "ابتدا جنسیت خود را انتخاب کنید 👇",
-        reply_markup=get_gender_keyboard(),
+        reply_markup=gender_reply_kb,  # 🛠️ اصلاح اصلی: دکمه‌های معمولی جایگزین دکمه شیشه‌ای شدند
+        parse_mode="HTML"
     )
     await state.set_state(OnboardingStates.waiting_for_gender)
 
@@ -273,21 +291,39 @@ async def handle_start_command(
     OnboardingStates.waiting_for_gender,
     F.data.in_({"gender_male", "gender_female"}),
 )
-async def register_gender(call: CallbackQuery, state: FSMContext) -> None:
-    """Captures the gender inline-button selection and advances to age input."""
-    _gender_map: dict[str, tuple[str, str]] = {
-        "gender_male": ("Male", "آقا 🙋‍♂️"),
-        "gender_female": ("Female", "خانم 🙋‍♀️"),
-    }
-    gender, gender_label = _gender_map[call.data]
+
+@router.message(OnboardingStates.waiting_for_gender, F.text.in_({"آقا 🙋‍♂️", "خانم 🙋‍♀️"}))
+async def register_gender(message: Message, state: FSMContext) -> None:
+    """دریافت جنسیت از دکمه متنی و هدایت به مرحله بعد (سن)"""
+    raw_text = message.text
+    
+    # نگاشت دقیق متن دکمه به فیلد دیتابیس
+    gender = "Male" if "آقا" in raw_text else "Female"
+    gender_label = "آقا 🙋‍♂️" if gender == "Male" else "خانم 🙋‍♀️"
 
     await state.update_data(gender=gender)
-    await call.message.edit_text(
-        f"✅ جنسیت شما ثبت شد: <b>{gender_label}</b>\n\n"
-        "سن خود را به صورت عددی وارد کنید (مثال: ۲۵) 👇"
-    )
     await state.set_state(OnboardingStates.waiting_for_age)
-    await call.answer()
+    
+    await message.answer(
+        f"✅ جنسیت شما ثبت شد: <b>{gender_label}</b>\n\n"
+        "سن خود را به صورت عددی وارد کنید (مثال: ۲۵) 👇",
+        reply_markup=get_cancel_keyboard(), # نمایش دکمه انصراف معمولی
+        parse_mode="HTML"
+    )
+
+@router.message(OnboardingStates.waiting_for_gender)
+async def reject_unknown_gender_message(message: Message) -> None:
+    """جلوگیری از ارسال متن‌های متفرقه به جز دکمه‌های اصلی جنسیت"""
+    # تعریف دوباره کیبورد جهت نمایش مجدد در صورت خطای کاربر
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    gender_reply_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer(
+        "⚠️ لطفاً جنسیت خود را فقط از طریق یکی از دکمه‌های زیر انتخاب کنید 👇",
+        reply_markup=gender_reply_kb
+    )
 
 
 @router.callback_query(OnboardingStates.waiting_for_gender)
@@ -299,83 +335,76 @@ async def reject_unknown_gender_callback(call: CallbackQuery) -> None:
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  Onboarding FSM — Step 2: Age
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 @router.message(OnboardingStates.waiting_for_age)
 async def register_age(message: Message, state: FSMContext) -> None:
-    """
-    Validates that the user's age is an integer in the range [18, 75].
-    Advances to province input on success.
-    """
+    """دریافت سن و نمایش کیبورد متنی استان‌ها از فایل JSON"""
     if message.text == "❌ انصراف و منوی اصلی":
         await state.clear()
-        await message.answer(
-            "فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
 
     raw_input = (message.text or "").strip()
     try:
         age = int(raw_input)
         if not (18 <= age <= 75):
-            raise ValueError("age out of allowed range")
+            raise ValueError()
     except ValueError:
-        await message.reply(
-            "⚠️ سن باید یک عدد صحیح بین ۱۸ تا ۷۵ باشد.\n"
-            "لطفاً مجدداً وارد کنید (مثال: ۲۵):"
-        )
+        await message.reply("⚠️ سن باید یک عدد صحیح بین ۱۸ تا ۷۵ باشد.\nلطفاً مجدداً وارد کنید (مثال: ۲۵):")
         return
 
     await state.update_data(age=age)
+    await state.set_state(OnboardingStates.waiting_for_province)
+    
+    # 🛠️ لود کردن داینامیک کیبورد استان‌ها از فایل ادیت پروفایل
+    from matching_bot_project.bot.handlers.profile_edit import get_provinces_reply_keyboard
+    
     await message.answer(
         "✅ سن شما ثبت شد.\n\n"
-        "اکنون نام <b>استان</b> محل سکونت خود را تایپ کنید (مثال: اصفهان) 👇",
-        reply_markup=get_cancel_keyboard(),
+        "اکنون <b>استان</b> محل سکونت خود را از کیبورد متنی زیر انتخاب کنید 👇",
+        reply_markup=get_provinces_reply_keyboard(),
+        parse_mode="HTML"
     )
-    await state.set_state(OnboardingStates.waiting_for_province)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  Onboarding FSM — Step 3: Province
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 @router.message(OnboardingStates.waiting_for_province)
 async def register_province(message: Message, state: FSMContext) -> None:
-    """
-    Validates and normalises the province string (max 30 chars,
-    spaces replaced with underscores). Advances to city input.
-    """
-    if message.text == "❌ انصراف و منوی اصلی":
+    """دریافت متنی استان از کیبورد و نمایش کیبورد متنی شهرهای همان استان"""
+    if message.text == "❌ انصراف و منوی اصلی" or message.text == "🔙 برگشت به منوی اصلی":
         await state.clear()
-        await message.answer(
-            "فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
 
     province_raw = (message.text or "").strip()
-    if not province_raw or len(province_raw) > 30:
-        await message.reply(
-            "⚠️ نام استان نامعتبر است یا بیش از ۳۰ کاراکتر دارد.\n"
-            "لطفاً یک نام معتبر وارد کنید:"
-        )
+    
+    # لود کردن دیکشنری استان‌ها جهت اعتبارسنجی ورودی کاربر
+    from matching_bot_project.bot.handlers.profile_edit import IRAN_DATA, get_cities_reply_keyboard
+
+    if province_raw not in IRAN_DATA:
+        await message.answer("⚠️ لطفاً استان خود را فقط و فقط از روی کیبورد متنی زیر انتخاب کنید:")
         return
 
-    province = province_raw.replace(" ", "_")
-    await state.update_data(province=province)
-    await message.answer(
-        "✅ استان ثبت شد.\n\n"
-        "حالا نام <b>شهر</b> محل سکونت خود را وارد کنید (مثال: اردستان) 👇"
-    )
+    await state.update_data(province=province_raw)
     await state.set_state(OnboardingStates.waiting_for_city)
+    
+    await message.answer(
+        f"✅ استان <b>{province_raw}</b> انتخاب شد.\n\n"
+        f"حالا <b>شهر</b> محل سکونت خود را از کیبورد زیر انتخاب کنید یا نام آن را بنویسید 👇",
+        reply_markup=get_cities_reply_keyboard(province_raw),
+        parse_mode="HTML"
+    )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  Onboarding FSM — Step 4: City → Complete registration
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 @router.message(OnboardingStates.waiting_for_city)
 async def register_city(
@@ -383,50 +412,29 @@ async def register_city(
     state: FSMContext,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Validates and normalises city input, then calls
-    crud.complete_user_registration which:
-      - Saves gender / age / province / city to the User row.
-      - Awards 5 coins to this user.
-      - Awards 5 coins to the referrer (if one exists).
-    Presents the main menu on success.
-    """
-    if message.text == "❌ انصراف و منوی اصلی":
+    """دریافت شهر، اعتبارسنجی و اتمام فرآیند ثبت‌نام اولیه"""
+    if message.text == "❌ انصراف و منوی اصلی" or message.text == "🔙 برگشت به منوی اصلی":
         await state.clear()
-        await message.answer(
-            "فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
 
     city_raw = (message.text or "").strip()
     if not city_raw or len(city_raw) > 30:
-        await message.reply(
-            "⚠️ نام شهر نامعتبر است یا بیش از ۳۰ کاراکتر دارد.\n"
-            "لطفاً یک نام معتبر وارد کنید:"
-        )
+        await message.reply("⚠️ نام شهر نامعتبر است. لطفاً یک نام معتبر وارد کنید:")
         return
 
-    city = city_raw.replace(" ", "_")
+    # حذف جایگزینی با آندscore برای اینکه نام شهرها مثل فایل جی‌سان تمیز ذخیره بشن
+    city = city_raw
     data = await state.get_data()
     gender: Optional[str] = data.get("gender")
     age: Optional[int] = data.get("age")
     province: Optional[str] = data.get("province")
     tg_id = message.from_user.id
 
-    # Guard against corrupted / expired FSM session (e.g. Redis flush)
     if not all([gender, age is not None, province]):
-        logger.error(
-            "Incomplete onboarding FSM data for user %d — stored data: %s",
-            tg_id,
-            data,
-        )
+        logger.error("Incomplete onboarding FSM data for user %d — stored data: %s", tg_id, data)
         await state.clear()
-        await message.answer(
-            "⚠️ اطلاعات نشست شما ناقص یا منقضی شده است.\n"
-            "لطفاً مجدداً از /start شروع کنید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await message.answer("⚠️ اطلاعات نشست شما ناقص یا منقضی شده است.\nلطفاً مجدداً از /start شروع کنید.", reply_markup=ReplyKeyboardRemove())
         return
 
     try:
@@ -438,29 +446,14 @@ async def register_city(
             province=province,
             city=city,
         )
-    except TypeError:
-        # Raised if the current crud.complete_user_registration doesn't yet
-        # accept 'province'. Update the function signature per the header notes.
-        logger.error(
-            "crud.complete_user_registration signature mismatch — "
-            "please add 'province' parameter. See file header for details."
-        )
-        await message.answer(
-            "⚠️ خطای پیکربندی سرور. لطفاً با پشتیبانی تماس بگیرید."
-        )
-        return
-    except Exception:
+    except Exception as e:
         logger.exception("complete_user_registration raised unexpectedly for user %d", tg_id)
         await db_session.rollback()
-        await message.answer(
-            "⚠️ خطای سرور در ذخیره اطلاعات. لطفاً مجدداً تلاش کنید."
-        )
+        await message.answer("⚠️ خطای سرور در ذخیره اطلاعات. لطفاً مجدداً تلاش کنید.")
         return
 
     if not success:
-        await message.answer(
-            "⚠️ مشکلی در ثبت اطلاعات به وجود آمد. لطفا /start را مجددا ارسال کنید."
-        )
+        await message.answer("⚠️ مشکلی در ثبت اطلاعات به وجود آمد. لطفا /start را مجددا ارسال کنید.")
         return
 
     await db_session.commit()
@@ -473,12 +466,11 @@ async def register_city(
         reply_markup=get_main_menu_keyboard(),
     )
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Main Menu — 🎯 شروع دیت ناشناس
+#  Main Menu — "⚡️ شروع دیت ناشناس"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "🎯 شروع دیت ناشناس")
+@router.message(F.text == "⚡️ شروع دیت ناشناس")
 async def start_anonymous_dating(
     message: Message, db_session: AsyncSession
 ) -> None:
@@ -520,10 +512,10 @@ async def start_anonymous_dating(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Main Menu — 👤 پروفایل من
+#  Main Menu — 🪬 پروفایل من
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "👤 پروفایل من")
+@router.message(F.text == "🪬 پروفایل من")
 async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
     """
     Renders the authenticated user's profile card in HTML.
@@ -587,10 +579,10 @@ async def view_user_profile(message: Message, db_session: AsyncSession) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Main Menu — 📍 افراد نزدیک من
+#  Main Menu — "📍 نزدیک من"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "📍 افراد نزدیک من")
+@router.message(F.text == "📍 نزدیک من")
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
     """Presents gender-filter options for nearby-user discovery."""
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
@@ -716,9 +708,35 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.message(F.text == "📜 قوانین")
-async def show_rules(message: Message) -> None:
-    """Sends the bot's rules and usage policy."""
-    await message.answer(_BOT_RULES_TEXT)
+async def show_rules(message: Message):
+    """خواند داینامیک قوانین ربات از فایل JSON موجود در json_files"""
+    try:
+        # تنظیم مسیر فایل قوانین
+        json_path = Path("json_files/rules.json")
+
+        if not json_path.exists():
+            # مسیر بک‌آپ برای محیط داخل کانتینر داکر
+            json_path = Path("/app/json_files/rules.json")
+
+        if not json_path.exists():
+            return await message.answer("⚠️ فایل قوانین و مقررات ربات یافت نشد!")
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        rules_data = data.get("rules_text", "متنی یافت نشد.")
+        
+        
+        if isinstance(rules_data, list):
+            rules_text = "\n".join(rules_data)
+        else:
+            rules_text = rules_data
+
+        await message.answer(rules_text, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Error reading rules.json: {e}", exc_info=True)
+        await message.answer("❌ خطایی در بازخوانی قوانین ربات رخ داد.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -741,8 +759,8 @@ async def start_support_chat(message: Message, state: FSMContext) -> None:
 @router.message(SupportStates.waiting_for_support_message)
 async def receive_support_message(message: Message, state: FSMContext) -> None:
     """
-    Forwards the user's support message anonymously to all configured admin IDs.
-    Clears FSM state and returns the user to the main menu regardless of outcome.
+    Forwards the user's support message anonymously to all configured admin IDs
+    with attached inline actions for quick reply or ban.
     """
     if message.text == "❌ انصراف و منوی اصلی":
         await state.clear()
@@ -759,18 +777,32 @@ async def receive_support_message(message: Message, state: FSMContext) -> None:
         )
         return
 
+    tg_id = message.from_user.id
     safe_user_msg = html.escape(message.text)
+    
     admin_notification = (
         "📩 <b>پیام پشتیبانی ناشناس جدید:</b>\n\n"
         f"{safe_user_msg}\n\n"
         "──────────────────────────────\n"
-        "<i>برای پاسخ، از پنل مدیریت ربات استفاده کنید.</i>"
+        f"👤 شناسه کاربر: <code>{tg_id}</code>"
     )
+
+    # 🛠️ ساخت دکمه‌های شیشه‌ای عملیات سریع برای ادمین
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 پاسخ به کاربر", callback_data=f"admin_reply_{tg_id}")],
+        [InlineKeyboardButton(text="⛔️ بن کردن کاربر", callback_data=f"admin_ban_{tg_id}")]
+    ])
 
     delivered_count = 0
     for admin_id in settings.parsed_admin_ids:
         try:
-            await bot.send_message(chat_id=admin_id, text=admin_notification)
+            await bot.send_message(
+                chat_id=admin_id, 
+                text=admin_notification, 
+                reply_markup=admin_kb,
+                parse_mode="HTML"
+            )
             delivered_count += 1
         except Exception:
             logger.warning(
@@ -786,8 +818,55 @@ async def receive_support_message(message: Message, state: FSMContext) -> None:
     else:
         await message.answer(
             "⚠️ در ارسال پیام به پشتیبانی خطایی رخ داد.\n"
-            "لطفاً مستقیماً از طریق @your_support_id تماس بگیرید.",
+            "لطفاً مستقیماً از طریق پشتیبانی تماس بگیرید.",
             reply_markup=get_main_menu_keyboard(),
         )
 
     await state.clear()
+
+@router.callback_query(F.data == "check_membership")
+async def process_check_membership_callback(
+    call: CallbackQuery, 
+    state: FSMContext, 
+    db_session: AsyncSession
+) -> None:
+    """هندلر دکمه شیشه‌ای بررسی عضویت مجدد که توسط میدل‌ور فورس‌جوین پاس داده می‌شود"""
+    
+    # ۱. متوقف کردن آیکون لودینگ دکمه و نمایش پیام پاپ‌آپ
+    await call.answer("عضویت شما تایید شد! خیلی خوش اومدی 🌹", show_alert=True)
+    
+    # ۲. پاک کردن پیام حاوی دکمه‌های شیشه‌ای جوین اجباری
+    try:
+        await call.message.delete()
+    except Exception:
+        pass # اگر پیام قبلاً پاک شده بود ربات کرش نکند
+        
+    # ۳. بررسی وضعیت کاربر در دیتابیس برای هدایت به مسیر درست
+    tg_id = call.from_user.id
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
+    
+    if user and user.completed_registration:
+        # کاربر قبلا ثبت‌نام کرده، هدایت به منوی اصلی
+        await call.message.answer(
+            "✅ عضویت تایید شد.\nآماده شروع دیت جدید هستید؟ 👇",
+            reply_markup=get_main_menu_keyboard()
+        )
+    else:
+        # کاربر جدید است، هدایت به مرحله اول ثبت‌نام (انتخاب جنسیت)
+        gender_reply_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+            input_field_placeholder="جنسیت خود را انتخاب کنید..."
+        )
+        
+        await call.message.answer(
+            "🎉 <b>به ربات دیتینگ ناشناس خوش آمدید!</b>\n\n"
+            "برای شروع و دریافت <b>۵ سکه هدیه اولیه</b>، لطفاً اطلاعات هویتی خود را ثبت کنید.\n\n"
+            "ابتدا جنسیت خود را انتخاب کنید 👇",
+            reply_markup=gender_reply_kb,
+            parse_mode="HTML"
+        )
+        await state.set_state(OnboardingStates.waiting_for_gender)

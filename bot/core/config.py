@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Core Bot Credentials
     BOT_TOKEN: str
-    BOT_USERNAME: str = "your_bot_id"
+    BOT_USERNAME: str = "Blind_Date_bot_test_bot"
     REQUIRED_CHANNEL_ID: int
     CHANNEL_INVITE_LINK: str = "https://t.me/your_dating_channel"
 
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     # Administrator user lists (comma separated strings)
     ADMIN_USER_IDS: str = "12345678"
     ADMIN_SECRET_TOKEN: str
+    SUPPORT_USERNAME: str = "DefaultSupportBot"
 
     @property
     def parsed_admin_ids(self) -> list[int]:

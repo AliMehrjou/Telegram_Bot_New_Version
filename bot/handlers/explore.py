@@ -36,7 +36,7 @@ from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.bot.states.states import ChatStates
 from matching_bot_project.database.models.models import BlockList, User
 from matching_bot_project.database.queries import crud
-
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 logger = logging.getLogger(__name__)
 router = Router(name="explore_handler")
 
@@ -438,7 +438,7 @@ async def forward_direct_message(
         )
         return
 
-    from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+    
     # ── 4. Deliver anonymous DM to the target ────────────────────────────────
     # html.escape() prevents the sender from injecting HTML tags into the
     # message rendered on the target's side (e.g. <b>bold</b> spoofing).

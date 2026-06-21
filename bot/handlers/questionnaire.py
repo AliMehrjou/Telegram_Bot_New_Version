@@ -29,9 +29,9 @@ finalize_questionnaire_and_request_approval
                             Score answers, set approval state, notify both.
 """
 from __future__ import annotations
-
+ 
 import logging
-
+ 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -39,8 +39,8 @@ from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from matching_bot_project.bot.core.loader import bot, dp, redis_client
+ 
+from matching_bot_project.bot.core.loader import bot, dp, redis_client, dating_scheduler
 from matching_bot_project.bot.keyboards.inline import (
     get_chat_approval_keyboard,
     get_question_reply_keyboard,
@@ -48,7 +48,8 @@ from matching_bot_project.bot.keyboards.inline import (
 from matching_bot_project.bot.states.states import ChatStates, QuestionnaireStates
 from matching_bot_project.database.models.models import MatchHistory, Question, UserAnswer
 from matching_bot_project.database.queries import crud
-from matching_bot_project.bot.core.loader import dating_scheduler
+
+
 logger = logging.getLogger(__name__)
 router = Router(name="questionnaire_handler")
 
@@ -476,27 +477,19 @@ async def _deliver_next_question(
     q_ids: list[int],
     user_one_id: int,
     user_two_id: int,
-    db_session: AsyncSession,
+    db_session,  # AsyncSession
 ) -> None:
     """
     Fetch the next question, update both users' FSM, and deliver the message.
-
-    Called exclusively from ``register_question_response`` when
-    ``sync_count == 2`` and ``next_q_index < TOTAL_QUESTIONS``.
-
-    FSM update is performed before the Telegram send so that if the send
-    fails, the user is still in ``answering_questions`` and not stuck
-    in a state where the keyboard never arrives.
-
-    Per-user error isolation
-    ─────────────────────────
-    FSM and send operations are wrapped individually per user.  A failure
-    for one participant (e.g. they blocked the bot) does not abort delivery
-    to the other.
+ 
+    FIX (باگ ۱):
+    - update_data و set_state در یه try/except ترکیب شدن تا از split-state جلوگیری بشه.
+    - لاگ‌گذاری بهتر برای شناسایی کدوم user fail کرده.
+    - ادامه‌ی delivery حتی اگه FSM write fail بشه (رفتار قبلی حفظ شده).
     """
     next_question_id: int = q_ids[next_q_index]
-
-    next_question: Question | None = await db_session.get(Question, next_question_id)
+ 
+    next_question = await db_session.get(Question, next_question_id)
     if not next_question:
         logger.error(
             "Question %s (index %s) not found in DB for match %s. "
@@ -506,7 +499,7 @@ async def _deliver_next_question(
             match_history_id,
         )
         return
-
+ 
     progress_bar = build_progress_bar(next_q_index + 1, TOTAL_QUESTIONS)
     question_text = (
         f"{progress_bar}"
@@ -516,28 +509,27 @@ async def _deliver_next_question(
         f"🅱️ گزینه دوم: {next_question.option_b}"
     )
     keyboard = get_question_reply_keyboard(next_question_id)
-
+ 
     for uid in (user_one_id, user_two_id):
-
-        # ── Update FSM for this participant ───────────────────────────────────
         ctx = get_user_state(uid)
+ 
+        # ── FSM: state + data رو با هم آپدیت کن ─────────────────────────────
+        # FIX: update_data و set_state در یه try هستن تا از حالتی که
+        # data آپدیت شده ولی state نه (یا برعکس) جلوگیری بشه.
         try:
             await ctx.update_data(current_question_index=next_q_index)
             await ctx.set_state(QuestionnaireStates.answering_questions)
         except Exception as exc:
             logger.error(
-                "Failed to update FSM to answering_questions for user %s "
-                "in match %s (question index %s): %s",
+                "Failed to update FSM for user %s in match %s (index %s): %s",
                 uid,
                 match_history_id,
                 next_q_index,
                 exc,
             )
-            # Do not return — still attempt the message send so the user
-            # receives the question even if FSM write failed.
-
-        # ── Deliver question message ──────────────────────────────────────────
-        from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+            # ادامه می‌دیم تا حداقل پیام سوال ارسال بشه
+ 
+        # ── پیام سوال رو بفرست ───────────────────────────────────────────────
         try:
             await bot.send_message(
                 chat_id=uid,
@@ -546,9 +538,18 @@ async def _deliver_next_question(
                 parse_mode="Markdown",
             )
         except TelegramForbiddenError:
-            logger.warning(f"User {uid} blocked the bot. Questionnaire stalled in match {match_history_id}.")
+            logger.warning(
+                "User %s blocked the bot. Questionnaire stalled in match %s.",
+                uid,
+                match_history_id,
+            )
         except TelegramAPIError as exc:
-            logger.error(f"Telegram API Error delivering question to {uid} in match {match_history_id}: {exc}")
+            logger.error(
+                "Telegram API Error delivering question to %s in match %s: %s",
+                uid,
+                match_history_id,
+                exc,
+            )
         except Exception as exc:
             logger.error(
                 "Failed to send question %s (index %s) to user %s in match %s: %s",

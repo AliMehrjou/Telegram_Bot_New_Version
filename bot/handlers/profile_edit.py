@@ -1,19 +1,37 @@
 import html
 import logging
+import json
+import os
 from typing import Dict, List
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.bot.states.states import ProfileEditStates
 from matching_bot_project.database.queries.crud import update_user_profile
 from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
-
+from matching_bot_project.database.queries import crud
+from pathlib import Path
 logger = logging.getLogger(__name__)
-
 router = Router(name="profile_edit_handler")
+
+try:
+    
+    json_path = Path("json_files/iran_data.json")
+    
+    if not json_path.exists():
+        
+        json_path = Path("/app/json_files/iran_data.json")
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        IRAN_DATA = json.load(f)
+    logger.info(f"Successfully loaded {len(IRAN_DATA)} provinces from json_files.")
+except Exception as e:
+    logger.error(f"Error loading iran_data.json from json_files: {e}")
+    IRAN_DATA = {"تهران": ["تهران"], "اصفهان": ["اصفهان"]}
+
 
 INTERESTS = {
     "gaming": "🎮 گیمینگ",
@@ -29,9 +47,7 @@ INTERESTS = {
 }
 
 def get_interests_keyboard(selected_interests: List[str]) -> InlineKeyboardMarkup:
-    """Builds a dynamic multi-select keyboard for interests."""
     keyboard = []
-    # Build buttons in pairs (2 per row)
     keys = list(INTERESTS.keys())
     for i in range(0, len(keys), 2):
         row = []
@@ -43,56 +59,109 @@ def get_interests_keyboard(selected_interests: List[str]) -> InlineKeyboardMarku
                     label += " ✅"
                 row.append(InlineKeyboardButton(text=label, callback_data=f"interest_{key}"))
         keyboard.append(row)
-
-    # Add save button at the bottom
     keyboard.append([InlineKeyboardButton(text="✅ تایید و ذخیره", callback_data="save_interests")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-@router.callback_query(F.data == "edit_profile_triggered")
-async def start_profile_edit(call: CallbackQuery, state: FSMContext) -> None:
-    """Handles the edit profile callback from the profile view."""
-    await state.set_state(ProfileEditStates.editing_bio)
-    await state.update_data(selected_interests=[])
+def get_provinces_reply_keyboard() -> ReplyKeyboardMarkup:
+    """ساخت کیبورد متنی معمولی برای استان‌ها از فایل JSON"""
+    buttons = []
+    provinces = list(IRAN_DATA.keys())
+    for i in range(0, len(provinces), 2):
+        row = [KeyboardButton(text=provinces[i])]
+        if i + 1 < len(provinces):
+            row.append(KeyboardButton(text=provinces[i+1]))
+        buttons.append(row)
+    buttons.append([KeyboardButton(text="🔙 برگشت به منوی اصلی")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
-    await call.message.answer(
-        "لطفاً بیوگرافی خود را بنویسید (حداکثر ۱۵۰ کاراکتر):"
-    )
+
+def get_cities_reply_keyboard(province_name: str) -> ReplyKeyboardMarkup:
+    """ساخت کیبورد متنی معمولی برای شهرهای یک استان از فایل JSON"""
+    buttons = []
+    cities = IRAN_DATA.get(province_name, [])
+    for i in range(0, len(cities), 2):
+        row = [KeyboardButton(text=cities[i])]
+        if i + 1 < len(cities):
+            row.append(KeyboardButton(text=cities[i+1]))
+        buttons.append(row)
+    buttons.append([KeyboardButton(text="🔙 برگشت به منوی اصلی")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+# ==================== هندلرهای مدیریت FSM ====================
+
+
+@router.message(F.text == "🔙 برگشت به منوی اصلی")
+async def cancel_profile_editing(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ عملیات ویرایش پروفایل لغو شد.", reply_markup=get_main_menu_keyboard())
+
+
+@router.callback_query(F.data == "edit_profile_triggered")
+async def show_edit_menu(call: CallbackQuery, state: FSMContext):
+    await state.clear() 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
+        [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests")],
+        [InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
+        [InlineKeyboardButton(text="📍 تغییر سن و محل سکونت", callback_data="change_demographics")]
+    ])
+    
+    text_content = "⚙️ <b>کدام بخش از پروفایل خود را می‌خواهید ویرایش کنید؟</b>"
+    
+    
+    if call.message.photo:
+        await call.message.delete()
+        await call.message.answer(text_content, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        try:
+            await call.message.edit_text(text_content, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            await call.message.answer(text_content, reply_markup=keyboard, parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data == "change_bio")
+async def start_bio_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.editing_bio)
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    await call.message.answer("✍️ لطفاً بیوگرافی خود را بنویسید (حداکثر ۱۵۰ کاراکتر):", reply_markup=cancel_kb)
     await call.answer()
 
 
 @router.message(ProfileEditStates.editing_bio)
-async def process_bio_input(message: Message, state: FSMContext) -> None:
-    """Handles the bio input text."""
+async def process_bio_input(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     bio_text = message.text or ""
+    if bio_text == "🔙 برگشت به منوی اصلی": return
+
     if len(bio_text) > 150:
-        await message.answer("⚠️ متن بیوگرافی طولانی است. لطفاً حداکثر در ۱۵۰ کاراکتر بنویسید:")
+        await message.answer("⚠️ متن بیوگرافی طولانی است. مجدداً بنویسید:")
         return
 
     safe_bio = html.escape(bio_text.strip())
-    await state.update_data(bio=safe_bio)
-
-    await state.set_state(ProfileEditStates.selecting_interests)
-
-    data = await state.get_data()
-    selected_interests = data.get("selected_interests", [])
-
-    await message.answer(
-        "✅ بیوگرافی ذخیره شد.\n\n"
-        "اکنون علایق خود را انتخاب کنید (می‌توانید چند مورد را انتخاب کنید):",
-        reply_markup=get_interests_keyboard(selected_interests)
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    
+    success = await update_user_profile(
+        session=db_session, tg_id=message.from_user.id, bio=safe_bio, interests=user.interests if user else ""
     )
+    if success:
+        await db_session.commit()
+        await message.answer("✅ بیوگرافی شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
+    await state.clear()
+
+
+@router.callback_query(F.data == "change_interests")
+async def start_interests_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.selecting_interests)
+    await state.update_data(selected_interests=[])
+    await call.message.answer("اکنون علایق خود را انتخاب کنید:", reply_markup=get_interests_keyboard([]))
+    await call.answer()
 
 
 @router.callback_query(ProfileEditStates.selecting_interests, F.data.startswith("interest_"))
 async def toggle_interest(call: CallbackQuery, state: FSMContext) -> None:
-    """Toggles an interest selection and updates the keyboard."""
     interest_key = call.data.removeprefix("interest_")
-
-    if interest_key not in INTERESTS:
-        await call.answer("⚠️ داده نامعتبر.", show_alert=True)
-        return
-
     data = await state.get_data()
     selected_interests = data.get("selected_interests", [])
 
@@ -102,33 +171,97 @@ async def toggle_interest(call: CallbackQuery, state: FSMContext) -> None:
         selected_interests.append(interest_key)
 
     await state.update_data(selected_interests=selected_interests)
-
-    await call.message.edit_reply_markup(
-        reply_markup=get_interests_keyboard(selected_interests)
-    )
+    await call.message.edit_reply_markup(reply_markup=get_interests_keyboard(selected_interests))
     await call.answer()
 
 
 @router.callback_query(ProfileEditStates.selecting_interests, F.data == "save_interests")
 async def save_profile_changes(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
-    """Saves the bio and selected interests to the database."""
     data = await state.get_data()
-    bio = data.get("bio", "")
     selected_interests = data.get("selected_interests", [])
-
     interests_str = ",".join(selected_interests) if selected_interests else ""
 
+    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
     success = await update_user_profile(
-        session=db_session,
-        tg_id=call.from_user.id,
-        bio=bio,
-        interests=interests_str
+        session=db_session, tg_id=call.from_user.id, bio=user.bio if user else "", interests=interests_str
     )
-
     if success:
-        await call.message.edit_text("✅ پروفایل شما با موفقیت بروزرسانی شد.")
-    else:
-        await call.message.edit_text("⚠️ خطایی در بروزرسانی پروفایل رخ داد. لطفاً دوباره تلاش کنید.")
-
+        await db_session.commit() 
+        await call.message.answer("✅ علایق شما با موفقیت بروزرسانی شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
     await call.answer()
+
+
+@router.callback_query(F.data == "change_photo")
+async def start_photo_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.waiting_for_photo)
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    await call.message.answer("📸 لطفاً عکس جدید پروفایل خود را ارسال کنید:", reply_markup=cancel_kb)
+    await call.answer()
+
+
+@router.message(ProfileEditStates.waiting_for_photo, F.photo)
+async def process_new_photo(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    photo_file_id = message.photo[-1].file_id
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    if user:
+        user.profile_photo_file_id = photo_file_id
+        await db_session.commit()
+        await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
+    await state.clear()
+
+
+@router.callback_query(F.data == "change_demographics")
+async def start_demographics_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.updating_age)
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    await call.message.answer("📍 لطفاً سن جدید خود را به صورت عدد انگلیسی ارسال کنید:", reply_markup=cancel_kb)
+    await call.answer()
+
+
+@router.message(ProfileEditStates.updating_age)
+async def process_new_age(message: Message, state: FSMContext) -> None:
+    age_text = message.text or ""
+    if age_text == "🔙 برگشت به منوی اصلی": return
+
+    if not age_text.isdigit() or not (18 <= int(age_text) <= 99):
+        await message.answer("⚠️ لطفاً یک سن معتبر (عددی بین ۱۸ تا ۹۹) وارد کنید:")
+        return
+        
+    await state.update_data(age=int(age_text))
+    await state.set_state(ProfileEditStates.updating_province)
+    await message.answer("📍 سن شما ثبت شد.\n\nاکنون استان خود را از کیبورد زیر انتخاب کنید:", reply_markup=get_provinces_reply_keyboard())
+
+
+@router.message(ProfileEditStates.updating_province)
+async def process_edit_province(message: Message, state: FSMContext):
+    selected_province = message.text or ""
+    if selected_province == "🔙 برگشت به منوی اصلی": return
+
+    if selected_province not in IRAN_DATA:
+        await message.answer("⚠️ لطفاً استان خود را فقط از روی کیبورد زیر انتخاب کنید:")
+        return
+
+    await state.update_data(province=selected_province)
+    await state.set_state(ProfileEditStates.updating_city)
+    await message.answer(f"✅ استان {selected_province} انتخاب شد.\n\nاکنون شهر خود را از کیبورد انتخاب کنید:", reply_markup=get_cities_reply_keyboard(selected_province))
+
+
+@router.message(ProfileEditStates.updating_city)
+async def process_edit_city(message: Message, state: FSMContext, db_session: AsyncSession):
+    selected_city = message.text or ""
+    if selected_city == "🔙 برگشت به منوی اصلی": return
+
+    data = await state.get_data()
+    new_age = data.get("age")
+    new_province = data.get("province")
+    new_city = html.escape(selected_city.strip())
+
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    if user:
+        user.age = new_age
+        user.province = new_province
+        user.city = new_city
+        await db_session.commit()
+        await message.answer("🎉 مشخصات و محل سکونت شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
+    await state.clear()

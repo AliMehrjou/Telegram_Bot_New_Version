@@ -23,9 +23,18 @@ class ChatStates(StatesGroup):
 class SupportStates(StatesGroup):
     waiting_for_support_message = State()  # جدید
 
+class AdminStates(StatesGroup):
+    waiting_for_support_reply       = State()
+    waiting_for_broadcast_message   = State()
+
+
 class ProfileEditStates(StatesGroup):
     editing_bio = State()
     selecting_interests = State()
+    waiting_for_photo = State()        
+    updating_age = State()            
+    updating_province = State()        
+    updating_city = State()            
 
 class DiscoveryStates(StatesGroup):
     navigating = State()
@@ -35,3 +44,17 @@ class ReportStates(StatesGroup):
 
 class VIPStates(StatesGroup):
     waiting_for_age_filter = State()
+
+class EventStates(StatesGroup):
+    waiting_for_name        = State()
+    waiting_for_description = State()
+    waiting_for_duration    = State()
+    waiting_for_multiplier  = State()
+    confirming              = State()
+
+ 
+class PBroadcastStates(StatesGroup):
+    waiting_for_filter  = State()
+    waiting_for_message = State()
+    confirming          = State()
+ 

@@ -33,20 +33,22 @@ and must be extended:
 
 import re
 import logging
+ 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
-
+ 
 from matching_bot_project.bot.core.loader import bot, dp, redis_client
 from matching_bot_project.bot.states.states import ChatStates
 from matching_bot_project.bot.keyboards.inline import get_active_chat_controls
 from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.models.models import MatchHistory
-from matching_bot_project.database.queries import crud  # noqa: F401 – available for callers / future use
-from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+from matching_bot_project.database.queries import crud
+ 
 logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")
 
@@ -182,108 +184,76 @@ async def _safe_send(
     ChatStates.waiting_for_approval,
     F.data.in_({"approve_chat_yes", "approve_chat_no"}),
 )
+
 async def register_chat_consent(
     call: CallbackQuery,
     state: FSMContext,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Processes one participant's consent decision after the questionnaire ends.
-    """
     await call.answer()
-
+ 
     tg_id: int = call.from_user.id
     fsm_data: dict = await state.get_data()
     match_history_id: int | None = fsm_data.get("match_history_id")
-
-    # ── Guard: FSM must carry a valid match reference ─────────────────────── #
+ 
     if not match_history_id:
-        logger.error(
-            "User %d invoked consent handler with no match_history_id in FSM.",
-            tg_id,
-        )
+        logger.error("User %d invoked consent handler with no match_history_id in FSM.", tg_id)
         try:
-            await call.message.edit_text(
-                "⚠️ خطا: اطلاعات دیت یافت نشد. لطفاً /start را مجدداً ارسال کنید."
-            )
+            await call.message.edit_text("⚠️ خطا: اطلاعات دیت یافت نشد. لطفاً /start را مجدداً ارسال کنید.")
         except Exception:
             pass
         await state.clear()
         return
-
-    # ── Fetch and validate the MatchHistory record ────────────────────────── #
-    match_history: MatchHistory | None = await db_session.get(
-        MatchHistory, match_history_id
-    )
-
+ 
+    match_history: MatchHistory | None = await db_session.get(MatchHistory, match_history_id)
+ 
     if not match_history or not match_history.is_active:
-        logger.warning(
-            "User %d tried to consent on an inactive / missing match (ID %d).",
-            tg_id,
-            match_history_id,
-        )
+        logger.warning("User %d tried to consent on inactive/missing match (ID %d).", tg_id, match_history_id)
         try:
-            await call.message.edit_text(
-                "⚠️ این دیت دیگر فعال نیست یا قبلاً پایان یافته است."
-            )
+            await call.message.edit_text("⚠️ این دیت دیگر فعال نیست یا قبلاً پایان یافته است.")
         except Exception:
             pass
         await state.clear()
         return
-
-    # Guard against double-taps causing race conditions and multiple activation messages
+ 
+    # FIX (باگ ۴): guard رو قبل از هر چیز چک کن
     if match_history.chat_approved:
+        # یه coroutine دیگه قبلاً activation رو انجام داده
         return
-
-    # ── Identify the caller's role and the partner's Telegram ID ─────────── #
+ 
     is_user_one: bool = match_history.user_one_id == tg_id
     partner_id: int = (
         match_history.user_two_id if is_user_one else match_history.user_one_id
     )
     partner_ctx: FSMContext = _resolve_partner_fsm(partner_id)
-
-    # ── Strip the inline keyboard immediately to prevent double-submissions ── #
+ 
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception as exc:
-        logger.warning(
-            "Could not remove approval keyboard for user %d: %s", tg_id, exc
-        )
-
+        logger.warning("Could not remove approval keyboard for user %d: %s", tg_id, exc)
+ 
     # ════════════════════════════════════════════════════════════════════════ #
     # REJECTION PATH                                                          #
     # ════════════════════════════════════════════════════════════════════════ #
-
     if call.data == "approve_chat_no":
         match_history.is_active = False
         try:
             await db_session.commit()
         except Exception as exc:
-            logger.error(
-                "DB commit failed when deactivating match %d after rejection: %s",
-                match_history_id,
-                exc,
-            )
+            logger.error("DB commit failed when deactivating match %d: %s", match_history_id, exc)
             await db_session.rollback()
-
-        # Inform and clean up the caller.
+ 
         await state.clear()
-        await _safe_send(
-            tg_id,
-            "❌ گفتگو رد شد. به منوی اصلی بازگشتید.",
-            with_main_menu=True,
-        )
-
-        # Inform and clean up the partner.
+        await _safe_send(tg_id, "❌ گفتگو رد شد. به منوی اصلی بازگشتید.", with_main_menu=True)
+ 
+        # FIX (باگ ۲): partner ممکنه keyboard داشته باشه، اول text رو edit کن
         try:
+            partner_fsm_data = await partner_ctx.get_data()
+            # Partner رو از waiting_for_approval خارج کن
             await partner_ctx.clear()
         except Exception as exc:
-            logger.warning(
-                "Could not clear FSM for partner %d after rejection: %s",
-                partner_id,
-                exc,
-            )
-
+            logger.warning("Could not clear FSM for partner %d after rejection: %s", partner_id, exc)
+ 
         await _safe_send(
             partner_id,
             "⚠️ متاسفانه پارتنر شما با برقراری چت موافقت نکرد. دیت پایان یافت.",
@@ -514,101 +484,77 @@ async def end_active_anonymous_chat(
     db_session: AsyncSession,
 ) -> None:
     """
-    Gracefully tears down the active anonymous chat session when a participant
-    presses the end-chat control.
-
-    Teardown sequence
-    ~~~~~~~~~~~~~~~~~
-    1. Marks ``MatchHistory.is_active = False`` in the database and commits.
-    2. Deletes both users' Redis tracking keys (``user:state:{id}``).
-    3. Clears both users' FSM states.
-    4. Edits the caller's chat-controls message to ``"🛑 گفتگو را پایان دادید."``.
-    5. Sends the caller a new message with the main reply keyboard.
-    6. Sends the partner ``"🛑 پارتنر شما گفتگو را خاتمه داد."`` with the
-       main reply keyboard.
-
-    All Telegram delivery calls are wrapped in ``try/except`` so the handler
-    never crashes if the partner has blocked the bot.
+    FIX (باگ ۳ — اصلی):
+    قبلاً partner_ctx.clear() صدا زده میشد، ولی clear() فقط data رو پاک میکنه.
+    partner همچنان در ChatStates.anonymous_chat_active میموند و میتونست
+    پیام بفرسته یا callback بده.
+ 
+    رفع:
+    1. partner_ctx.set_state(None) اضافه شد تا state واقعاً پاک بشه.
+    2. یه پیام با edit_reply_markup برای حذف keyboard از partner هم ارسال میشه
+       (چون نمیتونیم message_id partner رو داشته باشیم، فقط از طریق پیام جدید اطلاع میدیم).
     """
     await call.answer()
-
+ 
     tg_id: int = call.from_user.id
     fsm_data: dict = await state.get_data()
     partner_id: int | None = fsm_data.get("partner_id")
     match_history_id: int | None = fsm_data.get("match_history_id")
-
-    # ── Deactivate the match record in the database ───────────────────────── #
+ 
+    # ── DB: match رو deactivate کن ────────────────────────────────────────── #
     if match_history_id:
-        match_row: MatchHistory | None = await db_session.get(
-            MatchHistory, match_history_id
-        )
+        match_row: MatchHistory | None = await db_session.get(MatchHistory, match_history_id)
         if match_row and match_row.is_active:
             match_row.is_active = False
             try:
                 await db_session.commit()
             except Exception as exc:
-                logger.error(
-                    "DB commit failed when closing match %d: %s",
-                    match_history_id,
-                    exc,
-                )
+                logger.error("DB commit failed when closing match %d: %s", match_history_id, exc)
                 await db_session.rollback()
     else:
-        logger.warning(
-            "User %d ended an anonymous chat with no match_history_id in FSM.",
-            tg_id,
-        )
-
-    # ── Clean up the caller's Redis key and FSM state ────────────────────── #
+        logger.warning("User %d ended anonymous chat with no match_history_id in FSM.", tg_id)
+ 
+    # ── Caller: Redis + FSM + UI ──────────────────────────────────────────── #
     try:
         await redis_client.delete(f"user:state:{tg_id}")
         if partner_id:
             await redis_client.setex(f"user:{tg_id}:last_match_partner", 86400, str(partner_id))
     except Exception as exc:
         logger.error("Redis delete failed for caller %d: %s", tg_id, exc)
+ 
 
     await state.clear()
-
-    # Acknowledge the termination by editing the chat-controls message.
+ 
     try:
         await call.message.edit_text("🛑 گفتگو را پایان دادید.")
     except Exception as exc:
-        logger.warning(
-            "Could not edit end-chat message for caller %d: %s", tg_id, exc
-        )
-
-    # Send the caller back to the main menu via a new message.
+        logger.warning("Could not edit end-chat message for caller %d: %s", tg_id, exc)
+ 
     try:
-        await call.message.answer(
-            "به منوی اصلی بازگشتید 👇",
-            reply_markup=get_main_menu_keyboard(),
-        )
+        await call.message.answer("به منوی اصلی بازگشتید 👇", reply_markup=get_main_menu_keyboard())
     except Exception as exc:
         logger.error("Failed to send main menu to caller %d: %s", tg_id, exc)
-
-    # ── Clean up the partner's Redis key and FSM state ───────────────────── #
+ 
     if not partner_id:
-        logger.warning(
-            "User %d ended chat with no partner_id in FSM; partner not notified.",
-            tg_id,
-        )
+        logger.warning("User %d ended chat with no partner_id; partner not notified.", tg_id)
         return
-
+ 
+    # ── Partner: Redis + FSM + اطلاع‌رسانی ───────────────────────────────── #
     try:
         await redis_client.delete(f"user:state:{partner_id}")
         await redis_client.setex(f"user:{partner_id}:last_match_partner", 86400, str(tg_id))
     except Exception as exc:
         logger.error("Redis delete failed for partner %d: %s", partner_id, exc)
-
+ 
     partner_ctx: FSMContext = _resolve_partner_fsm(partner_id)
-
+ 
     try:
+
+        await partner_ctx.set_state(None)
         await partner_ctx.clear()
     except Exception as exc:
-        logger.warning(
-            "Failed to clear FSM for partner %d after end-chat: %s", partner_id, exc
-        )
-
+        logger.warning("Failed to clear FSM for partner %d: %s", partner_id, exc)
+ 
     await _safe_send(
         partner_id,
         "🛑 پارتنر شما گفتگو را خاتمه داد. به منوی اصلی بازگشتید.",
