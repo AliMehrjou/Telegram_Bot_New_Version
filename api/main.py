@@ -8,7 +8,7 @@ from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import bot, dp, matching_engine, dating_scheduler
 from matching_bot_project.api.routes import webhook, admin
 from matching_bot_project.database.session import engine, Base
-from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
+from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction, seed_sixty_question_bank_if_empty
 from matching_bot_project.database.session import async_session_factory
 from matching_bot_project.database.models import models
 from matching_bot_project.bot.handlers.admin import _daily_report_loop

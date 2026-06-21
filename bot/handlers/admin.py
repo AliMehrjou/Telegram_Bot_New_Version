@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.bot.core.loader import bot
 from matching_bot_project.bot.filters.custom import IsAdminFilter
 from matching_bot_project.database.models.models import MatchHistory, User
-from matching_bot_project.database.crud import get_user_by_tg_id, process_coin_transaction
+from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
 logger = logging.getLogger(__name__)
