@@ -428,7 +428,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
         try:
             await bot.send_message(
                 chat_id=partner_id,
-                text=f"💬: {filtered_text}",
+                text=f"{filtered_text}",
             )
         except TelegramForbiddenError:
             logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
