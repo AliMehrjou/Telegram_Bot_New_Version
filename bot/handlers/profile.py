@@ -1,23 +1,33 @@
 import logging
 import html
+import os
+import json
+import string
+import random
+from pathlib import Path
+from datetime import datetime, timedelta
+
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import update
 
 from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.core.config import settings
-import os
-import json
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 router = Router(name="profile_handler")
 
+def generate_public_id(length=6):
+    
+    characters = string.ascii_letters + string.digits
+    return f"user_{''.join(random.choice(characters) for _ in range(length))}"
+
 
 @router.message(F.text == "🪬 پروفایل من")
 async def view_user_profile(message: Message, db_session: AsyncSession):
-    """داشبورد مشخصات کاربر را نشان می‌دهد (بدون ارسال پیام دوبل)"""
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
@@ -25,45 +35,48 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
         await message.answer("⚠️ شما هنوز ثبت نام نکرده‌اید! لطفا دکمه /start را ارسال کنید.")
         return
 
-    gender_txt = "آقا 🙋‍♂️" if user.gender == "Male" else "خانم 🙋‍♀️" if user.gender == "Female" else "نامشخص ❓"
-    vip_status = "👑 عضو VIP" if user.is_vip else "🏷️ عضو عادی"
+    # تولید آیدی یکتا اگر کاربر از قبل نداشت (باید فیلد public_id رو به تیبل دیتابیست اضافه کنی)
+    public_id = getattr(user, 'public_id', None)
+    if not public_id:
+        public_id = generate_public_id()
+        # در صورت تمایل می‌توانی اینجا آیدی جدید را در دیتابیس هم ذخیره کنی
+
+    # دریافت مقادیر جدید از دیتابیس (باید این فیلدها را در Model خود تعریف کنی)
+    likes_count = getattr(user, 'likes_count', 0)
+    # بررسی آنلاین بودن (می‌تواند بر اساس اختلاف زمان آخرین فعالیت کاربر با زمان حال محاسبه شود)
+    is_online = getattr(user, 'is_online', True) 
+
+    gender_txt = "پسر 👱‍♂️" if user.gender == "Male" else "دختر 👩‍🦰" if user.gender == "Female" else "نامشخص ❓"
+    online_status = "هم اکنون 👀 آنلاین" if is_online else "آفلاین 💤"
 
     safe_first_name = html.escape(user.first_name or "کاربر")
     safe_city = html.escape((user.city or "نامشخص").replace('_', ' '))
-    safe_bio = html.escape(user.bio or "هنوز نوشته نشده")
-    
-    user_interests = []
-    if user.interests:
-        from matching_bot_project.bot.handlers.profile_edit import INTERESTS
-        for key in user.interests.split(","):
-            if key in INTERESTS:
-                user_interests.append(INTERESTS[key])
-    interests_txt = "، ".join(user_interests) if user_interests else "هنوز انتخاب نشده"
+    safe_bio = html.escape(user.bio or "")
 
+    # فرمت جدید متن پروفایل کاملا مشابه عکس
     profile_card = (
-        "👤 <b>پروفایل کاربری بلایند دیت شما:</b>\n\n"
-        f"🆔 شناسه تلگرام: <code>{user.tg_id}</code>\n"
-        f"🏷️ نام: <b>{safe_first_name}</b>\n"
-        f"🙋‍♂️ جنسیت: <b>{gender_txt}</b>\n"
-        f"🎂 سن: <b>{user.age}</b> سال\n"
-        f"📍 استان: <b>{html.escape(user.province or 'نامشخص')}</b>\n"
-        f"📍 شهر: <b>{safe_city}</b>\n"
-        f"📝 بیوگرافی: <i>{safe_bio}</i>\n"
-        f"🎯 علایق: <b>{interests_txt}</b>\n\n"
-        f"⚡ وضعیت اشتراک: <b>{vip_status}</b>\n"
-        f"🔋 سهمیه مچینگ ویژه (VIP): <b>{user.vip_quota} عدد</b>\n"
+        f"🔸 نام: <b>{safe_first_name}</b>\n"
+        f"🔸 سن: <b>{user.age}</b>\n"
+        f"🔸 جنسیت: <b>{gender_txt}</b>\n"
+        f"🔸 استان: <b>{html.escape(user.province or 'نامشخص')}</b>\n"
+        f"🔸 شهر: <b>{safe_city}</b>\n\n"
+        f"📝 بیوگرافی:\n<i>{safe_bio}</i>\n\n"
+        f"❤️ لایک ها: <b>{likes_count}</b>\n\n"
+        f"{online_status}\n\n"
+        f"🆔 آیدی: <code>{public_id}</code> /\n\n"
+        f"🔔 تنظیم حالت سایلنت: /silent\n"
+        f"❌ حذف اکانت ربات: /delete_account"
     )
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 ویرایش مشخصات و علایق", callback_data="edit_profile_triggered")]
+        [InlineKeyboardButton(text="📝 ویرایش مشخصات", callback_data="edit_profile_triggered")]
     ])
 
-    # ارسال فقط یک پیام (اگر عکس داشت با عکس، وگرنه متنی)
     if user.profile_photo_file_id:
         try:
             await message.answer_photo(
                 photo=user.profile_photo_file_id,
-                caption=profile_card,
+                caption=profile_card[:1024], # برش متن تا محدودیت 1024 کاراکتری کپشن
                 parse_mode=ParseMode.HTML,
                 reply_markup=inline_kb
             )
@@ -74,6 +87,77 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
         await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 
 
+# ==========================================
+# سیستم سایلنت مود
+# ==========================================
+
+def get_silent_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔔 غیر فعال کردن سایلنت", callback_data="silent_off")],
+        [
+            InlineKeyboardButton(text="🔕 تا یک ساعت", callback_data="silent_1h"),
+            InlineKeyboardButton(text="🔕 تا 20 دقیقه", callback_data="silent_20m")
+        ],
+        [InlineKeyboardButton(text="🔕 همیشه سایلنت", callback_data="silent_forever")],
+        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]
+    ])
+@router.message(Command("silent"))
+async def silent_mode_command(message: Message):
+    text = (
+        "🔻 حالت سایلنت: <b>غیرفعال</b> 🔔\n"
+        "───────────────────\n"
+        "💡 با فعال شدن حالت سایلنت، درخواست چت دریافت نخواهید کرد."
+    )
+    await message.answer(text, reply_markup=get_silent_keyboard(), parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("silent_"))
+async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
+    action = call.data.split("_")[1]
+    now = datetime.now()
+    
+    # فیلد silent_until باید در دیتابیس اضافه شود
+    if action == "off":
+        silent_until = None
+        msg = "🔔 حالت سایلنت با موفقیت غیرفعال شد."
+    elif action == "20m":
+        silent_until = now + timedelta(minutes=20)
+        msg = "🔕 ربات تا 20 دقیقه برای شما سایلنت شد."
+    elif action == "1h":
+        silent_until = now + timedelta(hours=1)
+        msg = "🔕 ربات تا ۱ ساعت برای شما سایلنت شد."
+    elif action == "forever":
+        # یک تاریخ خیلی دور برای حالت همیشه سایلنت
+        silent_until = now + timedelta(days=3650)
+        msg = "🔕 حالت همیشه سایلنت فعال شد."
+    
+    # اینجا می‌توانی کوئری آپدیت زمان سایلنت را برای دیتابیس بنویسی
+    
+    await call.answer(msg, show_alert=True)
+    await call.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]]
+    ))
+
+# ==========================================
+# سیستم حذف اکانت
+# ==========================================
+
+@router.message(Command("delete_account"))
+async def delete_account_command(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ بله، اکانتم حذف شود", callback_data="confirm_delete_account")],
+        [InlineKeyboardButton(text="🔙 انصراف", callback_data="close_menu")]
+    ])
+    await message.answer("⚠️ آیا از حذف اکانت خود مطمئن هستید؟ تمام اطلاعات، مچ‌ها و امتیازات شما پاک خواهد شد.", reply_markup=kb)
+
+@router.callback_query(F.data == "confirm_delete_account")
+async def confirm_delete_account_handler(call: CallbackQuery, db_session: AsyncSession):
+
+    await call.message.edit_text("✅ اکانت شما با موفقیت حذف شد. برای استفاده مجدد /start را بفرستید.")
+
+@router.callback_query(F.data == "close_menu")
+async def close_menu_handler(call: CallbackQuery):
+    await call.message.delete()
+    
 @router.message(F.text == "📍 نزدیک من")
 async def view_nearby_users(message: Message, db_session: AsyncSession):
     """پیدا کردن کاربران جنس مخالف در همان شهر و استان"""

@@ -1,15 +1,24 @@
+import string
+import random
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from matching_bot_project.database.session import Base
 
+def generate_random_public_id(length=6):
+    characters = string.ascii_letters + string.digits
+    return f"user_{''.join(random.choice(characters) for _ in range(length))}"
 
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    
+    # آیدی منحصربه‌فرد برای نمایش به بقیه (اضافه شده)
+    public_id: Mapped[str] = mapped_column(String(20), unique=True, index=True, default=generate_random_public_id, nullable=False)
+    
     username: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     first_name: Mapped[str] = mapped_column(String(150), nullable=False)
     
@@ -21,10 +30,18 @@ class User(Base):
     tags: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     profile_photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
+    # === زیرساخت قابلیت گرامافون (آهنگ پروفایل) ===
+    profile_voice_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
     # Economy System (Coins)
-    coin_balance: Mapped[int] = mapped_column(Integer, default=3, nullable=False) # 3 coins on start
+    coin_balance: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     total_earned_coins: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     total_spent_coins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    
+    # === زیرساخت قابلیت XP و سیستم گاچا (Loot Box) ===
+    xp_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    lootbox_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Permissions and Quotas
     is_vip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -33,11 +50,17 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     report_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     trust_score: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    
+    # سیستم سایلنت و مخفی بودن (آپدیت شده)
     invisible_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    silent_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Profile Extensions
     bio: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     interests: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # ذخیره تعداد لایک‌ها برای پرفورمنس بالاتر دیتابیس (اضافه شده)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Activity & Status
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -55,8 +78,9 @@ class User(Base):
 
     pref_min_age: Mapped[Optional[int]] = mapped_column(Integer, default=18, nullable=True)
     pref_max_age: Mapped[Optional[int]] = mapped_column(Integer, default=99, nullable=True)
-    pref_province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # مثلاً 'همه استان‌ها' یا یک استان خاص
+    pref_province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    
 class CoinTransaction(Base):
     """
     Logs all economy activities: earning from invites, spending on matches/DMs.

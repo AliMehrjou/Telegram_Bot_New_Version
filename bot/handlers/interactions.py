@@ -446,7 +446,7 @@ async def block_user(
     call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
-    """Callback wrapper for block user logic, with rate limiting."""
+    """هندلر مسدود کردن با قابلیت تغییر داینامیک دکمه به آنبلاک"""
     target_id = _parse_int_suffix(call.data, "block_user_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -455,11 +455,11 @@ async def block_user(
     caller_id = call.from_user.id
     from matching_bot_project.bot.core.loader import redis_client
 
-    # Execute core block
+    # اجرای عملیات مسدودسازی در دیتابیس
     success, msg = await execute_user_blocking(db_session, caller_id, target_id)
 
     if success:
-        # Track manual blocks for cooldown
+        # ── اعمال محدودیت‌های کاربر (اسپم بلاک) ──
         from datetime import datetime, timedelta
         limit_key = f"user:blocks_today:{caller_id}"
 
@@ -474,11 +474,27 @@ async def block_user(
             seconds_to_midnight = int((midnight - now).total_seconds())
             pipe.expire(limit_key, seconds_to_midnight)
 
-        # Set cooldown if reached limit
         if blocks_count + 1 >= 3:
-            pipe.setex(f"user:block_cooldown:{caller_id}", 86400, "1")  # 24h cooldown
+            pipe.setex(f"user:block_cooldown:{caller_id}", 86400, "1")
 
         await pipe.execute()
+
+        # 🎯 ── تغییر داینامیک دکمه بلاک به آنبلاک ──
+        if call.message and call.message.reply_markup:
+            new_kb = []
+            for row in call.message.reply_markup.inline_keyboard:
+                new_row = []
+                for btn in row:
+                    if btn.callback_data == f"block_user_{target_id}":
+                        # تبدیل دکمه به آنبلاک در همان جای قبلی
+                        new_row.append(InlineKeyboardButton(text="🔓 آنبلاک کاربر", callback_data=f"unblock_user_{target_id}"))
+                    else:
+                        new_row.append(btn)
+                new_kb.append(new_row)
+            try:
+                await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
+            except Exception:
+                pass
 
     await call.answer(msg, show_alert=True)
 
@@ -730,6 +746,7 @@ async def unblock_user(
     call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
+    """هندلر آنبلاک کردن با قابلیت تغییر داینامیک دکمه به بلاک"""
     target_id = _parse_int_suffix(call.data, "unblock_user_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -738,7 +755,7 @@ async def unblock_user(
     caller_id = call.from_user.id
     from matching_bot_project.bot.core.loader import redis_client
 
-    # حذف ریکورد بلاک از دیتابیس
+    # حذف ریکورد مسدودیت از دیتابیس
     await db_session.execute(
         delete(BlockList).where(
             BlockList.blocker_id == caller_id,
@@ -751,13 +768,23 @@ async def unblock_user(
     await redis_client.srem(f"user:{caller_id}:blocks", str(target_id))
     await call.answer("🔓 کاربر با موفقیت از لیست سیاه شما خارج شد.", show_alert=True)
     
-    # آپدیت کردن کیبورد شیشه‌ای به حالت نرمال (نمایش دکمه بلاک)
-    action_kb = get_user_action_keyboard(target_id, is_blocked=False)
-    try:
-        await call.message.edit_reply_markup(reply_markup=action_kb)
-    except Exception:
-        pass
-
+    # 🎯 ── تغییر داینامیک دکمه آنبلاک به بلاک ──
+    if call.message and call.message.reply_markup:
+        new_kb = []
+        for row in call.message.reply_markup.inline_keyboard:
+            new_row = []
+            for btn in row:
+                if btn.callback_data == f"unblock_user_{target_id}":
+                    # بازگرداندن دکمه به حالت مسدود کردن در همان جای قبلی
+                    new_row.append(InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{target_id}"))
+                else:
+                    new_row.append(btn)
+            new_kb.append(new_row)
+        try:
+            await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
+        except Exception:
+            pass
+        
 # ── هندلر درخواست چت و دیت ───────────────────────────────────────────────
 @router.callback_query(F.data.startswith("req_chat_"))
 @router.callback_query(F.data.startswith("req_date_"))

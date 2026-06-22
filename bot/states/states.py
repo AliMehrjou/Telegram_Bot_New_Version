@@ -36,7 +36,8 @@ class ProfileEditStates(StatesGroup):
     editing_name = State()   
     updating_age = State()            
     updating_province = State()        
-    updating_city = State()            
+    updating_city = State()
+    waiting_for_voice = State()            
 
 class DiscoveryStates(StatesGroup):
     choosing_province  = State()   
@@ -44,7 +45,7 @@ class DiscoveryStates(StatesGroup):
     choosing_age_range = State()   
     showing_results    = State()   
     navigating         = State()
-    
+
 class ReportStates(StatesGroup):
     selecting_reason = State()
 

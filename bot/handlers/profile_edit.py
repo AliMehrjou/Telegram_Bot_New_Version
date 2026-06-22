@@ -3,17 +3,20 @@ import logging
 import json
 import os
 from typing import Dict, List
+from pathlib import Path
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import update # <--- این ایمپورت اضافه شد
 
 from matching_bot_project.bot.states.states import ProfileEditStates
 from matching_bot_project.database.queries.crud import update_user_profile
 from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.queries import crud
-from pathlib import Path
+from matching_bot_project.database.models.models import User
+
 logger = logging.getLogger(__name__)
 router = Router(name="profile_edit_handler")
 
@@ -105,11 +108,11 @@ async def show_edit_menu(call: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
         [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests")],
         [InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
+        [InlineKeyboardButton(text="🎵 تغییر آهنگ پروفایل (گرامافون)", callback_data="change_voice")], # <--- این دکمه اضافه شد
         [InlineKeyboardButton(text="📍 تغییر سن و محل سکونت", callback_data="change_demographics")]
     ])
     
     text_content = "⚙️ <b>کدام بخش از پروفایل خود را می‌خواهید ویرایش کنید؟</b>"
-    
     
     if call.message.photo:
         await call.message.delete()
@@ -120,7 +123,6 @@ async def show_edit_menu(call: CallbackQuery, state: FSMContext):
         except Exception:
             await call.message.answer(text_content, reply_markup=keyboard, parse_mode="HTML")
     await call.answer()
-
 
 @router.callback_query(F.data == "change_bio")
 async def start_bio_edit(call: CallbackQuery, state: FSMContext) -> None:
@@ -203,12 +205,16 @@ async def start_photo_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.waiting_for_photo, F.photo)
 async def process_new_photo(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     photo_file_id = message.photo[-1].file_id
-    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
-    if user:
-        user.profile_photo_file_id = photo_file_id
-        await db_session.commit()
-        await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
+    tg_id = message.from_user.id
+     
+    await db_session.execute(
+        update(User).where(User.tg_id == tg_id).values(profile_photo_file_id=photo_file_id)
+    )
+    await db_session.commit()
+    
+    await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
+
 
 
 @router.callback_query(F.data == "change_demographics")
@@ -217,6 +223,11 @@ async def start_demographics_edit(call: CallbackQuery, state: FSMContext) -> Non
     cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
     await call.message.answer("📍 لطفاً سن جدید خود را به صورت عدد انگلیسی ارسال کنید:", reply_markup=cancel_kb)
     await call.answer()
+
+@router.message(ProfileEditStates.waiting_for_photo, F.document)
+async def process_new_photo_document(message: Message) -> None:
+    await message.answer("⚠️ لطفاً عکس را به صورت تصویری (Photo) ارسال کنید، نه به عنوان فایل!")
+
 
 
 @router.message(ProfileEditStates.updating_age)
@@ -265,3 +276,41 @@ async def process_edit_city(message: Message, state: FSMContext, db_session: Asy
         await db_session.commit()
         await message.answer("🎉 مشخصات و محل سکونت شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
+
+@router.callback_query(F.data == "change_voice")
+async def start_voice_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.waiting_for_voice)
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    
+    text = (
+        "🎙 <b>گرامافون پروفایل شما!</b>\n\n"
+        "یک وویس کوتاه (مثلاً معرفی خودت) یا یک تیکه از آهنگ مورد علاقه‌ت رو برام بفرست تا بقیه وقتی پروفایلت رو می‌بینن بتونن گوشش بدن.\n\n"
+        "⚠️ <i>لطفاً فقط یک فایل صوتی (Voice یا Audio) ارسال کن.</i>"
+    )
+    await call.message.answer(text, reply_markup=cancel_kb, parse_mode="HTML")
+    await call.answer()
+
+@router.message(ProfileEditStates.waiting_for_voice, F.voice | F.audio)
+async def process_new_voice(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    
+    if message.voice:
+        file_id = message.voice.file_id
+    else:
+        file_id = message.audio.file_id
+
+    tg_id = message.from_user.id
+    
+    
+    await db_session.execute(
+        update(User).where(User.tg_id == tg_id).values(profile_voice_file_id=file_id)
+    )
+    await db_session.commit()
+    
+    await message.answer("✅ آهنگ/وویس پروفایل شما با موفقیت ثبت شد!", reply_markup=get_main_menu_keyboard())
+    await state.clear()
+
+@router.message(ProfileEditStates.waiting_for_voice)
+async def process_voice_invalid(message: Message):
+    if message.text == "🔙 برگشت به منوی اصلی":
+        return 
+    await message.answer("⚠️ لطفاً فقط یک فایل صوتی (Voice) یا آهنگ (Audio) ارسال کن!")

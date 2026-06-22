@@ -1,11 +1,18 @@
 import logging
+import string
+import random
 from typing import Optional, List
-from sqlalchemy import select, and_, or_, func
+from datetime import datetime
+from sqlalchemy import select, and_, or_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.mysql import insert
+
+# مطمئن شو که ایمپورت مدل‌ها درسته
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
     CoinTransaction, FriendList, BlockList, UserLike, UserReport
 )
+
 logger = logging.getLogger(__name__)
 
 
@@ -219,12 +226,8 @@ async def create_user_report(
 
 
 async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
-    """Saves a like or pass interaction into the database."""
-    from sqlalchemy.dialects.mysql import insert
-    from sqlalchemy import select, and_
-
-    # Use MySQL's ON DUPLICATE KEY UPDATE to prevent throwing an IntegrityError 
-    # which would otherwise wipe the current transaction state.
+    """Saves a like or pass interaction into the database and updates likes_count."""
+    # 1. آپدیت رکورد لایک به صورت on_duplicate_key_update
     stmt = insert(UserLike).values(
         liker_id=liker_id, 
         liked_id=liked_id, 
@@ -232,16 +235,50 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     ).on_duplicate_key_update(
         is_pass=is_pass
     )
-    
     await session.execute(stmt)
+    
+    # 2. افزایش یا کاهش کانتر لایک در جدول User (فقط اگه Pass نبود)
+    if not is_pass:
+        await session.execute(
+            update(User)
+            .where(User.tg_id == liked_id)
+            .values(likes_count=User.likes_count + 1)
+        )
+        
     await session.flush()
     
-    # Fetch and return the updated/inserted record to maintain the original return type
     fetch_stmt = select(UserLike).where(
         and_(UserLike.liker_id == liker_id, UserLike.liked_id == liked_id)
     )
     res = await session.execute(fetch_stmt)
     return res.scalar_one_or_none()
+
+async def update_silent_mode(session: AsyncSession, tg_id: int, silent_until: Optional[datetime]) -> bool:
+    """آپدیت زمان سایلنت مود برای جلوگیری از دریافت نوتیفیکیشن مچ"""
+    result = await session.execute(
+        update(User)
+        .where(User.tg_id == tg_id)
+        .values(silent_until=silent_until)
+    )
+    await session.flush()
+    return result.rowcount > 0
+
+async def ensure_public_id_exists(session: AsyncSession, tg_id: int) -> str:
+    """بررسی می‌کند که آیا کاربر public_id دارد یا نه، اگر نداشت برایش می‌سازد"""
+    user = await get_user_by_tg_id(session, tg_id)
+    if not user:
+        return ""
+        
+    if not user.public_id:
+        
+        characters = string.ascii_letters + string.digits
+        new_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
+        
+        user.public_id = new_id
+        await session.flush()
+        return new_id
+        
+    return user.public_id
 
 
 async def get_discovery_candidate(session: AsyncSession, current_user_id: int, current_user_gender: str) -> Optional[User]:
@@ -596,3 +633,25 @@ async def get_user_friends(session: AsyncSession, tg_id: int) -> List[User]:
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+async def add_xp_to_user(session: AsyncSession, tg_id: int, amount: int) -> bool:
+    """اضافه کردن XP به کاربر و بررسی لول‌آپ شدن"""
+    user = await get_user_by_tg_id(session, tg_id)
+    if not user:
+        return False
+        
+    user.xp_points += amount
+    
+
+    next_level_xp = user.level * 100 
+    
+    if user.xp_points >= next_level_xp:
+        user.level += 1
+        user.lootbox_count += 1 
+        user.xp_points -= next_level_xp 
+        
+        await session.flush()
+        return True 
+        
+    await session.flush()
+    return False
