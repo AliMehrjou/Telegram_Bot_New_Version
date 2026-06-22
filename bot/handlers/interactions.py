@@ -34,6 +34,7 @@ from matching_bot_project.bot.states.states import (
     ChatStates,
     MatchingStates,
     QuestionnaireStates,
+    VIPStates
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory
 from matching_bot_project.database.queries import crud
@@ -722,63 +723,6 @@ async def cancel_report_from_profile(call: CallbackQuery) -> None:
     except Exception:
         pass
 
-# ── هندلر ارسال پیام دایرکت ───────────────────────────────────────────────
-@router.message(ChatStates.typing_direct_message)
-async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    if message.text == "❌ انصراف و منوی اصلی":
-        await state.clear()
-        await message.answer("عملیات ارسال دایرکت لغو شد.", reply_markup=get_main_menu_keyboard())
-        return
-
-    if not message.text:
-        await message.reply("⚠️ لطفاً فقط پیام متنی ارسال کنید.")
-        return
-
-    data = await state.get_data()
-    target_id = data.get("target_direct_id")
-    caller_id = message.from_user.id
-
-    if not target_id:
-        await state.clear()
-        return
-
-    # چک کردن وضعیت بلاک (آیا گیرنده، فرستنده را بلاک کرده است؟)
-    block_check = await db_session.execute(
-        select(BlockList).where(
-            BlockList.blocker_id == target_id,
-            BlockList.blocked_id == caller_id
-        )
-    )
-    is_blocked = block_check.scalar_one_or_none() is not None
-
-    if is_blocked:
-        await message.reply("🚫 شما توسط این کاربر مسدود شده‌اید و امکان ارسال پیام را ندارید.")
-        await state.clear()
-        return
-
-    # 🎯 ساخت کیبورد شیشه‌ای کامل برای زیر پیام دایرکت گیرنده
-    target_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 پاسخ دادن", callback_data=f"req_direct_{caller_id}")],
-        [
-            InlineKeyboardButton(text="👤 مشاهده پروفایل", callback_data=f"view_profile_{caller_id}"),
-            InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{caller_id}")
-        ],
-        [InlineKeyboardButton(text="🚩 گزارش تخلف", callback_data=f"report_user_{caller_id}")]
-    ])
-
-    try:
-        # ارسال پیام به گیرنده با دکمه‌های جدید (متن قدیمی حذف شد)
-        await bot.send_message(
-            chat_id=target_id,
-            text=f"📩 <b>یک پیام دایرکت ناشناس دریافت کردید:</b>\n\n{html.escape(message.text)}",
-            parse_mode="HTML",
-            reply_markup=target_kb
-        )
-        await message.reply("✅ پیام شما با موفقیت به کاربر تحویل داده شد.", reply_markup=get_main_menu_keyboard())
-    except Exception:
-        await message.reply("⚠️ خطایی رخ داد. احتمالاً کاربر ربات را متوقف کرده است.", reply_markup=get_main_menu_keyboard())
-
-    await state.clear()
 
 # ── هندلر آنبلاک کردن ───────────────────────────────────────────────
 @router.callback_query(F.data.startswith("unblock_user_"))
