@@ -82,7 +82,13 @@ class ForceJoinMiddleware(BaseMiddleware):
         missing_sponsors = {}
         try:
             for channel_id, invite_link in sponsors.items():
-                member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+                
+                try:
+                    cid = int(channel_id)
+                except ValueError:
+                    cid = channel_id
+
+                member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
                 if member.status not in _ALLOWED_STATUSES:
                     missing_sponsors[channel_id] = invite_link
         except TelegramAPIError as e:

@@ -13,7 +13,8 @@ from __future__ import annotations
 import html
 import logging
 from datetime import datetime
-
+from typing import Optional
+from aiogram.enums import ParseMode
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -187,21 +188,92 @@ async def view_partner_profile(
         await redis_client.expire(key, 604800)
 
     # ── Send ONLY to the caller ───────────────────────────────────────────────
-    # We will send it as a message instead of an alert card to preserve formatting and HTML.
     try:
-        await bot.send_message(
-            chat_id=call.from_user.id,
-            text=profile_card,
-            parse_mode="HTML",
-            reply_markup=action_kb,         # ← NEW
-        )
-        await call.answer()
+        # 1. Send Photo if exists (with text as caption)
+        if getattr(user, 'profile_photo_file_id', None):
+            await bot.send_photo(
+                chat_id=call.from_user.id, # اگر داخل هندلر message هستی به جاش بذار message.from_user.id
+                photo=user.profile_photo_file_id,
+                caption=profile_card[:1024], # تلگرام محدودیت کاراکتر کپشن داره
+                parse_mode="HTML",
+                reply_markup=action_kb,
+            )
+        else:
+            # Fallback to normal text
+            await bot.send_message(
+                chat_id=call.from_user.id,
+                text=profile_card,
+                parse_mode="HTML",
+                reply_markup=action_kb,
+            )
+            
+        # 2. Send Voice if exists
+        profile_voice = getattr(user, 'profile_voice_file_id', None)
+        if profile_voice:
+            await bot.send_voice(
+                chat_id=call.from_user.id,
+                voice=profile_voice,
+                caption="🎵 <b>آهنگ/وویس پروفایل</b>",
+                parse_mode="HTML"
+            )
+
+        if isinstance(call, CallbackQuery):
+            await call.answer()
 
     except Exception as exc:
         logger.error(
-            "Failed to send profile message to user %s: %s", call.from_user.id, exc
+            "Failed to send profile message: %s", exc
         )
 
+# ──(Reply Keyboard) ──────────────
+@router.message(F.text.contains("پروفایل کاربر"))
+async def view_partner_profile_from_reply(
+    message: Message,
+    db_session: AsyncSession,
+) -> None:
+    """
+    وقتی کاربر دکمه 'پروفایل کاربر' را از کیبورد پایین صفحه می‌زند،
+    ربات دیت فعال او را پیدا کرده و پروفایل پارتنرش را نمایش می‌دهد.
+    """
+    caller_id = message.from_user.id
+    
+    # پیدا کردن مچ (دیت) فعالِ این کاربر
+    active_match = await crud.get_active_match(db_session, caller_id)
+    
+    if not active_match:
+        await message.answer("⚠️ شما در حال حاضر در دیت یا چت فعالی نیستید.")
+        return
+
+    # پیدا کردن آیدی طرف مقابل
+    partner_id = active_match.user_two_id if active_match.user_one_id == caller_id else active_match.user_one_id
+    
+    # گرفتن اطلاعات پارتنر از دیتابیس
+    partner = await crud.get_user_by_tg_id(db_session, partner_id)
+    if not partner:
+        await message.answer("❌ پروفایل پارتنر یافت نشد.")
+        return
+
+    # ساخت کارت پروفایل
+    profile_card = _build_profile_card(partner)
+    
+    # بررسی وضعیت مسدودی برای دکمه بلاک/آنبلاک
+    block_result = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == caller_id,
+            BlockList.blocked_id == partner_id,
+        )
+    )
+    is_blocked = block_result.scalar_one_or_none() is not None
+    action_kb  = get_user_action_keyboard(partner_id, is_blocked=is_blocked)
+
+    try:
+        await message.answer(
+            text=profile_card,
+            parse_mode="HTML",
+            reply_markup=action_kb,
+        )
+    except Exception as exc:
+        logger.error("Failed to send profile message from reply kb to user %s: %s", caller_id, exc)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – End Date Early (and Extracted Helpers)
@@ -811,7 +883,13 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         return
 
     req_type_str = "چت 💬" if is_chat else "دیت 💘"
+    
+    # 🎯 دکمه‌های جدید اضافه شدند:
     target_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ قبول", callback_data=f"accept_req_{caller_id}"),
+            InlineKeyboardButton(text="❌ رد کردن", callback_data=f"reject_req_{caller_id}")
+        ],
         [InlineKeyboardButton(text="👤 مشاهده پروفایل فرستنده", callback_data=f"view_profile_{caller_id}")],
         [InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{caller_id}")]
     ])
@@ -826,6 +904,48 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer(f"✅ درخواست {req_type_str} شما با موفقیت برای کاربر ارسال شد.", show_alert=True)
     except Exception:
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
+
+# ── هندلر قبول کردن درخواست چت/دیت ───────────────────────────────────────────────
+@router.callback_query(F.data.startswith("accept_req_"))
+async def accept_request(call: CallbackQuery, db_session: AsyncSession):
+    caller_id = _parse_int_suffix(call.data, "accept_req_")
+    if not caller_id:
+        return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+
+    target_id = call.from_user.id
+
+    await call.answer("✅ درخواست قبول شد! در حال اتصال...", show_alert=False)
+    
+    # ویرایش پیام برای شخصی که درخواست رو قبول کرده
+    try:
+        await call.message.edit_text("✅ شما درخواست این کاربر را قبول کردید. در حال اتصال... 🚀")
+    except Exception:
+        pass
+
+    # ارسال نوتیفیکیشن شاد به فرستنده
+    try:
+        await bot.send_message(caller_id, "🎉 درخواست شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
+    except Exception:
+        pass
+
+    
+    from matching_bot_project.bot.handlers.matching import handle_successful_match
+    await handle_successful_match(db_session, caller_id, target_id)
+
+
+@router.callback_query(F.data.startswith("reject_req_"))
+async def reject_request(call: CallbackQuery):
+    caller_id = _parse_int_suffix(call.data, "reject_req_")
+    if not caller_id:
+        return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+
+    await call.answer("❌ درخواست رد شد.", show_alert=False)
+    
+    try:
+        await call.message.edit_text("❌ شما این درخواست را رد کردید. (به فرستنده اطلاعی داده نشد)")
+    except Exception:
+        pass
+
 
 @router.callback_query(
     F.data.startswith("ans_"), 

@@ -28,6 +28,7 @@ from matching_bot_project.database.models.models import MatchHistory, User
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
+from matching_bot_project.bot.core.loader import redis_client
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -141,7 +142,7 @@ async def cmd_addcoins(message: Message, db_session: AsyncSession):
     if not user:
         return await message.answer("User not found.")
 
-    await process_coin_transaction(db_session, user, amount, "Admin added coins")
+    await process_coin_transaction(db_session, user, amount, "Admin added coins", ignore_multiplier=True)
     await db_session.commit()
 
     await message.answer(f"Successfully added {amount} coins to {tg_id}.")
@@ -168,7 +169,7 @@ async def cmd_removecoins(message: Message, db_session: AsyncSession):
         return await message.answer("User not found.")
 
     actual_amount = min(amount, user.coin_balance)
-    await process_coin_transaction(db_session, user, -actual_amount, "Admin removed coins")
+    await process_coin_transaction(db_session, user, -actual_amount, "Admin removed coins",ignore_multiplier=True)
     await db_session.commit()
 
     await message.answer(f"Successfully removed {actual_amount} coins from {tg_id}.")
@@ -189,7 +190,7 @@ async def cmd_addcoinsall(message: Message, db_session: AsyncSession):
     user_ids = []
 
     for user in all_users:
-        await process_coin_transaction(db_session, user, amount, "Global admin reward")
+        await process_coin_transaction(db_session, user, amount, "Global admin reward", ignore_multiplier=True)
         user_ids.append(user.tg_id)
 
     await db_session.commit()
@@ -247,6 +248,8 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
 
     await message.answer(f"User {tg_id} has been banned.")
 
+    if tg_id in settings.parsed_admin_ids:
+        return await message.answer("⚠️ شما نمی‌توانید یک ادمین را مسدود کنید!")
 @router.message(Command("unbanuser"))
 async def cmd_unbanuser(message: Message, db_session: AsyncSession):
     args = message.text.split()
@@ -346,8 +349,6 @@ async def cmd_resetprofile(message: Message, db_session: AsyncSession):
     user.gender = None
     user.age = None
     user.province = None
-    user.city = None
-    user.tags = None
     user.completed_registration = False
 
     await db_session.commit()
@@ -406,7 +407,7 @@ async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
     except (IndexError, ValueError):
         return await call.answer("⚠️ دیتای کالبک دکمه نامعتبر است!", show_alert=True)
     
-    # جلوگیری از بن کردن خودت با استفاده از آیدی ادمین کلیک‌کننده
+    
     if target_tg_id == call.from_user.id:
         return await call.answer("⚠️ شما نمی‌توانید خودتان را مسدود کنید!", show_alert=True)
 
@@ -518,24 +519,24 @@ async def cancel_admin_reply(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text("❌ ارسال پاسخ به کاربر لغو شد.")
 
-# ─── ۶. گرفتن متن پاسخ از ادمین و ارسال به کاربر ───
+
 @router.message(AdminStates.waiting_for_support_reply)
 async def admin_send_reply(message: Message, state: FSMContext):
     data = await state.get_data()
     target_tg_id = data.get("reply_target_id")
     
-    reply_text = f"👨‍💻 <b>پیام جدید از پشتیبانی ربات:</b>\n\n{message.html_text}"
-
     try:
-        await bot.send_message(chat_id=target_tg_id, text=reply_text, parse_mode="HTML")
-        await message.answer("✅ پاسخ شما با موفقیت به کاربر تحویل داده شد.")
+        
+        await bot.send_message(chat_id=target_tg_id, text="👨‍💻 <b>پیام جدید از پشتیبانی ربات:</b>", parse_mode="HTML")
+        
+        
+        await bot.copy_message(chat_id=target_tg_id, from_chat_id=message.chat.id, message_id=message.message_id)
+        
+        await message.answer("✅ پاسخ شما (مدیا/متن) با موفقیت به کاربر تحویل داده شد.")
     except TelegramForbiddenError:
-        await message.answer("⛔️ خطا: کاربر ربات را بلاک کرده است و پیام شما تحویل داده نشد.")
+        await message.answer("⛔️ خطا: کاربر ربات را بلاک کرده است.")
     except TelegramAPIError as e:
-        if "chat not found" in str(e).lower() or "user is deactivated" in str(e).lower():
-            await message.answer("💀 خطا: کاربر حساب تلگرام خود را دلیت‌اکانت کرده است.")
-        else:
-            await message.answer(f"⚠️ خطای غیرمنتظره تلگرام:\n{e}")
+        await message.answer(f"⚠️ خطای غیرمنتظره تلگرام:\n{e}")
 
     await state.clear()
 
@@ -634,14 +635,9 @@ async def cancel_broadcast(call: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_broadcast_message)
 async def process_broadcast_message(message: Message, state: FSMContext, db_session: AsyncSession):
-    """دریافت متن از ادمین و آغاز ارسال پیام در پس‌زمینه"""
-    # استخراج متن پیام با حفظ فرمت‌های HTML
-    broadcast_text = message.html_text if message.text else message.caption
+    """دریافت محتوا (متن، عکس، ویدیو و...) از ادمین و آغاز ارسال در پس‌زمینه"""
     
-    if not broadcast_text:
-         return await message.answer("⚠️ لطفاً یک پیام متنی (Text) ارسال کنید.")
-
-    # کوئری بهینه برای دریافت فقط آیدی کاربران (بدون لود کردن کل آبجکت User)
+    # کوئری برای دریافت لیست آیدی کاربران
     result = await db_session.execute(select(User.tg_id))
     user_ids = result.scalars().all()
 
@@ -649,12 +645,13 @@ async def process_broadcast_message(message: Message, state: FSMContext, db_sess
         await state.clear()
         return await message.answer("هیچ کاربری در دیتابیس یافت نشد.")
 
-    # استفاده از ورکر موجود برای ارسال همگانی در پس‌زمینه
+    # استفاده از ورکر برای کپی کردن دقیق همین پیام (هر نوعی که باشه)
     worker = BroadcastWorker(bot=bot)
     worker.start_background_broadcast(
         user_ids=list(user_ids), 
-        text=broadcast_text, 
-        delay_ms=40  # تاخیر ۴۰ میلی‌ثانیه برای جلوگیری از لیمیت شدن توسط تلگرام
+        from_chat_id=message.chat.id,    # آیدی چت ادمین
+        message_id=message.message_id,   # آیدی پیامی که ادمین فرستاده
+        delay_ms=40  
     )
 
     await state.clear()
@@ -775,39 +772,37 @@ async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: Asyn
     data = await state.get_data()
     await state.clear()
  
-    ends_at = datetime.now(timezone.utc) + timedelta(minutes=data["event_duration_minutes"])
+    duration_minutes = data["event_duration_minutes"]
+    duration_seconds = duration_minutes * 60
+    multiplier = data["event_multiplier"]
  
-    event = ActiveEvent(
-        event_id=EventStore.next_id(),
-        name=data["event_name"],
-        description=data["event_description"],
-        coin_multiplier=data["event_multiplier"],
-        ends_at=ends_at,
-    )
-    EventStore.add(event)
+    # ذخیره ضریب در ردیس با زمان انقضای خودکار (TTL)
+    await redis_client.setex("bot:active_event_multiplier", duration_seconds, str(multiplier))
  
     await call.message.edit_text(
-        f"✅ رویداد با موفقیت ایجاد شد!\n\n{event.to_text()}",
+        f"✅ رویداد با موفقیت ایجاد شد!\n\n"
+        f"🏷️ نام: <b>{data['event_name']}</b>\n"
+        f"⏱️ مدت: <b>{duration_minutes} دقیقه</b>\n"
+        f"💰 ضریب: <b>×{multiplier}</b>\n\n"
+        f"این ضریب روی تمام دریافت‌های سکه (ثبت‌نام، دعوت دوستان، مچینگ و...) اعمال خواهد شد.",
         parse_mode="HTML",
     )
  
-    # اطلاع‌رسانی به همه یوزرها
+    # اطلاع‌رسانی به همه یوزرها (کدهای قبلی خودت)
     result = await db_session.execute(select(User.tg_id))
     user_ids = result.scalars().all()
  
     notification_text = (
         f"🎉 <b>رویداد ویژه شروع شد!</b>\n\n"
-        f"<b>{event.name}</b>\n"
-        f"{event.description}\n\n"
-        f"💰 تا <b>{data['event_duration_minutes']} دقیقه</b> دیگر سکه‌هات ×{event.coin_multiplier} میشن!\n"
+        f"<b>{data['event_name']}</b>\n"
+        f"{data['event_description']}\n\n"
+        f"💰 تا <b>{duration_minutes} دقیقه</b> دیگر سکه‌هات ×{multiplier} میشن!\n"
         "همین الان وارد ربات شو 👇"
     )
  
     worker = BroadcastWorker(bot=bot)
     worker.start_background_broadcast(user_ids=list(user_ids), text=notification_text, delay_ms=40)
- 
-    logger.info("Event '%s' created, notifying %d users.", event.name, len(user_ids))
- 
+
  
 @router.callback_query(F.data == "cancel_event")
 async def event_cancel(call: CallbackQuery, state: FSMContext) -> None:
@@ -828,20 +823,13 @@ async def cmd_event_list(message: Message) -> None:
  
 @router.message(Command("event_end"))
 async def cmd_event_end(message: Message) -> None:
-    args = message.text.split()
-    if len(args) != 2:
-        return await message.answer("Usage: /event_end <event_id>")
- 
-    try:
-        event_id = int(args[1])
-    except ValueError:
-        return await message.answer("⚠️ event_id باید عدد باشد.")
- 
-    if EventStore.remove(event_id):
-        await message.answer(f"✅ رویداد {event_id} پایان یافت.")
+    # پاک کردن کلید ضریب از ردیس
+    deleted = await redis_client.delete("bot:active_event_multiplier")
+    
+    if deleted:
+        await message.answer("✅ رویداد فعال با موفقیت پایان یافت و ضریب سکه‌ها به حالت عادی (×1.0) برگشت.")
     else:
-        await message.answer(f"⚠️ رویداد {event_id} یافت نشد.")
- 
+        await message.answer("⚠️ در حال حاضر هیچ رویداد فعالی در سیستم وجود ندارد.")
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 — Personalized Broadcast
@@ -1062,7 +1050,7 @@ async def build_daily_report(db_session: AsyncSession) -> str:
     ساخت متن گزارش روزانه.
     تمام کوئری‌ها برای بازه ۲۴ ساعت گذشته هستن.
     """
-    now   = datetime.now(timezone.utc)
+    now   = datetime.utcnow()
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday = today - timedelta(days=1)
  
@@ -1111,10 +1099,11 @@ async def build_daily_report(db_session: AsyncSession) -> str:
     growth_diff  = new_users - new_users_yesterday
  
     # ── رویدادهای فعال ───────────────────────────────────────────────────── #
-    active_events = EventStore.all_active()
+    active_multiplier = await redis_client.get("bot:active_event_multiplier")
+
     events_line = (
-        "\n".join(f"  • {e.name} (×{e.coin_multiplier}، {e.remaining_minutes} دقیقه)" for e in active_events)
-        if active_events else "  هیچ رویداد فعالی نیست"
+        f"  • ضریب سکه فعال: <b>×{float(active_multiplier)}</b>" 
+        if active_multiplier else "  هیچ رویداد فعالی نیست"
     )
  
     return (
@@ -1214,7 +1203,7 @@ async def _daily_report_loop(session_factory) -> None:
 
 @router.message(Command("addsponsor"))
 async def cmd_addsponsor(message: Message):
-    """افزودن کانال اسپانسر جدید"""
+    """افزودن کانال اسپانسر جدید با اعتبارسنجی حضور ربات"""
     args = message.text.split()
     if len(args) != 3:
         return await message.answer(
@@ -1227,10 +1216,27 @@ async def cmd_addsponsor(message: Message):
     
     channel_id = args[1]
     invite_link = args[2]
+
+    try:
+        target_chat = int(channel_id)
+    except ValueError:
+        target_chat = channel_id
+
+    
+    try:
+        bot_member = await bot.get_chat_member(chat_id=target_chat, user_id=bot.id)
+        if bot_member.status not in ("administrator", "creator"):
+            return await message.answer("⚠️ <b>خطا:</b> ربات در این کانال ادمین نیست!\nابتدا ربات را در کانال ادمین کنید.")
+    except TelegramAPIError as e:
+        logger.error(f"Failed to verify sponsor channel {target_chat}: {e}")
+        return await message.answer(
+            f"⚠️ <b>خطا در دسترسی به کانال:</b>\nآیدی کانال نامعتبر است یا ربات در آن عضو نیست.\nکد خطا: <code>{e}</code>", 
+            parse_mode="HTML"
+        )
+
     
     await redis_client.hset("bot:sponsors", channel_id, invite_link)
-    await message.answer(f"✅ کانال <code>{channel_id}</code> با موفقیت به لیست اسپانسرهای اجباری اضافه شد.", parse_mode="HTML")
-
+    await message.answer(f"✅ کانال <code>{channel_id}</code> با موفقیت تایید و به لیست اسپانسرها اضافه شد.", parse_mode="HTML")
 @router.message(Command("removesponsor"))
 async def cmd_removesponsor(message: Message):
     """حذف کانال اسپانسر"""

@@ -232,7 +232,7 @@ async def handle_start_command(
             if ref_id_candidate != tg_id:
                 referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                 if referrer:
-                    referrer_id = ref_id_candidate
+                    referrer_id = referrer.id
         except Exception:
             pass
 
@@ -245,11 +245,16 @@ async def handle_start_command(
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                        referrer_id = ref_id_candidate
+                        referrer_id = referrer.id
             except Exception:
                 pass
             
             await redis_client.delete(f"pending_ref:{tg_id}")
+    
+    if user and not user.completed_registration and referrer_id:
+        user.referrer_id = referrer_id
+        await db_session.commit()
+        
     # ── Create new user record in MySQL ───────────────────────────────────────
     if not user:
         try:
@@ -343,11 +348,6 @@ async def accept_terms(call: CallbackQuery, state: FSMContext) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Onboarding FSM — Step 1: Gender
 # ═══════════════════════════════════════════════════════════════════════════════
-
-@router.callback_query(
-    OnboardingStates.waiting_for_gender,
-    F.data.in_({"gender_male", "gender_female"}),
-)
 
 @router.message(OnboardingStates.waiting_for_gender, F.text.in_({"آقا 🙋‍♂️", "خانم 🙋‍♀️"}))
 async def register_gender(message: Message, state: FSMContext) -> None:
@@ -677,9 +677,8 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
     coins_spent: int = getattr(user, "total_spent_coins", 0)
     total_earned: int = getattr(user, "total_earned_coins", coin_balance + coins_spent)
 
-    # Retrieve bot username securely from environment/settings config
-    # rather than blocking with an extra network call (bot.get_me())
-    invite_link = f"https://t.me/{settings.BOT_USERNAME}?start=ref_{tg_id}"
+    bot_name = str(settings.BOT_USERNAME).replace("@", "")
+    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
 
     wallet_text = (
         "🪙 <b>کیف پول سکه شما:</b>\n\n"
@@ -859,7 +858,7 @@ async def process_check_membership_callback(
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                        referrer_id = ref_id_candidate
+                        referrer_id = referrer.id
             except Exception:
                 pass
             await redis_client.delete(f"pending_ref:{tg_id}")

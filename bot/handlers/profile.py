@@ -144,7 +144,6 @@ async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
     action = call.data.split("_")[1]
     now = datetime.now()
     
-    # فیلد silent_until باید در دیتابیس اضافه شود
     if action == "off":
         silent_until = None
         msg = "🔔 حالت سایلنت با موفقیت غیرفعال شد."
@@ -159,13 +158,15 @@ async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
         silent_until = now + timedelta(days=3650)
         msg = "🔕 حالت همیشه سایلنت فعال شد."
     
-    # اینجا می‌توانی کوئری آپدیت زمان سایلنت را برای دیتابیس بنویسی
+    # 👈 دقیقاً اینجا: فراخوانی تابع دیتابیس و کامیت کردن تغییرات
+    await crud.update_silent_mode(db_session, call.from_user.id, silent_until)
+    await db_session.commit()
     
     await call.answer(msg, show_alert=True)
     await call.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]]
     ))
-
+    
 # ==========================================
 # سیستم حذف اکانت
 # ==========================================
@@ -180,44 +181,64 @@ async def delete_account_command(message: Message):
 
 @router.callback_query(F.data == "confirm_delete_account")
 async def confirm_delete_account_handler(call: CallbackQuery, db_session: AsyncSession):
-
-    await call.message.edit_text("✅ اکانت شما با موفقیت حذف شد. برای استفاده مجدد /start را بفرستید.")
+    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
+    if user:
+        await db_session.delete(user)
+        await db_session.commit()
+    await call.message.edit_text("✅ اکانت شما و تمامی اطلاعاتتان با موفقیت حذف شد. برای استفاده مجدد /start را بفرستید.")
 
 @router.callback_query(F.data == "close_menu")
 async def close_menu_handler(call: CallbackQuery):
     await call.message.delete()
     
-@router.message(F.text == "📍 نزدیک من")
-async def view_nearby_users(message: Message, db_session: AsyncSession):
-    """پیدا کردن کاربران جنس مخالف در همان شهر و استان"""
-    tg_id = message.from_user.id
+@router.callback_query(F.data.startswith("nearby_"))
+async def view_nearby_users_callback(call: CallbackQuery, db_session: AsyncSession):
+    """
+    دریافت کالبک از کیبورد شیشه‌ایِ نزدیک من (موجود در start.py)
+    و نمایش لیست کاربران بر اساس فیلتر انتخابی
+    """
+    tg_id = call.from_user.id
     current_user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     if not current_user or not current_user.completed_registration:
-        await message.answer("⚠️ شما هنوز ثبت‌نام نکرده‌اید! لطفاً ابتدا دکمه /start را بزنید.")
+        await call.answer("⚠️ شما هنوز ثبت‌نام نکرده‌اید! لطفاً ابتدا دکمه /start را بزنید.", show_alert=True)
         return
 
+    filter_type = call.data.replace("nearby_", "") 
+
+    await call.answer("🔍 در حال جستجوی کاربران نزدیک...")
+
+    
     nearby_users = await crud.get_nearby_candidates(db_session, current_user, limit=5)
 
     if not nearby_users:
-        await message.answer(
-            f"📍 در حال حاضر کاربر جدیدی از جنس مخالف در شهر <b>{current_user.city}</b> یافت نشد.",
-            parse_mode=ParseMode.HTML
+        empty_text = f"📍 در حال حاضر کاربر جدیدی با این مشخصات در شهر <b>{current_user.city}</b> یافت نشد."
+        
+        
+        await call.message.edit_text(
+            text=empty_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 متوجه شدم", callback_data="close_menu")]])
         )
         return
 
+    
     response_text = f"📍 <b>کاربران نزدیک شما در شهر {current_user.city}:</b>\n\n"
     for index, idx_user in enumerate(nearby_users, start=1):
         user_bio = idx_user.bio if idx_user.bio else "بدون بیوگرافی"
+        
+        display_id = getattr(idx_user, 'public_id', idx_user.tg_id)
+        
         response_text += (
             f"{index}️⃣ <b>{html.escape(idx_user.first_name)}</b> | 🎂 {idx_user.age} ساله\n"
             f"📝 <i>{html.escape(user_bio)}</i>\n"
-            f"🆔 شناسه: <code>{idx_user.tg_id}</code>\n"
+            f"🆔 شناسه: <code>{display_id}</code>\n"
             f"───────────────────\n"
         )
-    response_text += "\n🔍 می‌توانید با دکمه <b>«🔍 جستجوی کاربران»</b> به آن‌ها درخواست مچ بدهید!"
-    await message.answer(text=response_text, parse_mode=ParseMode.HTML)
-
+    
+    response_text += "\n🔍 می‌توانید با استفاده از بخش <b>«🔍 جستجوی کاربران»</b> به آن‌ها درخواست چت بدهید!"
+    
+    await call.message.edit_text(text=response_text, parse_mode=ParseMode.HTML)
 
 @router.message(F.text == "🎁 زیرمجموعه‌گیری & VIP")
 async def view_referral_panel(message: Message, db_session: AsyncSession):
@@ -329,7 +350,7 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
         profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
     else:
         
-        inline_kb.append([InlineKeyboardButton(text="💬 ارسال درخواست چت", callback_data=f"request_chat_{target_user.tg_id}")])
+        inline_kb.append([InlineKeyboardButton(text="💬 ارسال درخواست چت", callback_data=f"req_chat_{target_user.tg_id}")])
         inline_kb.append([InlineKeyboardButton(text="❤️ لایک کردن پروفایل", callback_data=f"like_user_{target_user.tg_id}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_kb)

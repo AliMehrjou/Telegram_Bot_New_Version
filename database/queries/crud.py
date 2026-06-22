@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.mysql import insert
 from matching_bot_project.database.models.models import User
 from sqlalchemy import select
-
+from matching_bot_project.bot.core.loader import redis_client
 # مطمئن شو که ایمپورت مدل‌ها درسته
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
@@ -34,21 +34,41 @@ async def process_coin_transaction(
     session: AsyncSession, 
     user: User, 
     amount: int, 
-    description: str
+    description: str,
+    ignore_multiplier: bool = False
 ) -> bool:
-    """Safely processes coin addition/deduction and logs the transaction."""
+    """Safely processes coin addition/deduction and logs the transaction.
+    Automatically applies active event multipliers for positive amounts unless ignored."""
     if amount < 0 and user.coin_balance < abs(amount):
         return False # Insufficient funds
         
-    user.coin_balance += amount
-    if amount > 0:
-        user.total_earned_coins += amount
+    final_amount = amount
+
+    # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
+    if final_amount > 0 and not ignore_multiplier:
+        try:
+            # خواندن ضریب ایونت فعال از ردیس
+            active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
+            if active_multiplier_str:
+                multiplier = float(active_multiplier_str)
+                # ضرب کردن و رند کردن به عدد صحیح
+                final_amount = int(final_amount * multiplier)
+                
+                # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
+                if multiplier > 1.0:
+                    description += f" (ضریب رویداد ×{multiplier})"
+        except Exception as e:
+            logger.error(f"Error fetching event multiplier from Redis: {e}")
+            
+    user.coin_balance += final_amount
+    if final_amount > 0:
+        user.total_earned_coins += final_amount
     else:
-        user.total_spent_coins += abs(amount)
+        user.total_spent_coins += abs(final_amount)
         
     transaction = CoinTransaction(
         user_id=user.tg_id,
-        amount=amount,
+        amount=final_amount,
         description=description
     )
     session.add(transaction)
@@ -110,11 +130,15 @@ async def complete_user_registration(
     
     # Process Referral Reward
     if user.referrer_id:
-        referrer = await get_user_by_tg_id(session, user.referrer_id)
+        # جستجوی مستقیم بر اساس آیدی دیتابیس (چون referrer_id الان به id وصل است)
+        stmt = select(User).where(User.id == user.referrer_id)
+        result = await session.execute(stmt)
+        referrer = result.scalar_one_or_none()
+        
         if referrer:
             await process_coin_transaction(session, referrer, 5, f"پاداش دعوت کاربر {tg_id}")
             logger.info(f"Referral Success: User {tg_id} completed onboarding. Referrer {referrer.tg_id} awarded 5 coins.")
-            
+
     await session.flush()
     return True
 
@@ -525,8 +549,8 @@ async def transfer_coins(
         return False, "حساب گیرنده یافت نشد."
     if sender.coin_balance < amount:
         return False, f"موجودی کافی نیست. موجودی فعلی: {sender.coin_balance} سکه."
-    await process_coin_transaction(session, sender,   -amount, f"انتقال سکه به کاربر {to_tg_id}")
-    await process_coin_transaction(session, receiver, +amount, f"دریافت سکه از کاربر {from_tg_id}")
+    await process_coin_transaction(session, sender, -amount, f"انتقال سکه به کاربر {to_tg_id}", ignore_multiplier=True)
+    await process_coin_transaction(session, receiver, +amount, f"دریافت سکه از کاربر {from_tg_id}", ignore_multiplier=True)
     return True, f"✅ {amount} سکه با موفقیت منتقل شد."
 
 
