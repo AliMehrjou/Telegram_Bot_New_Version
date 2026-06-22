@@ -6,6 +6,8 @@ from datetime import datetime
 from sqlalchemy import select, and_, or_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.mysql import insert
+from matching_bot_project.database.models.models import User
+from sqlalchemy import select
 
 # مطمئن شو که ایمپورت مدل‌ها درسته
 from matching_bot_project.database.models.models import (
@@ -18,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]:
     stmt = select(User).where(User.tg_id == tg_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+async def get_user_by_public_id(session: AsyncSession, public_id: str) -> Optional[User]:
+    
+    stmt = select(User).where(User.public_id == public_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

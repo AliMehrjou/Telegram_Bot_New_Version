@@ -7,6 +7,9 @@ import random
 from pathlib import Path
 from datetime import datetime, timedelta
 
+import string
+import random
+
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
@@ -29,54 +32,69 @@ def generate_public_id(length=6):
 @router.message(F.text == "🪬 پروفایل من")
 async def view_user_profile(message: Message, db_session: AsyncSession):
     tg_id = message.from_user.id
+    
+    # گرفتن یوزر از دیتابیس
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     if not user or not user.completed_registration:
         await message.answer("⚠️ شما هنوز ثبت نام نکرده‌اید! لطفا دکمه /start را ارسال کنید.")
         return
 
-    # تولید آیدی یکتا اگر کاربر از قبل نداشت (باید فیلد public_id رو به تیبل دیتابیست اضافه کنی)
-    public_id = getattr(user, 'public_id', None)
-    if not public_id:
-        public_id = generate_public_id()
-        # در صورت تمایل می‌توانی اینجا آیدی جدید را در دیتابیس هم ذخیره کنی
+    if not getattr(user, 'public_id', None):
+        characters = string.ascii_letters + string.digits
+        new_public_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
+        user.public_id = new_public_id
+        await db_session.commit() 
+        
+    await db_session.refresh(user) 
+    public_id = user.public_id
 
-    # دریافت مقادیر جدید از دیتابیس (باید این فیلدها را در Model خود تعریف کنی)
+    # دریافت مقادیر
     likes_count = getattr(user, 'likes_count', 0)
-    # بررسی آنلاین بودن (می‌تواند بر اساس اختلاف زمان آخرین فعالیت کاربر با زمان حال محاسبه شود)
-    is_online = getattr(user, 'is_online', True) 
+    coin_balance = getattr(user, 'coin_balance', 0)
+    is_vip = getattr(user, 'is_vip', False)
 
     gender_txt = "پسر 👱‍♂️" if user.gender == "Male" else "دختر 👩‍🦰" if user.gender == "Female" else "نامشخص ❓"
-    online_status = "هم اکنون 👀 آنلاین" if is_online else "آفلاین 💤"
+    vip_status = "👑 عضو VIP" if is_vip else "🏷️ عضو عادی"
 
     safe_first_name = html.escape(user.first_name or "کاربر")
     safe_city = html.escape((user.city or "نامشخص").replace('_', ' '))
-    safe_bio = html.escape(user.bio or "")
+    safe_bio = html.escape(user.bio or "تنظیم نشده")
+    safe_interests = html.escape(user.interests or "تنظیم نشده")
 
-    # فرمت جدید متن پروفایل کاملا مشابه عکس
     profile_card = (
-        f"🔸 نام: <b>{safe_first_name}</b>\n"
-        f"🔸 سن: <b>{user.age}</b>\n"
-        f"🔸 جنسیت: <b>{gender_txt}</b>\n"
-        f"🔸 استان: <b>{html.escape(user.province or 'نامشخص')}</b>\n"
-        f"🔸 شهر: <b>{safe_city}</b>\n\n"
+        f"╔═════════════════════════╗\n"
+        f"║ 👤 <b>پروفایل کاربری شما</b> ║\n"
+        f"╚═════════════════════════╝\n"
+        f"🆔 شناسه تلگرام: <code>{user.tg_id}</code>\n"
+        f"🆔 آیدی شما: <code>{public_id}</code> /\n"
+        f"───────────────────\n"
+        f"🔹 نام: <b>{safe_first_name}</b>\n"
+        f"🔹 جنسیت: <b>{gender_txt}</b>\n"
+        f"🔹 سن: <b>{user.age} سال</b>\n"
+        f"🔹 استان: <b>{html.escape(user.province or 'نامشخص')}</b>\n"
+        f"🔹 شهر: <b>{safe_city}</b>\n"
+        f"───────────────────\n"
         f"📝 بیوگرافی:\n<i>{safe_bio}</i>\n\n"
-        f"❤️ لایک ها: <b>{likes_count}</b>\n\n"
-        f"{online_status}\n\n"
-        f"🆔 آیدی: <code>{public_id}</code> /\n\n"
+        f"🎯 علایق:\n<i>{safe_interests}</i>\n"
+        f"───────────────────\n"
+        f"⚡ وضعیت اشتراک: <b>{vip_status}</b>\n"
+        f"🪙 موجودی سکه: <b>{coin_balance} سکه</b>\n"
+        f"❤️ تعداد لایک‌ها: <b>{likes_count}</b>\n\n"
         f"🔔 تنظیم حالت سایلنت: /silent\n"
         f"❌ حذف اکانت ربات: /delete_account"
     )
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 ویرایش مشخصات", callback_data="edit_profile_triggered")]
+        [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
+        [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_section_triggered")]
     ])
 
     if user.profile_photo_file_id:
         try:
             await message.answer_photo(
                 photo=user.profile_photo_file_id,
-                caption=profile_card[:1024], # برش متن تا محدودیت 1024 کاراکتری کپشن
+                caption=profile_card[:1024],
                 parse_mode=ParseMode.HTML,
                 reply_markup=inline_kb
             )
@@ -86,6 +104,17 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
     else:
         await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 
+
+    profile_voice = getattr(user, 'profile_voice_file_id', None)
+    if profile_voice:
+        try:
+            await message.answer_voice(
+                voice=profile_voice,
+                caption="🎵 <b>آهنگ/وویس پروفایل شما</b>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Failed to send profile voice: {e}")
 
 # ==========================================
 # سیستم سایلنت مود
@@ -243,3 +272,91 @@ async def view_help_panel(message: Message):
     except Exception as e:
         logger.error(f"Error reading help.json: {e}", exc_info=True)
         await message.answer("❌ خطایی در بازخوانی اطلاعات راهنما رخ داد.")
+
+@router.message(F.text.startswith("/user_"))
+async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
+    # جدا کردن عبارت بعد از اسلش (مثلا از /user_7mPUCm میشه user_7mPUCm)
+    command_text = message.text.strip()
+    public_id = command_text[1:] 
+
+    # جستجوی کاربر در دیتابیس
+    target_user = await crud.get_user_by_public_id(db_session, public_id)
+
+    if not target_user or not target_user.completed_registration:
+        await message.answer("⚠️ کاربری با این آیدی یافت نشد یا پروفایلش تکمیل نیست.")
+        return
+
+    # بررسی اینکه آیا کاربر آیدی خودش رو وارد کرده یا کس دیگه‌ای رو
+    is_own_profile = (message.from_user.id == target_user.tg_id)
+
+    # دریافت مقادیر
+    likes_count = getattr(target_user, 'likes_count', 0)
+    coin_balance = getattr(target_user, 'coin_balance', 0)
+    is_vip = getattr(target_user, 'is_vip', False)
+
+    gender_txt = "پسر 👱‍♂️" if target_user.gender == "Male" else "دختر 👩‍🦰" if target_user.gender == "Female" else "نامشخص ❓"
+    vip_status = "👑 عضو VIP" if is_vip else "🏷️ عضو عادی"
+
+    safe_first_name = html.escape(target_user.first_name or "کاربر")
+    safe_city = html.escape((target_user.city or "نامشخص").replace('_', ' '))
+    safe_bio = html.escape(target_user.bio or "تنظیم نشده")
+    safe_interests = html.escape(target_user.interests or "تنظیم نشده")
+
+    # فرمت پروفایل
+    profile_card = (
+        f"╔═════════════════════════╗\n"
+        f"║ 👤 <b>پروفایل کاربری</b> ║\n"
+        f"╚═════════════════════════╝\n"
+        f"🆔 شناسه: <code>{target_user.public_id}</code>\n"
+        f"───────────────────\n"
+        f"🔹 نام: <b>{safe_first_name}</b>\n"
+        f"🔹 جنسیت: <b>{gender_txt}</b>\n"
+        f"🔹 سن: <b>{target_user.age} سال</b>\n"
+        f"🔹 استان: <b>{html.escape(target_user.province or 'نامشخص')}</b>\n"
+        f"🔹 شهر: <b>{safe_city}</b>\n"
+        f"───────────────────\n"
+        f"📝 بیوگرافی:\n<i>{safe_bio}</i>\n\n"
+        f"🎯 علایق:\n<i>{safe_interests}</i>\n"
+        f"───────────────────\n"
+        f"⚡ وضعیت اشتراک: <b>{vip_status}</b>\n"
+        f"❤️ تعداد لایک‌ها: <b>{likes_count}</b>\n"
+    )
+
+    
+    inline_kb = []
+    if is_own_profile:
+        inline_kb.append([InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")])
+        profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
+    else:
+        
+        inline_kb.append([InlineKeyboardButton(text="💬 ارسال درخواست چت", callback_data=f"request_chat_{target_user.tg_id}")])
+        inline_kb.append([InlineKeyboardButton(text="❤️ لایک کردن پروفایل", callback_data=f"like_user_{target_user.tg_id}")])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=inline_kb)
+
+    
+    if target_user.profile_photo_file_id:
+        try:
+            await message.answer_photo(
+                photo=target_user.profile_photo_file_id,
+                caption=profile_card[:1024],
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup
+            )
+        except Exception as e:
+            logger.error(f"Failed to send profile photo: {e}")
+            await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
+    else:
+        await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+    
+    profile_voice = getattr(target_user, 'profile_voice_file_id', None)
+    if profile_voice:
+        try:
+            await message.answer_voice(
+                voice=profile_voice,
+                caption="🎵 <b>آهنگ/وویس پروفایل</b>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Failed to send profile voice: {e}")
