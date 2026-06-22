@@ -81,37 +81,37 @@ REQUIRED CHANGES IN OTHER FILES BEFORE THIS MODULE IS FULLY FUNCTIONAL:
 """
 
 import html
-import logging
-from typing import Optional
-
-import os
 import json
+import logging
+import os
 from pathlib import Path
+from typing import Optional
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
-    Message,
-    ReplyKeyboardRemove,
-    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
-from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.bot.core.config import settings
-from matching_bot_project.bot.core.loader import bot, redis_client  # noqa: F401
+from matching_bot_project.bot.core.loader import bot, redis_client
 from matching_bot_project.bot.keyboards.inline import (
     get_coins_menu_keyboard,
     get_gender_keyboard,
     get_matching_type_keyboard,
     get_nearby_options_keyboard,
     get_search_options_keyboard,
+    get_terms_keyboard,                    # ← NEW
 )
 from matching_bot_project.bot.keyboards.reply import (
     get_cancel_keyboard,
@@ -125,6 +125,7 @@ from matching_bot_project.bot.states.states import (
 )
 from matching_bot_project.database.queries import crud
 from matching_bot_project.services import matching_engine
+
 logger = logging.getLogger(__name__)
 router = Router(name="start_handler")
 
@@ -274,12 +275,60 @@ async def handle_start_command(
         input_field_placeholder="جنسیت خود را انتخاب کنید..."
     )
 
+# ── Begin onboarding — step 0: terms acceptance ───────────────────────
     await message.answer(
-        "🎉 <b>به ربات دیتینگ ناشناس خوش آمدید!</b>\n\n"
-        "برای شروع و دریافت <b>۵ سکه هدیه اولیه</b>، لطفاً اطلاعات هویتی خود را ثبت کنید.\n\n"
-        "ابتدا جنسیت خود را انتخاب کنید 👇",
-        reply_markup=gender_reply_kb,  # 🛠️ اصلاح اصلی: دکمه‌های معمولی جایگزین دکمه شیشه‌ای شدند
-        parse_mode="HTML"
+        f"👋 <b>{html.escape(message.from_user.first_name or 'کاربر')}</b> عزیز "
+        "به ربات دیت ناشناس خوش اومدی.\n\n"
+        "جهت استفاده از ربات باید همواره از قوانین ربات پیروی کنید و "
+        "هرگونه عدم رعایت و قانون‌شکنی مساوی با مسدود شدن اکانت شما و "
+        "ثبت تخلف قانونی خواهد شد، پس لطفاً قوانین را رعایت بفرمایید "
+        "تا به مشکل نخورید. 🙏",
+        reply_markup=get_terms_keyboard(),
+        parse_mode="HTML",
+    )
+    await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
+
+# ── Terms: show rules text ─────────────────────────────────────────────────
+@router.callback_query(
+    OnboardingStates.waiting_for_terms_acceptance,
+    F.data == "terms_show",
+)
+async def show_terms_for_acceptance(call: CallbackQuery) -> None:
+    try:
+        json_path = Path("json_files/rules.json")
+        if not json_path.exists():
+            json_path = Path("/app/json_files/rules.json")
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        rules_text = "\n".join(data.get("rules_text", []))
+    except Exception:
+        rules_text = "⚠️ خطا در بارگذاری قوانین."
+    await call.answer()
+    await call.message.answer(rules_text, parse_mode="HTML")
+
+
+# ── Terms: user accepted → proceed to gender step ─────────────────────────
+
+@router.callback_query(
+    OnboardingStates.waiting_for_terms_acceptance,
+    F.data == "terms_accept",
+)
+async def accept_terms(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer("✅ قوانین پذیرفته شد!")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    gender_reply_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="جنسیت خود را انتخاب کنید...",
+    )
+    await call.message.answer(
+        "✅ ممنون! حالا جنسیت خود را انتخاب کنید 👇",
+        reply_markup=gender_reply_kb,
+        parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_gender)
 

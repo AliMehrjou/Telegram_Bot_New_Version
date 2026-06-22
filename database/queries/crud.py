@@ -3,9 +3,9 @@ from typing import Optional, List
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.database.models.models import (
-    User, MatchHistory, Question, UserAnswer, CoinTransaction, FriendList, BlockList, UserLike, UserReport
+    User, MatchHistory, Question, UserAnswer,
+    CoinTransaction, FriendList, BlockList, UserLike, UserReport
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -433,3 +433,166 @@ async def get_nearby_candidates(session: AsyncSession, current_user: User, limit
     
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+async def get_received_like_count(session: AsyncSession, tg_id: int) -> int:
+    """Returns total number of non-pass likes received by a user."""
+    stmt = select(func.count(UserLike.id)).where(
+        UserLike.liked_id == tg_id,
+        UserLike.is_pass  == False
+    )
+    result = await session.execute(stmt)
+    return result.scalar() or 0
+
+
+async def add_friend(
+    session: AsyncSession,
+    user_id:   int,
+    friend_id: int
+) -> bool:
+    """Adds friend_id to user_id's friend list. Returns False if already exists."""
+    from sqlalchemy.exc import IntegrityError
+    try:
+        session.add(FriendList(user_id=user_id, friend_id=friend_id))
+        await session.flush()
+        return True
+    except IntegrityError:
+        await session.rollback()
+        return False
+
+
+async def transfer_coins(
+    session:     AsyncSession,
+    from_tg_id:  int,
+    to_tg_id:    int,
+    amount:      int
+) -> tuple[bool, str]:
+    """
+    Atomically transfers `amount` coins from sender to receiver.
+    Returns (success: bool, message: str).
+    """
+    if amount <= 0:
+        return False, "مقدار انتقال باید بیشتر از صفر باشد."
+    sender   = await get_user_by_tg_id(session, from_tg_id)
+    receiver = await get_user_by_tg_id(session, to_tg_id)
+    if not sender:
+        return False, "حساب فرستنده یافت نشد."
+    if not receiver:
+        return False, "حساب گیرنده یافت نشد."
+    if sender.coin_balance < amount:
+        return False, f"موجودی کافی نیست. موجودی فعلی: {sender.coin_balance} سکه."
+    await process_coin_transaction(session, sender,   -amount, f"انتقال سکه به کاربر {to_tg_id}")
+    await process_coin_transaction(session, receiver, +amount, f"دریافت سکه از کاربر {from_tg_id}")
+    return True, f"✅ {amount} سکه با موفقیت منتقل شد."
+
+
+async def find_interest_match_candidates(
+    session:              AsyncSession,
+    caller_tg_id:         int,
+    caller_interests_str: str,
+    target_gender:        Optional[str] = None,
+    limit:                int = 20
+) -> List[User]:
+    """
+    Finds users sharing at least one interest with the caller.
+    Results are sorted by number of shared interests (descending).
+    """
+    if not caller_interests_str:
+        return []
+    interests_list = [i.strip() for i in caller_interests_str.split(",") if i.strip()]
+    if not interests_list:
+        return []
+
+    blocked_by_caller  = (
+        select(BlockList.blocked_id)
+        .where(BlockList.blocker_id == caller_tg_id)
+        .scalar_subquery()
+    )
+    blockers_of_caller = (
+        select(BlockList.blocker_id)
+        .where(BlockList.blocked_id == caller_tg_id)
+        .scalar_subquery()
+    )
+
+    conditions = [
+        User.tg_id != caller_tg_id,
+        User.completed_registration == True,
+        User.is_banned              == False,
+        User.invisible_mode         == False,
+        User.tg_id.not_in(blocked_by_caller),
+        User.tg_id.not_in(blockers_of_caller),
+        or_(*[User.interests.like(f"%{i}%") for i in interests_list])
+    ]
+    if target_gender:
+        conditions.append(func.lower(User.gender) == target_gender.lower())
+
+    stmt   = select(User).where(*conditions).order_by(func.rand()).limit(limit)
+    result = await session.execute(stmt)
+    candidates = list(result.scalars().all())
+
+    caller_set = set(interests_list)
+
+    def _shared_count(u: User) -> int:
+        if not u.interests:
+            return 0
+        return len(set(u.interests.split(",")).intersection(caller_set))
+
+    candidates.sort(key=_shared_count, reverse=True)
+    return candidates
+
+
+async def get_filtered_discovery_candidates(
+    session:    AsyncSession,
+    caller_tg_id: int,
+    province:   Optional[str]       = None,
+    interests:  Optional[List[str]] = None,
+    min_age:    int = 0,
+    max_age:    int = 99,
+    limit:      int = 10
+) -> List[User]:
+    """
+    Returns users matching the discovery wizard filters:
+    optional province, optional interests (OR logic), and age range.
+    Block relationships in both directions are excluded.
+    """
+    blocked_by_caller  = (
+        select(BlockList.blocked_id)
+        .where(BlockList.blocker_id == caller_tg_id)
+        .scalar_subquery()
+    )
+    blockers_of_caller = (
+        select(BlockList.blocker_id)
+        .where(BlockList.blocked_id == caller_tg_id)
+        .scalar_subquery()
+    )
+
+    conditions = [
+        User.tg_id != caller_tg_id,
+        User.completed_registration == True,
+        User.is_banned              == False,
+        User.invisible_mode         == False,
+        User.tg_id.not_in(blocked_by_caller),
+        User.tg_id.not_in(blockers_of_caller),
+    ]
+    if province:
+        conditions.append(User.province == province)
+    if min_age > 0:
+        conditions.append(User.age >= min_age)
+    if max_age < 99:
+        conditions.append(User.age <= max_age)
+    if interests:
+        conditions.append(or_(*[User.interests.like(f"%{i}%") for i in interests]))
+
+    stmt   = select(User).where(*conditions).order_by(func.rand()).limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_user_friends(session: AsyncSession, tg_id: int) -> List[User]:
+    """Returns the list of users added to tg_id's friend list."""
+    stmt = (
+        select(User)
+        .join(FriendList, FriendList.friend_id == User.tg_id)
+        .where(FriendList.user_id == tg_id)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

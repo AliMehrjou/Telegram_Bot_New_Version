@@ -1,26 +1,62 @@
+"""
+bot/handlers/discovery.py
+──────────────────────────────────────────────────────────────────────────────
+Two independent discovery flows share this router:
+
+  1) SWIPE FLOW       entry: "💘 کشف کاربران"
+     Card-by-card like/pass discovery with daily like limits (Redis) and
+     instant mutual-match handoff to matching.handle_successful_match.
+     State: DiscoveryStates.navigating
+
+  2) FILTER WIZARD     entry: "🔍 جستجوی کاربران"
+     3-step filtered search: province → interests → age range → results.
+     States: DiscoveryStates.choosing_province / choosing_interests /
+             choosing_age_range / showing_results
+──────────────────────────────────────────────────────────────────────────────
+"""
 import logging
-import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from matching_bot_project.bot.core.loader import bot, redis_client
+from matching_bot_project.bot.handlers.interactions import _build_profile_card
+from matching_bot_project.bot.handlers.profile_edit import IRAN_DATA
+from matching_bot_project.bot.keyboards.inline import (
+    get_discovery_age_keyboard,
+    get_discovery_interests_keyboard,
+    get_user_action_keyboard,
+)
+from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.bot.states.states import DiscoveryStates
 from matching_bot_project.database.queries.crud import (
     get_user_by_tg_id,
     get_discovery_candidate,
+    get_filtered_discovery_candidates,
     save_like,
-    check_mutual_like
+    check_mutual_like,
 )
-from matching_bot_project.bot.handlers.interactions import _build_profile_card
-from matching_bot_project.bot.core.loader import redis_client, bot
 
 logger = logging.getLogger(__name__)
 router = Router(name="discovery_handler")
 
 DAILY_LIKE_LIMIT = 30
+_MAX_RESULTS      = 5
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 1) SWIPE FLOW — entry: "💘 کشف کاربران"
+# ════════════════════════════════════════════════════════════════════════════
 
 def get_discovery_keyboard(target_id: int) -> InlineKeyboardMarkup:
     """Builds the inline keyboard for a discovery candidate."""
@@ -72,7 +108,7 @@ async def send_next_candidate(message_or_call, db_session: AsyncSession, state: 
 
 @router.message(F.text == "💘 کشف کاربران")
 async def start_discovery(message: Message, state: FSMContext, db_session: AsyncSession):
-    """Triggers the discovery flow."""
+    """Triggers the swipe discovery flow."""
     tg_id = message.from_user.id
 
     limit_key = f"user:{tg_id}:likes_today"
@@ -179,3 +215,180 @@ async def handle_like(call: CallbackQuery, state: FSMContext, db_session: AsyncS
         # Not mutual yet, load next profile
         await call.answer()
         await send_next_candidate(call, db_session, state, caller_id)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 2) FILTER WIZARD — entry: "🔍 جستجوی کاربران"
+# ════════════════════════════════════════════════════════════════════════════
+
+def _province_keyboard() -> ReplyKeyboardMarkup:
+    provinces = ["🌍 همه استان‌ها"] + list(IRAN_DATA.keys())
+    buttons   = []
+    for i in range(0, len(provinces), 2):
+        row = [KeyboardButton(text=provinces[i])]
+        if i + 1 < len(provinces):
+            row.append(KeyboardButton(text=provinces[i + 1]))
+        buttons.append(row)
+    buttons.append([KeyboardButton(text="🔙 برگشت به منوی اصلی")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def _restart_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 جستجوی مجدد", callback_data="disc_restart")],
+        [InlineKeyboardButton(text="🏠 منوی اصلی",   callback_data="disc_main_menu")],
+    ])
+
+
+@router.message(F.text == "🔙 برگشت به منوی اصلی")
+async def cancel_wizard(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if current and current.startswith("DiscoveryStates:") and current != DiscoveryStates.navigating.state:
+        await state.clear()
+        await message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
+
+
+@router.message(F.text == "🔍 جستجوی کاربران")
+async def start_wizard(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DiscoveryStates.choosing_province)
+    await message.answer(
+        "🔍 <b>جستجوی کاربران — مرحله ۱/۳</b>\n\nاستان مورد نظر خود را انتخاب کنید:",
+        reply_markup=_province_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(DiscoveryStates.choosing_province)
+async def receive_province(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+
+    if text == "🔙 برگشت به منوی اصلی":
+        await state.clear()
+        await message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
+        return
+
+    if text == "🌍 همه استان‌ها":
+        province = None
+    elif text in IRAN_DATA:
+        province = text
+    else:
+        await message.answer("⚠️ لطفاً استان را از کیبورد انتخاب کنید.")
+        return
+
+    await state.update_data(province=province, selected_interests=[])
+    await state.set_state(DiscoveryStates.choosing_interests)
+    await message.answer(
+        "🔍 <b>مرحله ۲/۳ — علایق</b>\n\n"
+        "علایق مورد نظر خود را انتخاب کنید (می‌توانید چند مورد انتخاب کنید).\n"
+        "برای رد کردن این مرحله مستقیماً «تأیید و جستجو» را بزنید.",
+        reply_markup=get_discovery_interests_keyboard([]),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(DiscoveryStates.choosing_interests, F.data.startswith("disc_int_"))
+async def toggle_discovery_interest(call: CallbackQuery, state: FSMContext) -> None:
+    key  = call.data.removeprefix("disc_int_")
+    data = await state.get_data()
+    selected: list[str] = data.get("selected_interests", [])
+
+    if key in selected:
+        selected.remove(key)
+    else:
+        selected.append(key)
+
+    await state.update_data(selected_interests=selected)
+    await call.message.edit_reply_markup(
+        reply_markup=get_discovery_interests_keyboard(selected)
+    )
+    await call.answer()
+
+
+@router.callback_query(DiscoveryStates.choosing_interests, F.data == "disc_int_confirm")
+async def confirm_interests(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.set_state(DiscoveryStates.choosing_age_range)
+    await call.message.answer(
+        "🔍 <b>مرحله ۳/۳ — بازه سنی</b>\n\nبازه سنی مورد نظر را انتخاب کنید:",
+        reply_markup=get_discovery_age_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(DiscoveryStates.choosing_age_range, F.data.startswith("disc_age_"))
+async def receive_age_range(
+    call: CallbackQuery, state: FSMContext, db_session: AsyncSession
+) -> None:
+    parts = call.data.removeprefix("disc_age_").split("_")
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        await call.answer("❌ خطای پردازش.", show_alert=True)
+        return
+
+    min_age, max_age = int(parts[0]), int(parts[1])
+    await call.answer()
+
+    data       = await state.get_data()
+    province   = data.get("province")
+    interests  = data.get("selected_interests") or []
+
+    await state.set_state(DiscoveryStates.showing_results)
+
+    candidates = await get_filtered_discovery_candidates(
+        session=db_session,
+        caller_tg_id=call.from_user.id,
+        province=province,
+        interests=interests if interests else None,
+        min_age=min_age,
+        max_age=max_age,
+        limit=_MAX_RESULTS,
+    )
+
+    if not candidates:
+        await call.message.answer(
+            "😔 متأسفانه کاربری با این مشخصات یافت نشد.\n"
+            "فیلترها را تغییر دهید و دوباره جستجو کنید.",
+            reply_markup=_restart_keyboard(),
+        )
+        return
+
+    await call.message.answer(
+        f"✅ <b>{len(candidates)} کاربر یافت شد:</b>",
+        parse_mode="HTML",
+    )
+
+    for candidate in candidates:
+        profile_text = _build_profile_card(candidate)
+        action_kb    = get_user_action_keyboard(candidate.tg_id)
+        try:
+            await call.message.answer(
+                profile_text,
+                reply_markup=action_kb,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.error("Failed to send discovery candidate %s: %s", candidate.tg_id, exc)
+
+    await call.message.answer(
+        "جستجوی جدید یا بازگشت به منو:",
+        reply_markup=_restart_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "disc_restart")
+async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.clear()
+    await state.set_state(DiscoveryStates.choosing_province)
+    await call.message.answer(
+        "🔍 <b>جستجوی کاربران — مرحله ۱/۳</b>\n\nاستان مورد نظر خود را انتخاب کنید:",
+        reply_markup=_province_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "disc_main_menu")
+async def disc_main_menu(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.clear()
+    await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())

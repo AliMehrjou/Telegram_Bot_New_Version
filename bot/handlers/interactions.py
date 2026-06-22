@@ -17,25 +17,26 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matching_bot_project.bot.core.loader import bot, dp
+from matching_bot_project.bot.core.loader import bot, dp, redis_client
+from matching_bot_project.bot.keyboards.inline import (
+    get_end_chat_confirm_keyboard,
+    get_end_date_confirm_keyboard,
+    get_report_reasons_keyboard,
+    get_user_action_keyboard,
+)
 from matching_bot_project.bot.keyboards.reply import get_cancel_keyboard, get_main_menu_keyboard
 from matching_bot_project.bot.states.states import (
     ChatStates,
-    MatchingStates,      # noqa: F401 – imported per project spec; used by other modules
-    QuestionnaireStates,  # noqa: F401 – imported per project spec; used by other modules
+    MatchingStates,
+    QuestionnaireStates,
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory
 from matching_bot_project.database.queries import crud
-
-from typing import Optional
-
-logger = logging.getLogger(__name__)
-router = Router(name="interactions_handler")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -157,6 +158,15 @@ async def view_partner_profile(
         return
 
     profile_card = _build_profile_card(user)
+    # Check block status for action keyboard
+    block_result = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == call.from_user.id,
+            BlockList.blocked_id == target_id,
+        )
+    )
+    is_blocked = block_result.scalar_one_or_none() is not None
+    action_kb  = get_user_action_keyboard(target_id, is_blocked=is_blocked)
 
     # ── Log View for VIP Target ───────────────────────────────────────────────
     is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
@@ -176,9 +186,11 @@ async def view_partner_profile(
         await bot.send_message(
             chat_id=call.from_user.id,
             text=profile_card,
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=action_kb,         # ← NEW
         )
         await call.answer()
+
     except Exception as exc:
         logger.error(
             "Failed to send profile message to user %s: %s", call.from_user.id, exc
@@ -267,6 +279,89 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
             )
 
     return True
+
+# ── Reply button: "🛑 اتمام دیت" → show confirmation ─────────────────────
+@router.message(F.text == "🛑 اتمام دیت")
+async def request_end_date_confirm(
+    message: Message, db_session: AsyncSession
+) -> None:
+    active_match = await crud.get_active_match(db_session, message.from_user.id)
+    if not active_match:
+        await message.answer(
+            "⚠️ دیت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard()
+        )
+        return
+    await message.answer(
+        "⚠️ آیا مطمئن هستید که می‌خواهید دیت را پایان دهید؟\n"
+        "این عمل قابل بازگشت نیست.",
+        reply_markup=get_end_date_confirm_keyboard(),
+    )
+
+@router.callback_query(F.data == "confirm_end_date")
+async def confirm_end_date(
+    call: CallbackQuery, db_session: AsyncSession
+) -> None:
+    active_match = await crud.get_active_match(db_session, call.from_user.id)
+    if not active_match:
+        await call.answer("دیت فعالی یافت نشد.", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await execute_chat_termination(db_session, active_match.id, call.from_user.id)
+
+@router.callback_query(F.data == "cancel_end_date")
+async def cancel_end_date(call: CallbackQuery) -> None:
+    await call.answer("❌ لغو شد. دیت ادامه دارد.")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+# ── Reply button: "🛑 اتمام چت" → show confirmation ──────────────────────
+@router.message(F.text == "🛑 اتمام چت")
+async def request_end_chat_confirm(
+    message: Message, state: FSMContext
+) -> None:
+    current = await state.get_state()
+    if current != ChatStates.anonymous_chat_active.state:
+        await message.answer(
+            "⚠️ چت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard()
+        )
+        return
+    await message.answer(
+        "⚠️ آیا مطمئن هستید که می‌خواهید چت را پایان دهید؟",
+        reply_markup=get_end_chat_confirm_keyboard(),
+    )
+
+@router.callback_query(ChatStates.anonymous_chat_active, F.data == "confirm_end_chat")
+async def confirm_end_chat(
+    call: CallbackQuery, state: FSMContext, db_session: AsyncSession
+) -> None:
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    fsm_data         = await state.get_data()
+    match_history_id = fsm_data.get("match_history_id")
+    if match_history_id:
+        await execute_chat_termination(db_session, match_history_id, call.from_user.id)
+    else:
+        await state.clear()
+        await call.message.answer(
+            "به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard()
+        )
+
+@router.callback_query(F.data == "cancel_end_chat")
+async def cancel_end_chat(call: CallbackQuery) -> None:
+    await call.answer("❌ لغو شد. چت ادامه دارد.")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data.startswith("end_date_early_"))
 async def end_date_early(
@@ -467,3 +562,146 @@ async def request_direct_message(
         logger.error(
             "Failed to send DM prompt to user %s: %s", caller_id, exc
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 5 – Gamification, Social, & Moderation 
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Like with gamification ──
+@router.callback_query(F.data.startswith("like_user_"))
+async def handle_like_user(
+    call: CallbackQuery, db_session: AsyncSession
+) -> None:
+    target_id_str = call.data.removeprefix("like_user_")
+    if not target_id_str.isdigit():
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+    target_id = int(target_id_str)
+    caller_id = call.from_user.id
+    if target_id == caller_id:
+        await call.answer("نمی‌توانید خودتان را لایک کنید!", show_alert=True)
+        return
+
+    await crud.save_like(db_session, caller_id, target_id, is_pass=False)
+    await db_session.commit()
+
+    total_likes = await crud.get_received_like_count(db_session, target_id)
+
+    # Milestone reward: every 20 likes received → 5 free coins
+    if total_likes > 0 and total_likes % 20 == 0:
+        target_user = await crud.get_user_by_tg_id(db_session, target_id)
+        if target_user:
+            await crud.process_coin_transaction(
+                db_session, target_user, 5, f"جایزه دریافت {total_likes} لایک"
+            )
+            await db_session.commit()
+            try:
+                await bot.send_message(
+                    chat_id=target_id,
+                    text=(
+                        f"🎉 تبریک! پروفایل شما به <b>{total_likes} لایک</b> رسید!\n"
+                        "🎁 <b>۵ سکه</b> جایزه به حساب شما واریز شد. ✨"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    await call.answer(f"❤️ لایک شد! (مجموع: {total_likes})", show_alert=True)
+
+# ── Add friend ──
+@router.callback_query(F.data.startswith("add_friend_"))
+async def handle_add_friend(
+    call: CallbackQuery, db_session: AsyncSession
+) -> None:
+    target_id_str = call.data.removeprefix("add_friend_")
+    if not target_id_str.isdigit():
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+    success = await crud.add_friend(
+        db_session, call.from_user.id, int(target_id_str)
+    )
+    if success:
+        await db_session.commit()
+    await call.answer(
+        "✅ به لیست دوستان اضافه شد." if success else "⚠️ قبلاً اضافه شده بود.",
+        show_alert=True,
+    )
+
+# ── Report flow ──
+@router.callback_query(F.data.startswith("report_user_"))
+async def show_report_reasons(
+    call: CallbackQuery
+) -> None:
+    reported_id_str = call.data.removeprefix("report_user_")
+    if not reported_id_str.isdigit():
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+    await call.answer()
+    await call.message.answer(
+        "لطفاً دلیل گزارش را انتخاب کنید:",
+        reply_markup=get_report_reasons_keyboard(int(reported_id_str)),
+    )
+
+@router.callback_query(F.data.startswith("report_reason_"))
+async def process_report_reason(
+    call: CallbackQuery, db_session: AsyncSession
+) -> None:
+    # Format: report_reason_{reported_tg_id}_{reason_code}
+    parts = call.data.removeprefix("report_reason_").rsplit("_", 1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        await call.answer("❌ خطای پردازش.", show_alert=True)
+        return
+    reported_id = int(parts[0])
+    reason_code = parts[1]
+
+    reason_map = {
+        "inappropriate_photo": "عکس نامناسب",
+        "scammer":             "کلاهبردار",
+        "harassment":          "توهین و فحاشی",
+        "spam":                "اسپم/تبلیغات",
+        "impersonation":       "جعل هویت",
+        "suspicious_link":     "ارسال لینک مشکوک",
+        "adult_content":       "محتوای غیراخلاقی",
+        "drugs":               "فروش مواد",
+        "bot_fake":            "ربات/فیک",
+        "other":               "سایر موارد",
+    }
+    persian_reason = reason_map.get(reason_code, "نامشخص")
+    reporter_id    = call.from_user.id
+
+    await crud.create_user_report(
+        session=db_session,
+        reporter_id=reporter_id,
+        reported_id=reported_id,
+        reason=persian_reason,
+    )
+    await db_session.commit()
+
+    # Notify admins
+    from matching_bot_project.bot.core.config import settings
+    admin_text = (
+        "🚨 <b>گزارش تخلف جدید:</b>\n"
+        f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
+        f"گزارش‌شده:   <code>{reported_id}</code>\n"
+        f"دلیل: {persian_reason}"
+    )
+    for admin_id in settings.parsed_admin_ids:
+        try:
+            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+        except Exception:
+            pass
+
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("✅ گزارش شما ثبت شد. با تشکر.", show_alert=True)
+
+@router.callback_query(F.data == "report_cancel")
+async def cancel_report_from_profile(call: CallbackQuery) -> None:
+    await call.answer("❌ گزارش لغو شد.")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass

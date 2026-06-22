@@ -33,7 +33,7 @@ and must be extended:
 
 import re
 import logging
- 
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.enums import ContentType
@@ -41,14 +41,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
- 
+
 from matching_bot_project.bot.core.loader import bot, dp, redis_client
 from matching_bot_project.bot.states.states import ChatStates
 from matching_bot_project.bot.keyboards.inline import get_active_chat_controls
-from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
+from matching_bot_project.bot.keyboards.reply import (
+    get_main_menu_keyboard,
+    get_chat_phase_keyboard,           # ← NEW
+)
 from matching_bot_project.database.models.models import MatchHistory
 from matching_bot_project.database.queries import crud
- 
+
+
 logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")
 
@@ -333,6 +337,8 @@ async def register_chat_consent(
                 match_history_id=match_history.id,
                 partner_id=peer_id,
             )
+
+
             try:
                 partner_for_uid = match_history.user_one_id if uid == match_history.user_two_id else match_history.user_two_id
                 
@@ -342,6 +348,17 @@ async def register_chat_consent(
                     reply_markup=get_active_chat_controls(partner_for_uid),
                     parse_mode="Markdown",
                 )
+                
+                # Send chat-phase reply keyboard
+                try:
+                    await bot.send_message(
+                        chat_id=uid,
+                        text="کیبورد چت ناشناس شما آماده است 👇",
+                        reply_markup=get_chat_phase_keyboard(),
+                    )
+                except Exception:
+                    pass
+
             except Exception as exc:
                 logger.error(
                     "Failed to deliver chat-activation message to user %d: %s",
@@ -401,14 +418,13 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
         filtered_text, was_filtered = apply_security_filters(message.text)
 
         if was_filtered:
+            # Silent block: notify ONLY the sender, partner receives nothing
             await message.reply(
-                "⚠️ پیام شما حاوی اطلاعات شخصی بود. "
-                "موارد ممنوع حذف شده و پیام ارسال گردید."
+                "⛔️ پیام شما حاوی لینک یا آیدی تلگرام بود و ارسال نشد."
             )
+            return
 
-        # Truncate to ensure the final payload (including "💬: ") stays within Telegram's 4096 limit
         filtered_text = filtered_text[:4090]
-
         try:
             await bot.send_message(
                 chat_id=partner_id,
@@ -424,14 +440,9 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
         except Exception as exc:
             logger.error(
                 "Failed to relay text from user %d to partner %d: %s",
-                tg_id,
-                partner_id,
-                exc,
+                tg_id, partner_id, exc,
             )
-            await message.reply(
-                "⚠️ پیام به پارتنر تحویل داده نشد. "
-                "احتمالاً ربات را بلاک کرده است."
-            )
+            await message.reply("⚠️ پیام به پارتنر تحویل داده نشد.")
         return
     
     # ── Media messages (photo, video, audio, document, sticker, voice, …) ── #
@@ -472,7 +483,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             "⚠️ ارسال این فایل پشتیبانی نمی‌شود "
             "یا پارتنر ربات را بلاک کرده است."
         )
-
+        
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler 3 – Voluntary chat termination
 # ─────────────────────────────────────────────────────────────────────────────

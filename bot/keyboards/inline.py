@@ -89,3 +89,110 @@ def get_vip_age_filter_keyboard(match_type: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="[۳۰-۴۰]", callback_data=f"vip_age_filter_30_40_{match_type}")],
         [InlineKeyboardButton(text="[هر سنی]", callback_data=f"vip_age_filter_0_99_{match_type}")]
     ])
+
+# ── Onboarding: terms acceptance ───────────────────────────────────────────
+def get_terms_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📜 نمایش قوانین",    callback_data="terms_show")],
+        [InlineKeyboardButton(text="✅ پذیرفتن قوانین",  callback_data="terms_accept")]
+    ])
+
+# ── Date termination double-confirm ────────────────────────────────────────
+def get_end_date_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ بله، دیت را پایان می‌دهم", callback_data="confirm_end_date")],
+        [InlineKeyboardButton(text="❌ لغو و بازگشت",              callback_data="cancel_end_date")]
+    ])
+
+# ── Chat termination double-confirm ────────────────────────────────────────
+def get_end_chat_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ بله، چت را پایان می‌دهم", callback_data="confirm_end_chat")],
+        [InlineKeyboardButton(text="❌ لغو و بازگشت",             callback_data="cancel_end_chat")]
+    ])
+
+# ── Other-user profile action keyboard ─────────────────────────────────────
+def get_user_action_keyboard(
+    target_tg_id: int,
+    is_blocked: bool = False
+) -> InlineKeyboardMarkup:
+    block_text = "🔓 آنبلاک کاربر" if is_blocked else "🚫 بلاک کاربر"
+    block_cb   = f"unblock_user_{target_tg_id}" if is_blocked else f"block_user_{target_tg_id}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💘 درخواست دیت",      callback_data=f"req_date_{target_tg_id}"),
+            InlineKeyboardButton(text="💬 درخواست چت",       callback_data=f"req_chat_{target_tg_id}")
+        ],
+        [
+            InlineKeyboardButton(text="✉️ ارسال دایرکت",     callback_data=f"req_direct_{target_tg_id}"),
+            InlineKeyboardButton(text="🪙 انتقال سکه",       callback_data=f"transfer_coin_{target_tg_id}")
+        ],
+        [
+            InlineKeyboardButton(text="👥 افزودن به دوستان", callback_data=f"add_friend_{target_tg_id}"),
+            InlineKeyboardButton(text="❤️ لایک",              callback_data=f"like_user_{target_tg_id}")
+        ],
+        [InlineKeyboardButton(text=block_text, callback_data=block_cb)],
+        [InlineKeyboardButton(text="🚩 گزارش تخلف",          callback_data=f"report_user_{target_tg_id}")]
+    ])
+
+# ── Report reasons (10 preset options, no text input) ──────────────────────
+def get_report_reasons_keyboard(reported_tg_id: int) -> InlineKeyboardMarkup:
+    reasons = [
+        ("🔞 عکس نامناسب",       "inappropriate_photo"),
+        ("💸 کلاهبردار",         "scammer"),
+        ("🤬 توهین و فحاشی",    "harassment"),
+        ("📢 اسپم/تبلیغات",     "spam"),
+        ("👤 جعل هویت",          "impersonation"),
+        ("🔗 ارسال لینک مشکوک",  "suspicious_link"),
+        ("🔞 محتوای غیراخلاقی",  "adult_content"),
+        ("💊 فروش مواد",         "drugs"),
+        ("🤖 ربات/فیک",          "bot_fake"),
+        ("⚠️ سایر موارد",        "other"),
+    ]
+    keyboard = [
+        [InlineKeyboardButton(
+            text=label,
+            callback_data=f"report_reason_{reported_tg_id}_{code}"
+        )]
+        for label, code in reasons
+    ]
+    keyboard.append(
+        [InlineKeyboardButton(text="❌ انصراف", callback_data="report_cancel")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# ── Discovery: age range selection ─────────────────────────────────────────
+def get_discovery_age_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="۱۸ تا ۲۵ سال",      callback_data="disc_age_18_25")],
+        [InlineKeyboardButton(text="۲۵ تا ۳۰ سال",      callback_data="disc_age_25_30")],
+        [InlineKeyboardButton(text="۳۰ تا ۴۰ سال",      callback_data="disc_age_30_40")],
+        [InlineKeyboardButton(text="۴۰ تا ۵۰ سال",      callback_data="disc_age_40_50")],
+        [InlineKeyboardButton(text="بدون محدودیت سنی",  callback_data="disc_age_0_99")]
+    ])
+
+# ── Discovery: interests multi-select ──────────────────────────────────────
+def get_discovery_interests_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
+    interests = {
+        "gaming":  "🎮 گیمینگ",  "music":   "🎵 موزیک",
+        "travel":  "✈️ سفر",     "movies":  "🎬 فیلم",
+        "sports":  "⚽️ ورزش",   "reading": "📚 مطالعه",
+        "cooking": "🍳 آشپزی",   "art":     "🎨 هنر",
+        "tech":    "💻 تکنولوژی","nature":  "🌿 طبیعت",
+    }
+    keyboard = []
+    keys = list(interests.keys())
+    for i in range(0, len(keys), 2):
+        row = []
+        for j in range(2):
+            if i + j < len(keys):
+                k     = keys[i + j]
+                label = interests[k] + (" ✅" if k in selected else "")
+                row.append(InlineKeyboardButton(
+                    text=label, callback_data=f"disc_int_{k}"
+                ))
+        keyboard.append(row)
+    keyboard.append(
+        [InlineKeyboardButton(text="✅ تأیید و جستجو", callback_data="disc_int_confirm")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)

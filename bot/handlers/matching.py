@@ -31,6 +31,7 @@ from matching_bot_project.bot.keyboards.inline import (
 )
 from matching_bot_project.bot.keyboards.reply import (
     get_cancel_keyboard,
+    get_date_phase_keyboard,          # ← NEW
     get_main_menu_keyboard,
 )
 from matching_bot_project.bot.states.states import MatchingStates, QuestionnaireStates, VIPStates
@@ -608,6 +609,8 @@ async def handle_successful_match(
         (user_two_id, user_one_id),
     ]
 
+# WHERE: Inside `handle_successful_match()`, down in Steps 3 & 4 (the user_pairs for-loop)
+
     delivery_failed_for = None
     for target_id, partner_id in user_pairs:
         try:
@@ -616,6 +619,17 @@ async def handle_successful_match(
                 text=_MATCH_FOUND_TEXT,
                 reply_markup=get_match_found_keyboard(partner_id, match_history.id),
             )
+            
+            # Send date-phase reply keyboard
+            try:
+                await bot.send_message(
+                    chat_id=target_id,
+                    text="کیبورد دیت شما آماده است 👇",
+                    reply_markup=get_date_phase_keyboard(),
+                )
+            except Exception:
+                pass
+
         except Exception as exc:
             logger.error(
                 "Could not deliver match notification to user %s: %s", target_id, exc

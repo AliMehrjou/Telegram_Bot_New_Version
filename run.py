@@ -12,16 +12,10 @@ from matching_bot_project.bot.middlewares.anti_spam import ThrottlingMiddleware
 from matching_bot_project.bot.handlers import (
     start, profile, profile_edit, matching, 
     questionnaire, anonymous_chat, explore, 
-    interactions, admin, discovery
+    interactions, admin, discovery, transfer
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+
 logger = logging.getLogger("launcher")
 
 
@@ -52,6 +46,7 @@ def register_bot_middlewares_and_routers():
     dp.include_router(anonymous_chat.router)
     dp.include_router(admin.router)
     dp.include_router(discovery.router)
+    dp.include_router(transfer.router)
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 

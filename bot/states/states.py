@@ -1,10 +1,11 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class OnboardingStates(StatesGroup):
-    waiting_for_gender = State()
-    waiting_for_age = State()
-    waiting_for_province = State()  # جدید
-    waiting_for_city = State()
+    waiting_for_terms_acceptance = State()
+    waiting_for_gender   = State()
+    waiting_for_age      = State()
+    waiting_for_province = State()
+    waiting_for_city     = State()
 
 class MatchingStates(StatesGroup):
     waiting_in_queue = State()
@@ -32,12 +33,16 @@ class ProfileEditStates(StatesGroup):
     editing_bio = State()
     selecting_interests = State()
     waiting_for_photo = State()        
+    editing_name = State()   
     updating_age = State()            
     updating_province = State()        
     updating_city = State()            
 
 class DiscoveryStates(StatesGroup):
-    navigating = State()
+    choosing_province  = State()   
+    choosing_interests = State()   
+    choosing_age_range = State()   
+    showing_results    = State()   
 
 class ReportStates(StatesGroup):
     selecting_reason = State()
@@ -57,4 +62,8 @@ class PBroadcastStates(StatesGroup):
     waiting_for_filter  = State()
     waiting_for_message = State()
     confirming          = State()
+
+class CoinTransferStates(StatesGroup):
+    waiting_for_amount = State()
+    confirming         = State()
  
