@@ -855,3 +855,109 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer(f"✅ درخواست {req_type_str} شما با موفقیت برای کاربر ارسال شد.", show_alert=True)
     except Exception:
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
+
+@router.callback_query(
+    F.data.startswith("ans_"), 
+    ~StateFilter(QuestionnaireStates.answering_questions, QuestionnaireStates.waiting_for_partner_answer)
+)
+async def stale_questionnaire_button(call: CallbackQuery) -> None:
+    """
+    هنگامی که دیت تمام شده و کاربر روی گزینه‌های سوالات (A, B, C, D) کلیک می‌کند.
+    علامت ~ (مد) یعنی: اگر کاربر در این وضعیت‌ها "نبود" این تابع اجرا شود.
+    """
+    await call.answer("⚠️ این دیت پایان یافته است و پاسخ شما ثبت نمی‌شود.", show_alert=True)
+    try:
+        
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.callback_query(
+    F.data.in_({"approve_chat_yes", "approve_chat_no"}), 
+    ~StateFilter(ChatStates.waiting_for_approval)
+)
+async def stale_approval_button(call: CallbackQuery) -> None:
+    """
+    هنگامی که درخواست چت در پایان پرسشنامه منقضی شده یا دیت پایان یافته است.
+    """
+    await call.answer("⚠️ این درخواست منقضی شده یا دیت پایان یافته است.", show_alert=True)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.callback_query(
+    F.data.startswith("vip_age_filter_"),
+    ~StateFilter(VIPStates.waiting_for_age_filter)
+)
+async def stale_vip_button(call: CallbackQuery) -> None:
+    """
+    هنگامی که کاربر روی فیلتر سنی VIP قدیمی کلیک می‌کند.
+    """
+    await call.answer("⚠️ این منو منقضی شده است. لطفاً مجدداً از منوی اصلی اقدام کنید.", show_alert=True)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+@router.message(ChatStates.typing_direct_message)
+async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    """
+    دریافت پیام متنی دایرکت از فرستنده و ارسال آن به همراه کیبورد شیشه‌ای به گیرنده.
+    """
+    if message.text == "❌ انصراف و منوی اصلی":
+        await state.clear()
+        await message.answer("عملیات ارسال دایرکت لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
+
+    if not message.text:
+        await message.reply("⚠️ لطفاً فقط پیام متنی ارسال کنید.")
+        return
+
+    data = await state.get_data()
+    target_id = data.get("target_direct_id")
+    caller_id = message.from_user.id
+
+    if not target_id:
+        await state.clear()
+        return
+
+    # ── بررسی وضعیت بلاک (آیا گیرنده، فرستنده را بلاک کرده است؟) ──
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    is_blocked = block_check.scalar_one_or_none() is not None
+
+    if is_blocked:
+        await message.reply("🚫 شما توسط این کاربر مسدود شده‌اید و امکان ارسال پیام را ندارید.")
+        await state.clear()
+        return
+
+    # 🎯 ساخت کیبورد شیشه‌ای دایرکت با چیدمان استاندارد و زیبا
+    # ردیف اول: پاسخ (تمام‌عرض) | ردیف دوم: بلاک و گزارش (نصف-نصف)
+    target_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 پاسخ دادن", callback_data=f"req_direct_{caller_id}")],
+        [
+            InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{caller_id}"),
+            InlineKeyboardButton(text="🚩 گزارش تخلف", callback_data=f"report_user_{caller_id}")
+        ]
+    ])
+
+    try:
+        # ارسال پیام به گیرنده با دکمه‌های جدید (متن زشت قدیمی به طور کامل حذف شد)
+        await bot.send_message(
+            chat_id=target_id,
+            text=f"📩 <b>یک پیام دایرکت ناشناس دریافت کردید:</b>\n\n{html.escape(message.text)}",
+            parse_mode="HTML",
+            reply_markup=target_kb
+        )
+        await message.reply("✅ پیام شما با موفقیت به کاربر تحویل داده شد.", reply_markup=get_main_menu_keyboard())
+    except Exception:
+        await message.reply("⚠️ خطایی رخ داد. احتمالاً کاربر ربات را متوقف کرده است.", reply_markup=get_main_menu_keyboard())
+
+    await state.clear()
