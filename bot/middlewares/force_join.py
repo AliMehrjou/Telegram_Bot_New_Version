@@ -12,8 +12,8 @@ _ALLOWED_STATUSES = {"creator", "administrator", "member"}
 
 class ForceJoinMiddleware(BaseMiddleware):
     """
-    Enforces subscription to mandatory Telegram channels (dynamic sponsors + default).
-    Caches successful checks in Redis (10 minutes TTL) to reduce Telegram API calls.
+    Enforces subscription to mandatory Telegram channels.
+    Caches successful checks in Redis to reduce Telegram API calls.
     """
     async def __call__(
         self,
@@ -26,30 +26,28 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         user_id = event.from_user.id
 
-        # 1. Admin bypass check first (zero external calls)
+        # ── Capture Referral ID before blocking the user ────────────
+        if isinstance(event, Message) and event.text and event.text.startswith("/start ref_"):
+            try:
+                ref_id = event.text.split("_", 1)[1]
+                await redis_client.setex(f"pending_ref:{user_id}", 3600, ref_id)
+            except IndexError:
+                pass
+        # ─────────────────────────────────────────────────────────────────
+
+        # 1. Admin bypass check first
         if user_id in settings.parsed_admin_ids:
             return await handler(event, data)
 
-        # 1.5. Bypass for users in an active match / chat
+        # 2. Bypass for users in an active match / chat
         try:
             user_state = await redis_client.hget(f"user:state:{user_id}", "status")
-            # تبدیل به string برای اطمینان در ردیس
             if user_state in (b"matched", b"chatting", "matched", "chatting"):
                 return await handler(event, data)
         except Exception as e:
-            logger.warning("Redis HGET failed in ForceJoinMiddleware bypass check for user %s: %s", user_id, e)
+            pass
 
-        cache_key = f"user:force_join_cache:{user_id}"
-
-        # 2. Safely check Redis cache
-        try:
-            cached_joined = await redis_client.get(cache_key)
-            if cached_joined in ("1", b"1"):
-                return await handler(event, data)
-        except Exception as e:
-            logger.warning("Redis GET failed in ForceJoinMiddleware for user %s: %s", user_id, e)
-
-        # 3. Fetch dynamic sponsors from Redis
+        # 3. Fetch dynamic sponsors from Redis FIRST
         sponsors = {}
         try:
             dynamic_sponsors = await redis_client.hgetall("bot:sponsors")
@@ -59,17 +57,28 @@ class ForceJoinMiddleware(BaseMiddleware):
         except Exception as e:
             logger.warning("Redis HGETALL sponsors failed: %s", e)
 
-        # Merge with default channel from settings (Backward Compatibility)
         default_channel = str(getattr(settings, "REQUIRED_CHANNEL_ID", ""))
         default_link = getattr(settings, "CHANNEL_INVITE_LINK", "")
         if default_channel and default_channel not in sponsors:
             sponsors[default_channel] = default_link
 
-        # If absolutely no sponsors are defined, skip middleware
         if not sponsors:
             return await handler(event, data)
 
-        # 4. Check Telegram API for each required channel
+        # 4. Generate a unique signature for the current sponsor list
+        # با این کار اگر کانال جدیدی اضافه شود، کش همه کاربران فوراً باطل می‌شود
+        sponsors_signature = "_".join(sorted(sponsors.keys()))
+        cache_key = f"user:force_join:{user_id}:{sponsors_signature}"
+
+        # 5. Safely check Redis cache
+        try:
+            cached_joined = await redis_client.get(cache_key)
+            if cached_joined in ("1", b"1"):
+                return await handler(event, data)
+        except Exception as e:
+            logger.warning("Redis GET failed for user %s: %s", user_id, e)
+
+        # 6. Check Telegram API for each required channel
         missing_sponsors = {}
         try:
             for channel_id, invite_link in sponsors.items():
@@ -77,9 +86,8 @@ class ForceJoinMiddleware(BaseMiddleware):
                 if member.status not in _ALLOWED_STATUSES:
                     missing_sponsors[channel_id] = invite_link
         except TelegramAPIError as e:
-            logger.error("ForceJoin membership lookup failed for user %s: %s", user_id, e)
-
-            error_msg = "⚠️ در حال حاضر بررسی وضعیت عضویت امکان‌پذیر نیست. لطفاً چند دقیقه دیگر مجدداً تلاش کنید."
+            logger.error("ForceJoin lookup failed for %s: %s", user_id, e)
+            error_msg = "⚠️ در حال حاضر بررسی وضعیت عضویت امکان‌پذیر نیست. لطفاً چند دقیقه دیگر تلاش کنید."
             if isinstance(event, Message):
                 await event.answer(text=error_msg)
             elif isinstance(event, CallbackQuery):
@@ -87,21 +95,19 @@ class ForceJoinMiddleware(BaseMiddleware):
                     await event.message.answer(text=error_msg)
                 else:
                     await bot.send_message(chat_id=user_id, text=error_msg)
-                await event.answer("خطا در بررسی عضویت", show_alert=True)
-
+                await event.answer("خطا در بررسی", show_alert=True)
             return None
 
-        # 5. If member of ALL channels, cache it and proceed
+        # 7. If member of ALL channels, cache it and proceed (reduced TTL to 60s)
         if not missing_sponsors:
             try:
-                await redis_client.set(cache_key, "1", ex=600)  # 10 minutes cache
+                await redis_client.set(cache_key, "1", ex=60)  # زمان کش به ۱ دقیقه کاهش یافت
             except Exception as e:
-                logger.warning("Redis SET failed in ForceJoinMiddleware for user %s: %s", user_id, e)
+                pass
             return await handler(event, data)
 
-        # 6. Handle Unauthorized User (Generate dynamic inline keyboard)
+        # 8. Handle Unauthorized User
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-        
         count = 1
         for channel_id, link in missing_sponsors.items():
             btn_text = f"📢 عضویت در کانال {count}" if len(missing_sponsors) > 1 else "📢 عضویت در کانال"
@@ -117,7 +123,6 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         if isinstance(event, Message):
             await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-
         elif isinstance(event, CallbackQuery):
             if event.message:
                 try:
@@ -126,7 +131,6 @@ class ForceJoinMiddleware(BaseMiddleware):
                     pass
             else:
                 await bot.send_message(chat_id=user_id, text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-
             await event.answer("نیاز به تایید عضویت!", show_alert=True)
 
         return None

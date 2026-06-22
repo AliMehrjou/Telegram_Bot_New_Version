@@ -43,7 +43,8 @@ class DiscoveryStates(StatesGroup):
     choosing_interests = State()   
     choosing_age_range = State()   
     showing_results    = State()   
-
+    navigating         = State()
+    
 class ReportStates(StatesGroup):
     selecting_reason = State()
 

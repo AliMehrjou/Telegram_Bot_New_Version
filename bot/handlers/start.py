@@ -222,26 +222,34 @@ async def handle_start_command(
         )
         return
 
-    # ── Parse referral deep link (/start ref_<TGID>) ──────────────────────────
+# ── Parse referral deep link (/start ref_<TGID>) ──────────────────────────
     referrer_id: Optional[int] = None
+    
+    # 1. Check direct command args
     if command.args and command.args.startswith("ref_"):
         try:
             ref_id_candidate = int(command.args.split("_", 1)[1])
-            if ref_id_candidate == tg_id:
-                logger.debug("User %d tried to self-refer — ignored.", tg_id)
-            else:
+            if ref_id_candidate != tg_id:
                 referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                 if referrer:
                     referrer_id = ref_id_candidate
-                else:
-                    logger.warning(
-                        "Referral link used with unknown referrer_id=%d by user=%d",
-                        ref_id_candidate,
-                        tg_id,
-                    )
-        except (ValueError, IndexError):
-            logger.debug("Malformed referral args '%s' from user %d", command.args, tg_id)
+        except Exception:
+            pass
 
+    # 2. If no referrer in args, check Redis for pending referrals from Force Join
+    if not referrer_id:
+        pending_ref = await redis_client.get(f"pending_ref:{tg_id}")
+        if pending_ref:
+            try:
+                ref_id_candidate = int(pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref)
+                if ref_id_candidate != tg_id:
+                    referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
+                    if referrer:
+                        referrer_id = ref_id_candidate
+            except Exception:
+                pass
+            
+            await redis_client.delete(f"pending_ref:{tg_id}")
     # ── Create new user record in MySQL ───────────────────────────────────────
     if not user:
         try:
@@ -331,7 +339,7 @@ async def accept_terms(call: CallbackQuery, state: FSMContext) -> None:
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_gender)
-
+    
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Onboarding FSM — Step 1: Gender
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -670,8 +678,7 @@ async def show_user_search(message: Message, db_session: AsyncSession) -> None:
 @router.message(F.text == "👥 دوستان من")
 async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
     """
-    Fetches and renders the user's friends list.
-    Degrades gracefully if crud.get_user_friends is not yet implemented.
+    Fetches and renders the user's friends list as clickable inline buttons.
     """
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -679,32 +686,41 @@ async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
         await message.answer("⚠️ ابتدا ثبت‌نام خود را تکمیل کنید. /start")
         return
 
-    friends = []
     try:
         friends = await crud.get_user_friends(db_session, tg_id)
     except AttributeError:
-        # crud.get_user_friends not yet implemented — suppress silently.
         logger.info("crud.get_user_friends not implemented; returning empty list.")
+        friends = []
     except Exception:
         logger.exception("Error fetching friends list for user %d", tg_id)
+        friends = []
 
     if not friends:
         await message.answer(
             "👥 <b>لیست دوستان شما:</b>\n\n"
             "هنوز دوستی ندارید.\n"
-            "پس از پایان دیت‌های موفق می‌توانید کاربران را به لیست دوستان خود اضافه کنید."
+            "پس از پایان دیت‌های موفق می‌توانید کاربران را به لیست دوستان خود اضافه کنید.",
+            parse_mode="HTML"
         )
         return
 
-    lines = ["👥 <b>لیست دوستان شما:</b>\n"]
-    for index, friend in enumerate(friends, start=1):
-        safe_friend_name = html.escape(friend.first_name or "کاربر")
-        gender_label = GENDER_LABELS.get(friend.gender or "", "?")
-        lines.append(
-            f"{index}. {safe_friend_name} — {gender_label} | {friend.age} سال"
-        )
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    # ساخت دکمه شیشه‌ای مجزا برای هر دوست
+    keyboard = []
+    for friend in friends:
+        safe_friend_name = friend.first_name or "کاربر"
+        label = f"{safe_friend_name} ({friend.age} سال)"
+        # با زدن این دکمه، دقیقا همون پنلی باز میشه که عکسشو فرستادی
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"view_profile_{friend.tg_id}")])
+        
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    await message.answer("\n".join(lines))
+    await message.answer(
+        "👥 <b>لیست دوستان شما:</b>\nبرای مشاهده پروفایل و مدیریت هر شخص، روی نام او کلیک کنید 👇",
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -881,41 +897,66 @@ async def process_check_membership_callback(
 ) -> None:
     """هندلر دکمه شیشه‌ای بررسی عضویت مجدد که توسط میدل‌ور فورس‌جوین پاس داده می‌شود"""
     
-    # ۱. متوقف کردن آیکون لودینگ دکمه و نمایش پیام پاپ‌آپ
     await call.answer("عضویت شما تایید شد! خیلی خوش اومدی 🌹", show_alert=True)
     
-    # ۲. پاک کردن پیام حاوی دکمه‌های شیشه‌ای جوین اجباری
     try:
         await call.message.delete()
     except Exception:
-        pass # اگر پیام قبلاً پاک شده بود ربات کرش نکند
+        pass 
         
-    # ۳. بررسی وضعیت کاربر در دیتابیس برای هدایت به مسیر درست
     tg_id = call.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
     
+    # ── کاربر قبلا ثبت‌نام کرده است ──
     if user and user.completed_registration:
-        # کاربر قبلا ثبت‌نام کرده، هدایت به منوی اصلی
         await call.message.answer(
             "✅ عضویت تایید شد.\nآماده شروع دیت جدید هستید؟ 👇",
             reply_markup=get_main_menu_keyboard()
         )
-    else:
-        # کاربر جدید است، هدایت به مرحله اول ثبت‌نام (انتخاب جنسیت)
-        gender_reply_kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-            input_field_placeholder="جنسیت خود را انتخاب کنید..."
-        )
-        
-        await call.message.answer(
-            "🎉 <b>به ربات دیتینگ ناشناس خوش آمدید!</b>\n\n"
-            "برای شروع و دریافت <b>۵ سکه هدیه اولیه</b>، لطفاً اطلاعات هویتی خود را ثبت کنید.\n\n"
-            "ابتدا جنسیت خود را انتخاب کنید 👇",
-            reply_markup=gender_reply_kb,
-            parse_mode="HTML"
-        )
-        await state.set_state(OnboardingStates.waiting_for_gender)
+        return
+
+    # ── کاربر جدید است (به خاطر میدل‌ور، دیتابیس او ساخته نشده است) ──
+    if not user:
+        # بررسی رفرال از ردیس
+        referrer_id: Optional[int] = None
+        pending_ref = await redis_client.get(f"pending_ref:{tg_id}")
+        if pending_ref:
+            try:
+                ref_id_candidate = int(pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref)
+                if ref_id_candidate != tg_id:
+                    referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
+                    if referrer:
+                        referrer_id = ref_id_candidate
+            except Exception:
+                pass
+            await redis_client.delete(f"pending_ref:{tg_id}")
+
+        # ساخت رکورد کاربر در دیتابیس
+        try:
+            user = await crud.create_user(
+                session=db_session,
+                tg_id=tg_id,
+                first_name=call.from_user.first_name or "کاربر",
+                username=call.from_user.username,
+                referrer_id=referrer_id,
+            )
+            await db_session.commit()
+        except IntegrityError:
+            await db_session.rollback()
+        except Exception as exc:
+            logger.error("Error creating user after force join: %s", exc)
+            await call.message.answer("⚠️ خطای سرور. لطفاً مجدداً /start را ارسال کنید.")
+            return
+
+    # ── هدایت کاربر جدید به مرحله تایید قوانین ──
+    await call.message.answer(
+        f"👋 <b>{html.escape(call.from_user.first_name or 'کاربر')}</b> عزیز "
+        "به ربات دیت ناشناس خوش اومدی.\n\n"
+        "جهت استفاده از ربات باید همواره از قوانین ربات پیروی کنید و "
+        "هرگونه عدم رعایت و قانون‌شکنی مساوی با مسدود شدن اکانت شما و "
+        "ثبت تخلف قانونی خواهد شد، پس لطفاً قوانین را رعایت بفرمایید "
+        "تا به مشکل نخورید. 🙏",
+        reply_markup=get_terms_keyboard(),
+        parse_mode="HTML",
+    )
+    await state.set_state(OnboardingStates.waiting_for_terms_acceptance)

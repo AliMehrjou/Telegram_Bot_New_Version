@@ -37,7 +37,12 @@ from matching_bot_project.bot.states.states import (
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory
 from matching_bot_project.database.queries import crud
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from sqlalchemy import select, delete
 
+from aiogram.filters import StateFilter
+
+router = Router(name="interactions_handler")
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -606,6 +611,17 @@ async def handle_like_user(
                 )
             except Exception:
                 pass
+    try:
+        like_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 مشاهده پروفایل لایک‌کننده", callback_data=f"view_profile_{caller_id}")]
+        ])
+        await bot.send_message(
+            chat_id=target_id,
+            text="❤️ یک نفر پروفایل شما را لایک کرد!",
+            reply_markup=like_kb
+        )
+    except Exception:
+        pass
 
     await call.answer(f"❤️ لایک شد! (مجموع: {total_likes})", show_alert=True)
 
@@ -705,3 +721,137 @@ async def cancel_report_from_profile(call: CallbackQuery) -> None:
         await call.message.delete()
     except Exception:
         pass
+
+# ── هندلر ارسال پیام دایرکت ───────────────────────────────────────────────
+@router.message(ChatStates.typing_direct_message)
+async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    if message.text == "❌ انصراف و منوی اصلی":
+        await state.clear()
+        await message.answer("عملیات ارسال دایرکت لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
+
+    if not message.text:
+        await message.reply("⚠️ لطفاً فقط پیام متنی ارسال کنید.")
+        return
+
+    data = await state.get_data()
+    target_id = data.get("target_direct_id")
+    caller_id = message.from_user.id
+
+    if not target_id:
+        await state.clear()
+        return
+
+    # چک کردن وضعیت بلاک (آیا گیرنده، فرستنده را بلاک کرده است؟)
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    is_blocked = block_check.scalar_one_or_none() is not None
+
+    if is_blocked:
+        await message.reply("🚫 شما توسط این کاربر مسدود شده‌اید و امکان ارسال پیام را ندارید.")
+        await state.clear()
+        return
+
+    # 🎯 ساخت کیبورد شیشه‌ای کامل برای زیر پیام دایرکت گیرنده
+    target_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 پاسخ دادن", callback_data=f"req_direct_{caller_id}")],
+        [
+            InlineKeyboardButton(text="👤 مشاهده پروفایل", callback_data=f"view_profile_{caller_id}"),
+            InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{caller_id}")
+        ],
+        [InlineKeyboardButton(text="🚩 گزارش تخلف", callback_data=f"report_user_{caller_id}")]
+    ])
+
+    try:
+        # ارسال پیام به گیرنده با دکمه‌های جدید (متن قدیمی حذف شد)
+        await bot.send_message(
+            chat_id=target_id,
+            text=f"📩 <b>یک پیام دایرکت ناشناس دریافت کردید:</b>\n\n{html.escape(message.text)}",
+            parse_mode="HTML",
+            reply_markup=target_kb
+        )
+        await message.reply("✅ پیام شما با موفقیت به کاربر تحویل داده شد.", reply_markup=get_main_menu_keyboard())
+    except Exception:
+        await message.reply("⚠️ خطایی رخ داد. احتمالاً کاربر ربات را متوقف کرده است.", reply_markup=get_main_menu_keyboard())
+
+    await state.clear()
+
+# ── هندلر آنبلاک کردن ───────────────────────────────────────────────
+@router.callback_query(F.data.startswith("unblock_user_"))
+async def unblock_user(
+    call: CallbackQuery,
+    db_session: AsyncSession,
+) -> None:
+    target_id = _parse_int_suffix(call.data, "unblock_user_")
+    if target_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+
+    caller_id = call.from_user.id
+    from matching_bot_project.bot.core.loader import redis_client
+
+    # حذف ریکورد بلاک از دیتابیس
+    await db_session.execute(
+        delete(BlockList).where(
+            BlockList.blocker_id == caller_id,
+            BlockList.blocked_id == target_id
+        )
+    )
+    await db_session.commit()
+    
+    # حذف از کش ردیس
+    await redis_client.srem(f"user:{caller_id}:blocks", str(target_id))
+    await call.answer("🔓 کاربر با موفقیت از لیست سیاه شما خارج شد.", show_alert=True)
+    
+    # آپدیت کردن کیبورد شیشه‌ای به حالت نرمال (نمایش دکمه بلاک)
+    action_kb = get_user_action_keyboard(target_id, is_blocked=False)
+    try:
+        await call.message.edit_reply_markup(reply_markup=action_kb)
+    except Exception:
+        pass
+
+# ── هندلر درخواست چت و دیت ───────────────────────────────────────────────
+@router.callback_query(F.data.startswith("req_chat_"))
+@router.callback_query(F.data.startswith("req_date_"))
+async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession) -> None:
+    is_chat = call.data.startswith("req_chat_")
+    prefix = "req_chat_" if is_chat else "req_date_"
+    target_id = _parse_int_suffix(call.data, prefix)
+    
+    if target_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+        
+    caller_id = call.from_user.id
+    
+    # چک کردن وضعیت بلاک
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    if block_check.scalar_one_or_none():
+        await call.answer("🚫 امکان ارسال درخواست به این کاربر وجود ندارد (شما بلاک هستید).", show_alert=True)
+        return
+
+    req_type_str = "چت 💬" if is_chat else "دیت 💘"
+    target_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 مشاهده پروفایل فرستنده", callback_data=f"view_profile_{caller_id}")],
+        [InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{caller_id}")]
+    ])
+    
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text=f"🔔 <b>درخواست جدید:</b>\nیک کاربر به شما درخواست <b>{req_type_str}</b> داده است!",
+            parse_mode="HTML",
+            reply_markup=target_kb
+        )
+        await call.answer(f"✅ درخواست {req_type_str} شما با موفقیت برای کاربر ارسال شد.", show_alert=True)
+    except Exception:
+        await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
