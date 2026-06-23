@@ -148,34 +148,47 @@ async def view_partner_profile(
     await _send_profile_card(target_chat_id=call.from_user.id, user=user, action_kb=action_kb)
     await call.answer()
 
-@router.message(F.text.contains("پروفایل کاربر"))
-async def view_partner_profile_from_reply(
-    message: Message,
+@router.callback_query(F.data.startswith("view_profile_"))
+async def view_partner_profile(
+    call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
-    caller_id = message.from_user.id
-    active_match = await crud.get_active_match(db_session, caller_id)
+    target_id = _parse_int_suffix(call.data, "view_profile_")
+    if target_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+
+    user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not user:
+        await call.answer("❌ پروفایل کاربر یافت نشد.", show_alert=True)
+        return
+
     
-    if not active_match:
-        await message.answer("⚠️ شما در حال حاضر در دیت یا چت فعالی نیستید.")
-        return
-
-    partner_id = active_match.user_two_id if active_match.user_one_id == caller_id else active_match.user_one_id
-    partner = await crud.get_user_by_tg_id(db_session, partner_id)
-    if not partner:
-        await message.answer("❌ پروفایل پارتنر یافت نشد.")
-        return
-
     block_result = await db_session.execute(
         select(BlockList).where(
-            BlockList.blocker_id == caller_id,
-            BlockList.blocked_id == partner_id,
+            BlockList.blocker_id == call.from_user.id,
+            BlockList.blocked_id == target_id,
         )
     )
     is_blocked = block_result.scalar_one_or_none() is not None
-    action_kb  = get_user_action_keyboard(partner_id, is_blocked=is_blocked)
+    
+    
+    already_friend = await crud.is_friend(db_session, call.from_user.id, target_id)
 
-    await _send_profile_card(target_chat_id=caller_id, user=partner, action_kb=action_kb)
+    
+    action_kb  = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
+
+    # ── Log View for VIP Target ──
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
+    if is_target_vip and call.from_user.id != target_id:
+        key = f"user:{target_id}:viewers"
+        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
+        await redis_client.expire(key, 604800)
+
+    await _send_profile_card(target_chat_id=call.from_user.id, user=user, action_kb=action_kb)
+    await call.answer()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – End Date Early (and Extracted Helpers)
@@ -534,10 +547,67 @@ async def handle_add_friend(call: CallbackQuery, db_session: AsyncSession) -> No
     if not target_id_str.isdigit():
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
-    success = await crud.add_friend(db_session, call.from_user.id, int(target_id_str))
+        
+    target_id = int(target_id_str)
+    success = await crud.add_friend(db_session, call.from_user.id, target_id)
+    
     if success:
         await db_session.commit()
-    await call.answer("✅ به لیست دوستان اضافه شد." if success else "⚠️ قبلاً اضافه شده بود.", show_alert=True)
+        await call.answer("✅ به لیست دوستان اضافه شد.", show_alert=True)
+        
+        # تغییر پویای دکمه به "حذف از دوستان"
+        if call.message and call.message.reply_markup:
+            new_kb = []
+            for row in call.message.reply_markup.inline_keyboard:
+                new_row = []
+                for btn in row:
+                    if btn.callback_data == f"add_friend_{target_id}":
+                        new_row.append(InlineKeyboardButton(text="➖ حذف از دوستان", callback_data=f"remove_friend_{target_id}"))
+                    else:
+                        new_row.append(btn)
+                new_kb.append(new_row)
+            try:
+                await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
+            except TelegramBadRequest:
+                pass
+            except Exception as e:
+                logger.error(f"Unexpected error editing reply markup: {e}")
+    else:
+        await call.answer("⚠️ قبلاً اضافه شده بود.", show_alert=True)
+@router.callback_query(F.data.startswith("remove_friend_"))
+async def handle_remove_friend(call: CallbackQuery, db_session: AsyncSession) -> None:
+    target_id_str = call.data.removeprefix("remove_friend_")
+    if not target_id_str.isdigit():
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+        
+    target_id = int(target_id_str)
+    success = await crud.remove_friend(db_session, call.from_user.id, target_id)
+    
+    if success:
+        await db_session.commit()
+        await call.answer("🗑 کاربر از لیست دوستان شما حذف شد.", show_alert=True)
+        
+        # تغییر پویای دکمه به "افزودن به دوستان"
+        if call.message and call.message.reply_markup:
+            new_kb = []
+            for row in call.message.reply_markup.inline_keyboard:
+                new_row = []
+                for btn in row:
+                    if btn.callback_data == f"remove_friend_{target_id}":
+                        new_row.append(InlineKeyboardButton(text="➕ افزودن به دوستان", callback_data=f"add_friend_{target_id}"))
+                    else:
+                        new_row.append(btn)
+                new_kb.append(new_row)
+            try:
+                await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
+            except TelegramBadRequest:
+                pass
+            except Exception as e:
+                logger.error(f"Unexpected error editing reply markup: {e}")
+    else:
+        await call.answer("⚠️ این کاربر در لیست دوستان شما قرار ندارد.", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("report_user_"))
 async def show_report_reasons(call: CallbackQuery) -> None:
@@ -575,17 +645,22 @@ async def process_report_reason(call: CallbackQuery, state: FSMContext) -> None:
     except TelegramBadRequest:
         pass
 
-    await call.message.answer(
-        "لطفاً پیامی که از طرف کاربر خاطی نقض قانون را نشان می‌دهد را فوروارد کنید.\n"
-        "(این مرحله اجباری است و بدون آن گزارش ثبت نمی‌شود)",
-        reply_markup=cancel_kb
-    )
-    await call.answer()
+    # شخصی‌سازی پیام بر اساس نوع گزارش (حل مشکل لاجیک اکانت فیک)
+    if reason_code == "bot_fake":
+        prompt_text = (
+            "🤖 شما این کاربر را به عنوان «ربات یا حساب فیک» گزارش کردید.\n\n"
+            "لطفاً در یک پیام کوتاه توضیح دهید که چرا فکر می‌کنید این حساب فیک است، "
+            "یا اگر اسکرین‌شاتی دارید ارسال کنید:"
+        )
+    else:
+        prompt_text = (
+            "لطفاً مدرک خود را ارائه دهید.\n"
+            "می‌توانید پیام کاربر خاطی را **فوروارد** کنید، یک **عکس/اسکرین‌شات** بفرستید، "
+            "و یا به صورت **متنی** دلیل گزارش خود را بنویسید:"
+        )
 
-@router.message(ReportStates.waiting_for_report_description, F.text)
-async def handle_report_text_description(message: Message) -> None:
-    # جلوگیری از ثبت گزارش با متن آزاد و پاک نکردن استیت
-    await message.answer("⚠️ لطفاً پیام کاربر خاطی را فوروارد کنید، نه متن آزاد.")
+    await call.message.answer(prompt_text, reply_markup=cancel_kb, parse_mode="Markdown")
+    await call.answer()
 
 # Add new helper function for submitting reports
 async def _submit_report(
@@ -594,7 +669,7 @@ async def _submit_report(
     reason_code: str,
     description: str,
     db_session: AsyncSession,
-    forwarded_message: Optional[Message] = None
+    evidence_message: Optional[Message] = None
 ) -> None:
     reason_map = {
         "inappropriate_photo": "عکس نامناسب",
@@ -605,7 +680,7 @@ async def _submit_report(
         "suspicious_link":     "ارسال لینک مشکوک",
         "adult_content":       "محتوای غیراخلاقی",
         "drugs":               "فروش مواد",
-        "bot_fake":            "ربات/فیک",
+        "bot_fake":            "ربات/حساب فیک",
         "other":               "سایر موارد",
     }
     persian_reason = reason_map.get(reason_code, "نامشخص")
@@ -619,31 +694,35 @@ async def _submit_report(
     await db_session.commit()
 
     admin_text = (
-        "🚨 New Report\n"
-        f"Reporter ID: {reporter_id}\n"
-        f"Reported ID: {reported_id}\n"
-        f"Reason: {persian_reason}\n"
-        f"Description: {description or 'ندارد'}"
+        "🚨 <b>گزارش تخلف جدید</b>\n\n"
+        f"👤 <b>شاکی:</b> <code>{reporter_id}</code>\n"
+        f"🎯 <b>متخلف:</b> <code>{reported_id}</code>\n"
+        f"⚠️ <b>علت:</b> {persian_reason}\n"
+        f"📝 <b>توضیحات/متن:</b> {html.escape(description) if description else 'ندارد'}"
     )
     
+    # دکمه بن مستقیم به کیبورد ادمین اضافه شد تا مدیریت تسریع بشه
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 پاسخ به گزارش‌دهنده", callback_data=f"admin_reply_{reporter_id}")]
+        [InlineKeyboardButton(text="💬 پاسخ به شاکی", callback_data=f"admin_reply_{reporter_id}")],
+        [InlineKeyboardButton(text="⛔️ بن کردن متخلف", callback_data=f"admin_ban_{reported_id}")]
     ])
 
     for admin_id in settings.parsed_admin_ids:
         try:
-            if forwarded_message:
-                await bot.forward_message(
+            if evidence_message:
+                # استفاده از copy_message به جای forward برای دور زدن محدودیت‌های پرایوسی فوروارد
+                await bot.copy_message(
                     chat_id=admin_id,
-                    from_chat_id=forwarded_message.chat.id,
-                    message_id=forwarded_message.message_id
+                    from_chat_id=evidence_message.chat.id,
+                    message_id=evidence_message.message_id,
+                    caption=" مدرک ضمیمه شده گزارش 👆"
                 )
-            await bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=admin_kb)
+            await bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=admin_kb, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Failed to send report notification to admin {admin_id}: {e}")
 
-@router.message(ReportStates.waiting_for_report_description, F.forward_date)
-async def handle_report_forwarded_evidence(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+@router.message(ReportStates.waiting_for_report_description, F.content_type.in_({'text', 'photo', 'document'}))
+async def handle_report_evidence(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     data = await state.get_data()
     reported_id = data.get("reported_id")
     reason_code = data.get("reason_code")
@@ -652,23 +731,31 @@ async def handle_report_forwarded_evidence(message: Message, state: FSMContext, 
         await state.clear()
         return
 
-    await _submit_report(message.from_user.id, reported_id, reason_code, "", db_session, forwarded_message=message)
-    await state.clear()
-    await message.answer("✅ گزارش شما همراه با مدرک ثبت شد. با تشکر.")
+    description = ""
+    evidence_msg = None
 
-@router.message(ReportStates.waiting_for_report_description, F.text)
-async def handle_report_text_description(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    data = await state.get_data()
-    reported_id = data.get("reported_id")
-    reason_code = data.get("reason_code")
+    # بررسی نوع پیام فرستاده شده (متن خالی، یا پیام حاوی مدیا/فوروارد)
+    if message.text and not message.forward_date:
+        description = message.text
+    else:
+        evidence_msg = message
+        if message.caption:
+            description = message.caption
+
+    await _submit_report(
+        reporter_id=message.from_user.id, 
+        reported_id=reported_id, 
+        reason_code=reason_code, 
+        description=description, 
+        db_session=db_session,
+        evidence_message=evidence_msg
+    )
     
-    if not reported_id or not reason_code:
-        await state.clear()
-        return
-
-    await _submit_report(message.from_user.id, reported_id, reason_code, message.text, db_session)
     await state.clear()
-    await message.answer("✅ گزارش شما به همراه توضیحات ثبت شد. با تشکر.")
+    if reason_code == "bot_fake":
+        await message.answer("✅ گزارش شما مبنی بر فیک بودن این حساب ثبت شد. ادمین‌ها به زودی این مورد را بررسی خواهند کرد.")
+    else:
+        await message.answer("✅ گزارش شما به همراه مدارک با موفقیت ثبت شد و در اسرع وقت بررسی خواهد شد. با تشکر از همکاری شما.")
 
 
 @router.callback_query(F.data == "report_cancel")

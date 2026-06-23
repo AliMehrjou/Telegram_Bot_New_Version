@@ -669,3 +669,31 @@ async def add_xp_to_user(session: AsyncSession, tg_id: int, amount: int) -> bool
         
     await session.flush()
     return False
+
+async def remove_friend(session: AsyncSession, user_id: int, friend_id: int) -> bool:
+    """حذف یک کاربر از لیست دوستان"""
+    from sqlalchemy import delete, and_
+    
+    stmt = delete(FriendList).where(
+        and_(
+            FriendList.user_id == user_id, 
+            FriendList.friend_id == friend_id
+        )
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+
+    return result.rowcount > 0
+
+async def is_friend(session: AsyncSession, user_id: int, friend_id: int) -> bool:
+    """بررسی اینکه آیا کاربر هدف در لیست دوستان قرار دارد یا خیر"""
+    from sqlalchemy import select, and_
+    
+    stmt = select(1).where(
+        and_(
+            FriendList.user_id == user_id, 
+            FriendList.friend_id == friend_id
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
