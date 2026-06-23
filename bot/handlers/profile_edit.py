@@ -17,6 +17,8 @@ from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.queries import crud
 from matching_bot_project.database.models.models import User
 
+from matching_bot_project.bot.core.constants import ReplyBtn
+
 logger = logging.getLogger(__name__)
 router = Router(name="profile_edit_handler")
 
@@ -90,7 +92,7 @@ def get_cities_reply_keyboard(province_name: str) -> ReplyKeyboardMarkup:
 # ==================== هندلرهای مدیریت FSM ====================
 
 
-@router.message(F.text == "🔙 برگشت به منوی اصلی")
+@router.message(F.text == ReplyBtn.BACK_TO_MENU)
 async def cancel_profile_editing(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ عملیات ویرایش پروفایل لغو شد.", reply_markup=get_main_menu_keyboard())
@@ -101,10 +103,9 @@ async def show_edit_menu(call: CallbackQuery, state: FSMContext):
     await state.clear() 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
-        [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests")],
-        [InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
+        [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests"),
+        InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
         [InlineKeyboardButton(text="🎵 تغییر آهنگ پروفایل", callback_data="change_voice")],
-        # 👇 این دو دکمه در یک خط قرار داده شدند 👇
         [
             InlineKeyboardButton(text="📍 تغییر محل سکونت", callback_data="change_location"),
             InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")
@@ -134,7 +135,7 @@ async def start_bio_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.editing_bio)
 async def process_bio_input(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     bio_text = message.text or ""
-    if bio_text == "🔙 برگشت به منوی اصلی": return
+    if bio_text == ReplyBtn.BACK_TO_MENU: return
 
     if len(bio_text) > 150:
         await message.answer("⚠️ متن بیوگرافی طولانی است. مجدداً بنویسید:")
@@ -230,7 +231,7 @@ async def start_age_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.updating_age)
 async def process_new_age(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     age_text = message.text or ""
-    if age_text == "🔙 برگشت به منوی اصلی": return
+    if age_text == ReplyBtn.BACK_TO_MENU: return
 
     if not age_text.isdigit() or not (18 <= int(age_text) <= 99):
         await message.answer("⚠️ لطفاً یک سن معتبر (عددی بین ۱۸ تا ۹۹) وارد کنید:")
@@ -255,7 +256,7 @@ async def start_location_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.updating_province)
 async def process_edit_province(message: Message, state: FSMContext):
     selected_province = message.text or ""
-    if selected_province == "🔙 برگشت به منوی اصلی": return
+    if selected_province == ReplyBtn.BACK_TO_MENU: return
 
     if selected_province not in IRAN_DATA:
         await message.answer("⚠️ لطفاً استان خود را فقط از روی کیبورد زیر انتخاب کنید:")
@@ -269,7 +270,7 @@ async def process_edit_province(message: Message, state: FSMContext):
 @router.message(ProfileEditStates.updating_city)
 async def process_edit_city(message: Message, state: FSMContext, db_session: AsyncSession):
     selected_city = message.text or ""
-    if selected_city == "🔙 برگشت به منوی اصلی": return
+    if selected_city == ReplyBtn.BACK_TO_MENU: return
 
     data = await state.get_data()
     new_province = data.get("province")
@@ -318,6 +319,6 @@ async def process_new_voice(message: Message, state: FSMContext, db_session: Asy
 
 @router.message(ProfileEditStates.waiting_for_voice)
 async def process_voice_invalid(message: Message):
-    if message.text == "🔙 برگشت به منوی اصلی":
+    if message.text == ReplyBtn.BACK_TO_MENU:
         return 
     await message.answer("⚠️ لطفاً فقط یک فایل صوتی (Voice) یا آهنگ (Audio) ارسال کن!")

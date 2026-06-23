@@ -48,6 +48,9 @@ from matching_bot_project.services import matching_engine
 # Moved these imports to the top level
 from matching_bot_project.bot.handlers.profile_edit import IRAN_DATA, get_cities_reply_keyboard, get_provinces_reply_keyboard
 
+# --- NEW CONSTANTS IMPORT ---
+from matching_bot_project.bot.core.constants import ReplyBtn
+
 logger = logging.getLogger(__name__)
 router = Router(name="start_handler")
 
@@ -251,7 +254,8 @@ async def reject_unknown_gender_callback(call: CallbackQuery) -> None:
 
 @router.message(OnboardingStates.waiting_for_age)
 async def register_age(message: Message, state: FSMContext) -> None:
-    if message.text == "❌ انصراف و منوی اصلی":
+    # اصلاح شد: تغییر از CANCEL_TO_MAIN_MENU به CANCEL
+    if message.text == ReplyBtn.CANCEL:
         await state.clear()
         await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
@@ -281,7 +285,8 @@ async def register_age(message: Message, state: FSMContext) -> None:
 
 @router.message(OnboardingStates.waiting_for_province)
 async def register_province(message: Message, state: FSMContext) -> None:
-    if message.text in {"❌ انصراف و منوی اصلی", "🔙 برگشت به منوی اصلی"}:
+    # اصلاح شد: تغییر نام متغیرها به CANCEL و BACK_TO_MENU
+    if message.text in {ReplyBtn.CANCEL, ReplyBtn.BACK_TO_MENU}:
         await state.clear()
         await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
@@ -308,7 +313,8 @@ async def register_province(message: Message, state: FSMContext) -> None:
 
 @router.message(OnboardingStates.waiting_for_city)
 async def register_city(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    if message.text in {"❌ انصراف و منوی اصلی", "🔙 برگشت به منوی اصلی"}:
+    
+    if message.text in {ReplyBtn.CANCEL, ReplyBtn.BACK_TO_MENU}:
         await state.clear()
         await message.answer("فرآیند ثبت‌نام لغو شد. برای شروع مجدد /start را ارسال کنید.", reply_markup=ReplyKeyboardRemove())
         return
@@ -394,7 +400,7 @@ async def register_city(message: Message, state: FSMContext, db_session: AsyncSe
 #  Main Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(F.text == "⚡️ شروع دیت ناشناس")
+@router.message(F.text == ReplyBtn.START_DATE)
 async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> None:
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -421,7 +427,7 @@ async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> 
         reply_markup=get_matching_type_keyboard(),
     )
 
-@router.message(F.text == "📍 نزدیک من")
+@router.message(F.text == ReplyBtn.NEARBY)
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
     if not user or not user.completed_registration:
@@ -433,7 +439,7 @@ async def show_nearby_people(message: Message, db_session: AsyncSession) -> None
         reply_markup=get_nearby_options_keyboard(),
     )
 
-@router.message(F.text == "🔍 جستجوی کاربران")
+@router.message(F.text == ReplyBtn.SEARCH_USERS)
 async def show_user_search(message: Message, db_session: AsyncSession) -> None:
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
     if not user or not user.completed_registration:
@@ -445,7 +451,7 @@ async def show_user_search(message: Message, db_session: AsyncSession) -> None:
         reply_markup=get_search_options_keyboard(),
     )
 
-@router.message(F.text == "👥 دوستان من")
+@router.message(F.text == ReplyBtn.MY_FRIENDS)
 async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -485,7 +491,7 @@ async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
         parse_mode="HTML"
     )
 
-@router.message(F.text == "🪙 سکه‌های من")
+@router.message(F.text == ReplyBtn.MY_COINS)
 async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -519,7 +525,7 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
 
     await message.answer(wallet_text, reply_markup=markup)
 
-@router.message(F.text == "📜 قوانین")
+@router.message(F.text == ReplyBtn.RULES)
 async def show_rules(message: Message):
     try:
         json_path = Path("json_files/rules.json")
@@ -541,7 +547,7 @@ async def show_rules(message: Message):
         logger.error(f"Error reading rules.json: {e}", exc_info=True)
         await message.answer("❌ خطایی در بازخوانی قوانین ربات رخ داد.")
 
-@router.message(F.text == "📞 پشتیبانی")
+@router.message(F.text == ReplyBtn.SUPPORT)
 async def start_support_chat(message: Message, state: FSMContext) -> None:
     await message.answer(
         "📞 <b>ارتباط با تیم پشتیبانی:</b>\n\n"
@@ -554,7 +560,7 @@ async def start_support_chat(message: Message, state: FSMContext) -> None:
 
 @router.message(SupportStates.waiting_for_support_message)
 async def receive_support_message(message: Message, state: FSMContext) -> None:
-    if message.text == "❌ انصراف و منوی اصلی":
+    if message.text == ReplyBtn.CANCEL:
         await state.clear()
         await message.answer("بازگشت به منوی اصلی.", reply_markup=get_main_menu_keyboard())
         return

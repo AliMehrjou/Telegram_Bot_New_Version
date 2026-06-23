@@ -16,6 +16,8 @@ Two independent discovery flows share this router:
 """
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -47,6 +49,8 @@ from matching_bot_project.database.queries.crud import (
     save_like,
     check_mutual_like,
 )
+
+from matching_bot_project.bot.core.constants import ReplyBtn
 
 logger = logging.getLogger(__name__)
 router = Router(name="discovery_handler")
@@ -107,7 +111,7 @@ async def send_next_candidate(message_or_call, db_session: AsyncSession, state: 
         await message_or_call.answer(profile_card, reply_markup=keyboard, parse_mode="HTML")
 
 
-@router.message(F.text == "💘 کشف کاربران")
+@router.message(ReplyBtn.DISCOVER)
 async def start_discovery(message: Message, state: FSMContext, db_session: AsyncSession):
     """Triggers the swipe discovery flow."""
     tg_id = message.from_user.id
@@ -159,11 +163,11 @@ async def handle_like(call: CallbackQuery, state: FSMContext, db_session: AsyncS
     
     # If it's the first like of the day, set expiration to midnight
     if likes_count == 1:
-        now = datetime.utcnow()
-        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_to_midnight = int((midnight - now).total_seconds())
-        await redis_client.expire(limit_key, seconds_to_midnight)
-
+    now_tehran = datetime.now(ZoneInfo("Asia/Tehran"))
+    midnight_tehran = (now_tehran + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_to_midnight = int((midnight_tehran - now_tehran).total_seconds())
+    await redis_client.expire(limit_key, seconds_to_midnight)
+    
     if likes_count > DAILY_LIKE_LIMIT:
         await call.answer("🚫 سهمیه لایک روزانه شما به پایان رسیده است.", show_alert=True)
         await state.clear()
@@ -238,7 +242,7 @@ def _restart_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-@router.message(F.text == "🔙 برگشت به منوی اصلی")
+@router.message(F.text == ReplyBtn.BACK_TO_MENU)
 async def cancel_wizard(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current and current.startswith("DiscoveryStates:") and current != DiscoveryStates.navigating.state:
@@ -246,7 +250,7 @@ async def cancel_wizard(message: Message, state: FSMContext) -> None:
         await message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
 
 
-@router.message(F.text == "🔍 جستجوی کاربران")
+@router.message(F.text == ReplyBtn.SEARCH_USERS)
 async def start_wizard(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(DiscoveryStates.choosing_province)

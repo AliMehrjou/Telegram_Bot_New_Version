@@ -7,28 +7,31 @@ inline keyboard labels, and system messages.
 
 class ReplyBtn:
     # --- Main Menu Options ---
-    MAIN_MENU_START_ANON_DATE = "⚡️ شروع دیت ناشناس"
-    MAIN_MENU_MY_PROFILE = "🪬 پروفایل من"
-    MAIN_MENU_NEARBY = "📍 نزدیک من"
-    MAIN_MENU_SEARCH = "🔍 جستجوی کاربران"
-    MAIN_MENU_FRIENDS = "👥 دوستان من"
-    MAIN_MENU_DISCOVER = "💘 کشف کاربران"
-    MAIN_MENU_VIP_REFERRAL = "🎁 زیرمجموعه‌گیری & VIP"
-    MAIN_MENU_TERMS = "📜 قوانین"
-    MAIN_MENU_SUPPORT = "📞 پشتیبانی"
-    MAIN_MENU_HELP = "❔ راهنما"
+    START_DATE = "⚡️ شروع دیت ناشناس"
+    MY_PROFILE = "🪬 پروفایل من"
+    NEARBY = "📍 نزدیک من"
+    SEARCH_USERS = "🔍 جستجوی کاربران"
+    MY_FRIENDS = "👥 دوستان من"
+    DISCOVER = "💘 کشف کاربران"
+    REFERRAL_VIP = "🎁 زیرمجموعه‌گیری & VIP"
+    RULES = "📜 قوانین"
+    SUPPORT = "📞 پشتیبانی"
+    HELP = "❔ راهنما"
+    MY_COINS = "🪙 سکه‌های من"
 
     # --- Cancellation & Interruption ---
-    CANCEL_TO_MAIN_MENU = "❌ انصراف و منوی اصلی"
+    CANCEL = "❌ انصراف و منوی اصلی"
+    CANCEL_SHORT = "❌ انصراف"
+    BACK_TO_MENU = "🔙 برگشت به منوی اصلی"
 
     # --- Active Date & Chat Phases ---
-    PHASE_USER_PROFILE = "👤 پروفایل کاربر"
-    DATE_PHASE_END_DATE = "🛑 اتمام دیت"
-    CHAT_PHASE_END_CHAT = "🛑 اتمام چت"
+    VIEW_PARTNER_PROFILE = "👤 پروفایل کاربر"
+    END_DATE = "🛑 اتمام دیت"
+    END_CHAT = "🛑 اتمام چت"
 
     # --- Terms acceptance ---
-    TERMS_ACCEPT = "✅ قوانین را می‌پذیرم"
-    TERMS_SHOW = "📜 نمایش قوانین"
+    ACCEPT_TERMS = "✅ قوانین را می‌پذیرم"
+    SHOW_RULES = "📜 نمایش قوانین"
 
 
 class InlineBtn:
@@ -143,7 +146,7 @@ class InlineBtn:
 
 
 class SystemMsg:
-    # --- Critical System & State Messages ---
+    
     MATCH_FOUND_TEXT = (
         "🎉 تبریک شما با یک نفر برای رفتن به دیت متصل شدین ، "
         "(از دکمه های پایین منو میتونید پروفایل کاربر را مشاهده کنید و یا دیت را تمام کنید.)"

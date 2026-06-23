@@ -20,15 +20,15 @@ from matching_bot_project.bot.keyboards.inline import (
 )
 from matching_bot_project.bot.keyboards.reply import (
     get_cancel_keyboard,
-    get_date_phase_keyboard,          # ← NEW
+    get_date_phase_keyboard,          
     get_main_menu_keyboard,
 )
 from matching_bot_project.bot.states.states import MatchingStates, QuestionnaireStates, VIPStates
 from matching_bot_project.database.queries import crud
 from matching_bot_project.database.models.models import User
 
-# --- NEW CONSTANTS IMPORT ---
 from matching_bot_project.bot.core.constants import SystemMsg
+from matching_bot_project.bot.core.constants import ReplyBtn
 
 logger = logging.getLogger(__name__)
 router = Router(name="matching_handler")
@@ -202,7 +202,7 @@ async def _handle_ghost_match(call: CallbackQuery, state: FSMContext, tg_id: int
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.message(F.text == "❌ انصراف و منوی اصلی")
+@router.message(F.text == ReplyBtn.CANCEL)
 async def cancel_queue_operations(message: Message, state: FSMContext) -> None:
     """
     Gracefully exit the match queue and return the user to the main menu.

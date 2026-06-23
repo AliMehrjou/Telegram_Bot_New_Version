@@ -1,0 +1,21 @@
+{
+  "profile_text": [
+    "💠 <b>پروفایل {profile_title}</b> 💠",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "🔖 <b>شناسه:</b> <code>{public_id}</code>",
+    "",
+    "👤 <b>نام:</b> <b>{first_name}</b>",
+    "⚧ <b>جنسیت:</b> {gender}",
+    "🎂 <b>سن:</b> {age} سال",
+    "📍 <b>مکان:</b> {province}، {city}",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "📝 <b>بیوگرافی:</b>",
+    "<i>{bio}</i>",
+    "",
+    "🎯 <b>علایق:</b>",
+    "<i>{interests}</i>",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "👑 <b>اشتراک:</b> {vip_status}",
+    "❤️ <b>لایک‌ها:</b> {likes_count}{compatibility_text}{private_info}"
+  ]
+}

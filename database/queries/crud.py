@@ -472,24 +472,46 @@ async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     return result.scalar() or 0
 
 
-async def get_nearby_candidates(session: AsyncSession, current_user: User, limit: int = 5) -> List[User]:
-    target_gender = "Female" if current_user.gender == "Male" else "Male"
-    
-    stmt = select(User).where(
-        and_(
-            User.tg_id != current_user.tg_id,
-            User.completed_registration == True,
-            User.gender == target_gender,
-            User.province == current_user.province,
-            User.city == current_user.city,
-            User.invisible_mode == False,
-            User.is_banned == False
-        )
-    ).order_by(User.last_active.desc()).limit(limit)
+async def get_nearby_candidates(
+    session: AsyncSession, 
+    current_user: User, 
+    gender_filter: Optional[str] = None, 
+    limit: int = 5
+) -> List[User]:
+    """
+    کاربران نزدیک هم‌شهری را با احتساب فیلتر جنسیت عودت می‌دهد.
+    اگر gender_filter برابر با male یا female باشد اعمال می‌شود، 
+    و اگر none یا both باشد فیلتر جنسیتی اعمال نخواهد شد.
+    """
+    from sqlalchemy import and_, func
+
+    # شروط پایه‌ای و عمومی برای یافتن کاربران معتبر نزدیک
+    conditions = [
+        User.tg_id != current_user.tg_id,
+        User.completed_registration == True,
+        User.province == current_user.province,
+        User.city == current_user.city,
+        User.invisible_mode == False,
+        User.is_banned == False
+    ]
+
+    # اعمال فیلتر جنسیت به صورت هوشمند و داینامیک
+    if gender_filter:
+        gender_lower = gender_filter.lower()
+        if gender_lower == "male":
+            conditions.append(func.lower(User.gender) == "male")
+        elif gender_lower == "female":
+            conditions.append(func.lower(User.gender) == "female")
+
+    stmt = (
+        select(User)
+        .where(and_(*conditions))
+        .order_by(User.last_active.desc())
+        .limit(limit)
+    )
     
     res = await session.execute(stmt)
     return list(res.scalars().all())
-
 
 async def get_received_like_count(session: AsyncSession, tg_id: int) -> int:
     stmt = select(func.count(UserLike.id)).where(

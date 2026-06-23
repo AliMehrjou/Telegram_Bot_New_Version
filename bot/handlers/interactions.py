@@ -37,9 +37,9 @@ from matching_bot_project.bot.states.states import (
 from matching_bot_project.database.models.models import BlockList, MatchHistory, UserLike
 from matching_bot_project.database.queries import crud
 
-# --- NEW CONSTANTS IMPORT ---
 from matching_bot_project.bot.core.constants import SystemMsg
-
+from matching_bot_project.bot.core.constants import ReplyBtn
+from matching_bot_project.bot.core.formatters import build_unified_profile_card
 
 logger = logging.getLogger(__name__)
 router = Router(name="interactions_handler")
@@ -66,45 +66,12 @@ def get_user_state(user_id: int) -> FSMContext:
         key=StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id),
     )
 
+
 def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
-    name = html.escape(str(user.first_name or "نامشخص"))
-    gender_raw = str(user.gender or "").lower()
-    gender = html.escape(_GENDER_DISPLAY.get(gender_raw, html.escape(str(user.gender or "نامشخص"))))
-    age = html.escape(str(user.age or "نامشخص"))
-    province = html.escape(str(user.province or "نامشخص").replace("_", " "))
-    city = html.escape(str(user.city or "نامشخص").replace("_", " "))
-
-    bio = html.escape(str(user.bio or "تنظیم نشده"))
-    interests = html.escape(str(user.interests or "تنظیم نشده"))
-
-    card = (
-        "╔═════════════════════════╗\n"
-        "║       👤 <b>پروفایل کاربر</b>       ║\n"
-        "╠═════════════════════════╣\n"
-        f"║ 📝 نام: <b>{name}</b>\n"
-        f"║ ⚧ جنسیت: <b>{gender}</b>\n"
-        f"║ 🎂 سن: <b>{age}</b> سال\n"
-        f"║ 🗺 استان: <b>{province}</b>\n"
-        f"║ 🏙 شهر: <b>{city}</b>\n"
-        "╠═════════════════════════╣\n"
-        f"║ 📝 بیوگرافی:\n"
-        f"║ <i>{bio}</i>\n"
-        "║\n"
-        f"║ 🎯 علایق:\n"
-        f"║ <i>{interests}</i>\n"
-        "╚═════════════════════════╝"
-    )
-
-    if compatibility is not None:
-        card += f"\n\n💞 میزان تفاهم: <b>{compatibility}%</b>"
-
-    return card
-
-def _parse_int_suffix(callback_data: str, prefix: str) -> int | None:
-    try:
-        return int(callback_data.removeprefix(prefix))
-    except ValueError:
-        return None
+    """
+    حالا این تابع فقط یک واسطه (Wrapper) برای تابع اصلی است تا همه‌جا خروجی یکسان باشد.
+    """
+    return build_unified_profile_card(user, is_own_profile=False, compatibility=compatibility)
 
 async def _send_profile_card(target_chat_id: int, user, action_kb: InlineKeyboardMarkup) -> None:
     """
@@ -265,7 +232,7 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
 
     return True
 
-@router.message(F.text == "🛑 اتمام دیت")
+@router.message(ReplyBtn.END_DATE)
 async def request_end_date_confirm(message: Message, db_session: AsyncSession) -> None:
     active_match = await crud.get_active_match(db_session, message.from_user.id)
     if not active_match:
@@ -302,7 +269,7 @@ async def cancel_end_date(call: CallbackQuery) -> None:
     except Exception as e:
         logger.error(f"Unexpected error deleting message: {e}")
 
-@router.message(F.text == "🛑 اتمام چت")
+@router.message(ReplyBtn.END_CHAT)
 async def request_end_chat_confirm(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current != ChatStates.anonymous_chat_active.state:
@@ -454,6 +421,17 @@ async def request_direct_message(call: CallbackQuery, state: FSMContext, db_sess
 
     if not caller:
         await call.answer("❌ حساب کاربری شما یافت نشد.", show_alert=True)
+        return
+
+    # واکشی اطلاعات کاربر مقصد برای بررسی وضعیت سایلنت دایرکت
+    target_user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not target_user:
+        await call.answer("❌ کاربر مقصد یافت نشد.", show_alert=True)
+        return
+        
+    # بررسی فعال بودن حالت سایلنت کاربر مقصد پیش از کسر سکه
+    if target_user.silent_until and target_user.silent_until > datetime.now():
+        await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت است و امکان دریافت پیام دایرکت را ندارد.", show_alert=True)
         return
 
     if caller.coin_balance < 1:
@@ -754,6 +732,17 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         
     caller_id = call.from_user.id
     
+    # واکشی اطلاعات کاربر مقصد برای بررسی وضعیت سایلنت
+    target_user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not target_user:
+        await call.answer("❌ کاربر مورد نظر یافت نشد.", show_alert=True)
+        return
+
+    # بررسی فعال بودن حالت سایلنت کاربر مقصد
+    if target_user.silent_until and target_user.silent_until > datetime.now():
+        await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت قرار دارد و امکان دریافت درخواست را ندارد.", show_alert=True)
+        return
+
     block_check = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == target_id,
@@ -785,6 +774,7 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer(f"✅ درخواست {req_type_str} شما با موفقیت برای کاربر ارسال شد.", show_alert=True)
     except Exception:
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("accept_req_date_"))
 async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):

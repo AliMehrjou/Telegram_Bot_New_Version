@@ -26,6 +26,9 @@ from matching_bot_project.database.queries.crud import (
     transfer_coins,
 )
 
+from matching_bot_project.bot.core.constants import ReplyBtn
+
+
 logger = logging.getLogger(__name__)
 router = Router(name="transfer_handler")
 
@@ -93,7 +96,7 @@ async def start_coin_transfer(
 async def receive_transfer_amount(
     message: Message, state: FSMContext, db_session: AsyncSession
 ) -> None:
-    if message.text in ("❌ انصراف", "❌ انصراف و منوی اصلی"):
+    if message.text in (ReplyBtn.CANCEL_SHORT, ReplyBtn.CANCEL):
         await state.clear()
         await message.answer("لغو شد.", reply_markup=get_main_menu_keyboard())
         return

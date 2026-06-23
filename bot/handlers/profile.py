@@ -17,6 +17,9 @@ from sqlalchemy import update
 from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.core.config import settings
 
+from matching_bot_project.bot.core.constants import ReplyBtn
+from matching_bot_project.bot.core.formatters import build_unified_profile_card
+
 logger = logging.getLogger(__name__)
 router = Router(name="profile_handler")
 
@@ -26,17 +29,18 @@ def generate_public_id(length=6):
     return f"user_{''.join(random.choice(characters) for _ in range(length))}"
 
 
-@router.message(F.text == "🪬 پروفایل من")
+@router.message(F.text == ReplyBtn.MY_PROFILE)
 async def view_user_profile(message: Message, db_session: AsyncSession):
     tg_id = message.from_user.id
     
-    # گرفتن یوزر از دیتابیس
+    
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     if not user or not user.completed_registration:
         await message.answer("⚠️ شما هنوز ثبت نام نکرده‌اید! لطفا دکمه /start را ارسال کنید.")
         return
 
+    
     if not getattr(user, 'public_id', None):
         characters = string.ascii_letters + string.digits
         new_public_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
@@ -44,49 +48,16 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
         await db_session.commit() 
         
     await db_session.refresh(user) 
-    public_id = user.public_id
 
-    # دریافت مقادیر
-    likes_count = getattr(user, 'likes_count', 0)
-    coin_balance = getattr(user, 'coin_balance', 0)
-    is_vip = getattr(user, 'is_vip', False)
-
-    gender_txt = "پسر 👱‍♂️" if user.gender == "Male" else "دختر 👩‍🦰" if user.gender == "Female" else "نامشخص ❓"
-    vip_status = "👑 عضو VIP" if is_vip else "🏷️ عضو عادی"
-
-    safe_first_name = html.escape(user.first_name or "کاربر")
-    safe_city = html.escape((user.city or "نامشخص").replace('_', ' '))
-    safe_bio = html.escape(user.bio or "تنظیم نشده")
-    safe_interests = html.escape(user.interests or "تنظیم نشده")
-
-    profile_card = (
-        f"╔═════════════════════════╗\n"
-        f"║ 👤 <b>پروفایل کاربری شما</b> ║\n"
-        f"╚═════════════════════════╝\n"
-        f"🆔 شناسه تلگرام: <code>{user.tg_id}</code>\n"
-        f"🆔 آیدی شما: <code>{public_id}</code> /\n"
-        f"───────────────────\n"
-        f"🔹 نام: <b>{safe_first_name}</b>\n"
-        f"🔹 جنسیت: <b>{gender_txt}</b>\n"
-        f"🔹 سن: <b>{user.age} سال</b>\n"
-        f"🔹 استان: <b>{html.escape(user.province or 'نامشخص')}</b>\n"
-        f"🔹 شهر: <b>{safe_city}</b>\n"
-        f"───────────────────\n"
-        f"📝 بیوگرافی:\n<i>{safe_bio}</i>\n\n"
-        f"🎯 علایق:\n<i>{safe_interests}</i>\n"
-        f"───────────────────\n"
-        f"⚡ وضعیت اشتراک: <b>{vip_status}</b>\n"
-        f"🪙 موجودی سکه: <b>{coin_balance} سکه</b>\n"
-        f"❤️ تعداد لایک‌ها: <b>{likes_count}</b>\n\n"
-        f"🔔 تنظیم حالت سایلنت: /silent\n"
-        f"❌ حذف اکانت ربات: /delete_account"
-    )
+    
+    profile_card = build_unified_profile_card(user, is_own_profile=True)
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
         [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_section_triggered")]
     ])
 
+    
     if user.profile_photo_file_id:
         try:
             await message.answer_photo(
@@ -101,7 +72,7 @@ async def view_user_profile(message: Message, db_session: AsyncSession):
     else:
         await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 
-
+    # ارسال وویس/آهنگ پروفایل در صورت وجود
     profile_voice = getattr(user, 'profile_voice_file_id', None)
     if profile_voice:
         try:
@@ -188,56 +159,7 @@ async def confirm_delete_account_handler(call: CallbackQuery, db_session: AsyncS
 async def close_menu_handler(call: CallbackQuery):
     await call.message.delete()
     
-@router.callback_query(F.data.startswith("nearby_"))
-async def view_nearby_users_callback(call: CallbackQuery, db_session: AsyncSession):
-    """
-    دریافت کالبک از کیبورد شیشه‌ایِ نزدیک من (موجود در start.py)
-    و نمایش لیست کاربران بر اساس فیلتر انتخابی
-    """
-    tg_id = call.from_user.id
-    current_user = await crud.get_user_by_tg_id(db_session, tg_id)
-
-    if not current_user or not current_user.completed_registration:
-        await call.answer("⚠️ شما هنوز ثبت‌نام نکرده‌اید! لطفاً ابتدا دکمه /start را بزنید.", show_alert=True)
-        return
-
-    filter_type = call.data.replace("nearby_", "") 
-
-    await call.answer("🔍 در حال جستجوی کاربران نزدیک...")
-
-    
-    nearby_users = await crud.get_nearby_candidates(db_session, current_user, limit=5)
-
-    if not nearby_users:
-        empty_text = f"📍 در حال حاضر کاربر جدیدی با این مشخصات در شهر <b>{current_user.city}</b> یافت نشد."
-        
-        
-        await call.message.edit_text(
-            text=empty_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 متوجه شدم", callback_data="close_menu")]])
-        )
-        return
-
-    
-    response_text = f"📍 <b>کاربران نزدیک شما در شهر {current_user.city}:</b>\n\n"
-    for index, idx_user in enumerate(nearby_users, start=1):
-        user_bio = idx_user.bio if idx_user.bio else "بدون بیوگرافی"
-        
-        display_id = getattr(idx_user, 'public_id', idx_user.tg_id)
-        
-        response_text += (
-            f"{index}️⃣ <b>{html.escape(idx_user.first_name)}</b> | 🎂 {idx_user.age} ساله\n"
-            f"📝 <i>{html.escape(user_bio)}</i>\n"
-            f"🆔 شناسه: <code>{display_id}</code>\n"
-            f"───────────────────\n"
-        )
-    
-    response_text += "\n🔍 می‌توانید با استفاده از بخش <b>«🔍 جستجوی کاربران»</b> به آن‌ها درخواست چت بدهید!"
-    
-    await call.message.edit_text(text=response_text, parse_mode=ParseMode.HTML)
-
-@router.message(F.text == "🎁 زیرمجموعه‌گیری & VIP")
+@router.message(F.text == ReplyBtn.REFERRAL_VIP)
 async def view_referral_panel(message: Message, db_session: AsyncSession):
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -260,7 +182,7 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
     await message.answer(text=ref_text, parse_mode=ParseMode.HTML)
 
 
-@router.message(F.text == "❔ راهنما")
+@router.messageF.text == ReplyBtn.HELP)
 async def view_help_panel(message: Message):
     """خواند داینامیک متن راهنمای ربات از فایل JSON موجود در json_files"""
     try:
@@ -293,66 +215,34 @@ async def view_help_panel(message: Message):
 
 @router.message(F.text.startswith("/user_"))
 async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
-    # جدا کردن عبارت بعد از اسلش (مثلا از /user_7mPUCm میشه user_7mPUCm)
     command_text = message.text.strip()
-    public_id = command_text[1:] 
+    public_id = command_text[1:]  # جدا کردن عبارت بعد از اسلش (مثلاً user_7mPUCm)
 
-    # جستجوی کاربر در دیتابیس
+    # جستجوی کاربر مورد نظر در دیتابیس
     target_user = await crud.get_user_by_public_id(db_session, public_id)
 
     if not target_user or not target_user.completed_registration:
         await message.answer("⚠️ کاربری با این آیدی یافت نشد یا پروفایلش تکمیل نیست.")
         return
 
-    # بررسی اینکه آیا کاربر آیدی خودش رو وارد کرده یا کس دیگه‌ای رو
+    # بررسی اینکه آیا کاربر دکمه‌ی آیدی خودش را زده یا شخص دیگری
     is_own_profile = (message.from_user.id == target_user.tg_id)
 
-    # دریافت مقادیر
-    likes_count = getattr(target_user, 'likes_count', 0)
-    coin_balance = getattr(target_user, 'coin_balance', 0)
-    is_vip = getattr(target_user, 'is_vip', False)
+    # ساخت کارت پروفایل با استفاده از تابع یکپارچه
+    profile_card = build_unified_profile_card(target_user, is_own_profile=is_own_profile)
 
-    gender_txt = "پسر 👱‍♂️" if target_user.gender == "Male" else "دختر 👩‍🦰" if target_user.gender == "Female" else "نامشخص ❓"
-    vip_status = "👑 عضو VIP" if is_vip else "🏷️ عضو عادی"
-
-    safe_first_name = html.escape(target_user.first_name or "کاربر")
-    safe_city = html.escape((target_user.city or "نامشخص").replace('_', ' '))
-    safe_bio = html.escape(target_user.bio or "تنظیم نشده")
-    safe_interests = html.escape(target_user.interests or "تنظیم نشده")
-
-    # فرمت پروفایل
-    profile_card = (
-        f"╔═════════════════════════╗\n"
-        f"║ 👤 <b>پروفایل کاربری</b> ║\n"
-        f"╚═════════════════════════╝\n"
-        f"🆔 شناسه: <code>{target_user.public_id}</code>\n"
-        f"───────────────────\n"
-        f"🔹 نام: <b>{safe_first_name}</b>\n"
-        f"🔹 جنسیت: <b>{gender_txt}</b>\n"
-        f"🔹 سن: <b>{target_user.age} سال</b>\n"
-        f"🔹 استان: <b>{html.escape(target_user.province or 'نامشخص')}</b>\n"
-        f"🔹 شهر: <b>{safe_city}</b>\n"
-        f"───────────────────\n"
-        f"📝 بیوگرافی:\n<i>{safe_bio}</i>\n\n"
-        f"🎯 علایق:\n<i>{safe_interests}</i>\n"
-        f"───────────────────\n"
-        f"⚡ وضعیت اشتراک: <b>{vip_status}</b>\n"
-        f"❤️ تعداد لایک‌ها: <b>{likes_count}</b>\n"
-    )
-
-    
+    # شخصی‌سازی کیبورد شیشه‌ای بر اساس مالکیت پروفایل
     inline_kb = []
     if is_own_profile:
         inline_kb.append([InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")])
         profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
     else:
-        
         inline_kb.append([InlineKeyboardButton(text="💬 ارسال درخواست چت", callback_data=f"req_chat_{target_user.tg_id}")])
         inline_kb.append([InlineKeyboardButton(text="❤️ لایک کردن پروفایل", callback_data=f"like_user_{target_user.tg_id}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_kb)
 
-    
+    # ارسال مدیا یا متن ساختاریافته‌ی پروفایل
     if target_user.profile_photo_file_id:
         try:
             await message.answer_photo(
@@ -367,7 +257,7 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
     else:
         await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
 
-    
+    # ارسال وویس/آهنگ پروفایل هدف در صورت وجود
     profile_voice = getattr(target_user, 'profile_voice_file_id', None)
     if profile_voice:
         try:

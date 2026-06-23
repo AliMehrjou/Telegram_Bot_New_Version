@@ -43,6 +43,12 @@ _RESULT_HEADER_TEXT = "🔍 یک کاربر یافت شد!"
 # Filter data container
 # ─────────────────────────────────────────────────────────────────────────────
 
+class ProfileIncompleteError(Exception):
+    """خطایی برای زمانی که فیلد مورد نیاز در پروفایل خود کاربر خالی است"""
+    def __init__(self, missing_field_fa: str):
+        self.missing_field_fa = missing_field_fa
+        super().__init__(f"User profile is missing: {missing_field_fa}")
+
 @dataclass
 class SearchFilters:
     """
@@ -130,10 +136,10 @@ async def _query_user(
     block relationships in both directions.
     """
     if filters.same_province and not caller.province:
-        return None
+        raise ProfileIncompleteError("استان")
 
     if filters.same_city and not caller.city:
-        return None
+        raise ProfileIncompleteError("شهر")
 
     blocked_by_caller_sq = (
         select(BlockList.blocked_id)
@@ -210,6 +216,13 @@ async def execute_search(
 
     try:
         found_user = await _query_user(db_session, caller_tg_id, caller, filters)
+    except ProfileIncompleteError as e:
+        # مدیریت خطای نقص اطلاعات پروفایل کاربر فرستنده
+        await call.answer(
+            f"⚠️ برای این جستجو، ابتدا باید «{e.missing_field_fa}» خود را در پروفایلت ثبت کنی!", 
+            show_alert=True
+        )
+        return
     except Exception as exc:
         logger.error("Search query failed for user %s (callback=%s): %s", caller_tg_id, call.data, exc)
         await call.answer("❌ خطای سرور در جستجو. لطفاً دوباره تلاش کنید.", show_alert=True)
@@ -221,14 +234,13 @@ async def execute_search(
 
     await call.answer()
 
-    # FIX: Using edit_text instead of answer to prevent chat cluttering on "Search Again"
     try:
         await call.message.edit_text(
             text=_RESULT_HEADER_TEXT,
             reply_markup=_build_result_keyboard(found_user.tg_id, call.data),
         )
     except Exception:
-        # Fallback if message cannot be edited (e.g., if it's the first time from a different menu)
+        # ساختار Fallback در صورتی که امکان ادیت پیام وجود نداشته باشد
         await call.message.answer(
             text=_RESULT_HEADER_TEXT,
             reply_markup=_build_result_keyboard(found_user.tg_id, call.data),
