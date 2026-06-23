@@ -2,7 +2,7 @@ import uvicorn
 import asyncio
 import logging
 import sys
-
+from aiogram.exceptions import TelegramNetworkError
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import dp, bot, matching_engine
 from matching_bot_project.bot.middlewares.database import DbSessionMiddleware
@@ -77,8 +77,23 @@ async def run_bot_polling():
         logger.warning(f"Waiting for matching_engine.redis generated an alert: {e}")
         await asyncio.sleep(1)
         
-    # در محیط لوکال یکبار مطمئن می‌شویم وب‌هوک پاک شده تا پولینگ گیر نکند
-    await bot.delete_webhook(drop_pending_updates=True)
+    try:
+        await bot.delete_webhook(
+            drop_pending_updates=True,
+            request_timeout=60
+        )
+        logger.info("Webhook deleted successfully.")
+
+    except TelegramNetworkError as e:
+        logger.warning(
+            f"Telegram unreachable while deleting webhook: {e}"
+        )
+
+    except Exception:
+        logger.exception(
+            "Unexpected error while deleting webhook"
+        )
+
     await dp.start_polling(bot, skip_updates=True)
 
 

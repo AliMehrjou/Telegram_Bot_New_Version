@@ -1,23 +1,62 @@
 import logging
+
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
+
 from redis.asyncio import Redis
+
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.services.matching_engine import MatchingEngine
 from matching_bot_project.services.scheduler import DatingScheduler
-from matching_bot_project.database.session import async_session_factory as session_factory_instance
+from matching_bot_project.database.session import (
+    async_session_factory as session_factory_instance
+)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
 logger = logging.getLogger(__name__)
 
-# Initialize raw Bot instance using HTML formatting constraints
-from aiogram.client.default import DefaultBotProperties
-bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+# =====================================================
+# Telegram Bot Session
+# =====================================================
 
-# Setup safe Redis connection for FSM states, throttling and matching sessions
+proxy_url = getattr(settings, "PROXY_URL", None)
+
+if proxy_url:
+    logger.info(f"Using Telegram proxy: {proxy_url}")
+
+    session = AiohttpSession(
+        proxy=proxy_url
+    )
+
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        session=session,
+        default=DefaultBotProperties(
+            parse_mode="HTML"
+        )
+    )
+else:
+    logger.warning(
+        "No PROXY_URL configured. Telegram requests will use direct connection."
+    )
+
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(
+            parse_mode="HTML"
+        )
+    )
+
+# =====================================================
+# Redis Client
+# =====================================================
+
 redis_client = Redis(
     host=settings.REDIS_HOST,
     port=settings.REDIS_PORT,
@@ -25,23 +64,38 @@ redis_client = Redis(
     decode_responses=True
 )
 
-# AIogram FSM persistent Redis storage client
+# =====================================================
+# FSM Storage
+# =====================================================
+
 fsm_storage = RedisStorage(
     redis=redis_client,
-    key_builder=DefaultKeyBuilder(with_destiny=True)
+    key_builder=DefaultKeyBuilder(
+        with_destiny=True
+    )
 )
 
-# Root dispatcher setup
-dp = Dispatcher(storage=fsm_storage)
+# =====================================================
+# Dispatcher
+# =====================================================
 
-# Matchmaking Engine instantiation
+dp = Dispatcher(
+    storage=fsm_storage
+)
+
+# =====================================================
+# Matching Engine
+# =====================================================
+
 matching_engine = MatchingEngine(
     redis_host=settings.REDIS_HOST,
     redis_port=settings.REDIS_PORT,
     redis_password=settings.REDIS_PASSWORD
 )
 
-# Scheduler instance to clean stale active questionnaires
+# =====================================================
+# Dating Scheduler
+# =====================================================
 
 dating_scheduler = DatingScheduler(
     bot=bot,
@@ -50,3 +104,5 @@ dating_scheduler = DatingScheduler(
     session_factory=session_factory_instance,
     timeout_seconds=180
 )
+
+logger.info("Bot loader initialized successfully.")

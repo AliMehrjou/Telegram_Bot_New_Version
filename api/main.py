@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-
+from aiogram.exceptions import TelegramNetworkError
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import bot, dp, matching_engine, dating_scheduler
 from matching_bot_project.api.routes import webhook, admin
@@ -55,9 +55,26 @@ async def lifespan(app: FastAPI):
             secret_token=settings.ADMIN_SECRET_TOKEN
         )
     else:
-        
-        logger.warning("Running in LOCAL/POLLING mode. Deleting active webhooks to prevent conflicts...")
-        await bot.delete_webhook(drop_pending_updates=True)
+        logger.warning(
+            "Running in LOCAL/POLLING mode. Deleting active webhooks to prevent conflicts..."
+        )
+
+        try:
+            await bot.delete_webhook(
+                drop_pending_updates=True,
+                request_timeout=60
+            )
+            logger.info("Webhook deleted successfully.")
+
+        except TelegramNetworkError as e:
+            logger.warning(
+                f"Telegram unreachable while deleting webhook: {e}"
+            )
+
+        except Exception:
+            logger.exception(
+                "Unexpected error while deleting webhook"
+            )
 
     yield # Lifespan execution margin
     # Tear-down connections
