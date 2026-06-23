@@ -37,6 +37,7 @@ from matching_bot_project.bot.states.states import ChatStates
 from matching_bot_project.database.models.models import BlockList, User
 from matching_bot_project.database.queries import crud
 from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+
 logger = logging.getLogger(__name__)
 router = Router(name="explore_handler")
 
@@ -70,19 +71,10 @@ _MEDIA_REJECTED_TEXT = (
 # Filter data container
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 @dataclass
 class SearchFilters:
     """
     All filter dimensions that can be derived from a single callback token.
-
-    Attributes
-    ──────────
-    gender        : "male" | "female" | None (= any gender)
-    online_only   : restrict results to users whose is_online flag is True
-    same_province : restrict results to users in the caller's province
-    same_city     : restrict results to users in the caller's city
-                    (set implicitly for every ``nearby_`` callback)
     """
     gender: str | None = field(default=None)
     online_only: bool = field(default=False)
@@ -94,27 +86,9 @@ class SearchFilters:
 # Helper: callback → filters
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 def _parse_filters(callback_data: str) -> SearchFilters:
     """
     Derive a :class:`SearchFilters` instance from raw ``callback_data``.
-
-    Supported token vocabulary (space-separated from the prefix):
-    ─────────────────────────────────────────────────────────────
-    ``female``   → gender=female
-    ``male``     → gender=male   (checked *after* female to avoid substring hit)
-    ``online``   → online_only=True
-    ``province`` → same_province=True
-    ``city``     → same_city=True
-
-    ``nearby_`` prefix always implies ``same_city=True`` regardless of tokens.
-
-    Examples
-    ────────
-    nearby_female          → SearchFilters(gender="female", same_city=True)
-    search_online_male     → SearchFilters(gender="male",   online_only=True)
-    search_same_province   → SearchFilters(same_province=True)
-    search_same_province_female → SearchFilters(gender="female", same_province=True)
     """
     is_nearby = callback_data.startswith("nearby_")
 
@@ -123,10 +97,8 @@ def _parse_filters(callback_data: str) -> SearchFilters:
     else:
         suffix = callback_data.removeprefix("search_")
 
-    # Split on underscore to obtain individual tokens.
     tokens: set[str] = set(suffix.split("_")) if suffix else set()
 
-    # "female" must be evaluated before "male" since "female" contains "male".
     gender: str | None = None
     if "female" in tokens:
         gender = "female"
@@ -137,7 +109,6 @@ def _parse_filters(callback_data: str) -> SearchFilters:
         gender=gender,
         online_only="online" in tokens,
         same_province="province" in tokens,
-        # "city" token OR nearby_ prefix both activate city-level filtering.
         same_city=is_nearby or "city" in tokens,
     )
 
@@ -146,22 +117,12 @@ def _parse_filters(callback_data: str) -> SearchFilters:
 # Helper: build result action keyboard
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 def _build_result_keyboard(
     found_user_tg_id: int,
     rerun_callback: str,
 ) -> InlineKeyboardMarkup:
     """
     Build the three-button action keyboard that appears below each search result.
-
-    Buttons
-    ───────
-    [مشاهده پروفایل کاربر]          → view_profile_{found_user_tg_id}
-    [ارسال پیام دایرکت (۱ سکه)]    → req_direct_{found_user_tg_id}
-    [جستجوی مجدد 🔄]               → {rerun_callback}   (exact original callback)
-
-    The "search again" button intentionally reuses the verbatim callback string
-    so the same handler fires again and returns a different random user.
     """
     builder = InlineKeyboardBuilder()
 
@@ -178,14 +139,13 @@ def _build_result_keyboard(
         callback_data=rerun_callback,
     )
 
-    builder.adjust(1)  # Stack buttons vertically; avoids wrapping on narrow screens.
+    builder.adjust(1)
     return builder.as_markup()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: build and execute the filtered SQLAlchemy query
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 async def _query_user(
     db_session: AsyncSession,
@@ -196,44 +156,13 @@ async def _query_user(
     """
     Find one random User that satisfies all active filters while respecting
     block relationships in both directions.
-
-    Block exclusion logic
-    ──────────────────────
-    - Exclude users the caller has added to their block list
-      (BlockList rows where ``blocker_id == caller_tg_id``).
-    - Exclude users who have blocked the caller
-      (BlockList rows where ``blocked_id == caller_tg_id``).
-
-    Randomness strategy
-    ────────────────────
-    ORDER BY RAND() LIMIT 1 is used so that clicking "جستجوی مجدد" always
-    produces a different result without any client-side pagination state.
-    This is acceptable for the expected dataset size; swap to a keyset-based
-    approach if the User table exceeds ~100k rows.
-
-    Location guard
-    ────────────────
-    For province/city filters, if the caller's own field is NULL the query
-    would match every NULL user — clearly wrong.  We catch this early and
-    return None, letting the handler deliver "کاربری یافت نشد" instead.
     """
-    # ── Pre-flight: guard against NULL location when location filter is active ──
     if filters.same_province and not caller.province:
-        logger.warning(
-            "User %s triggered a province filter but has no province set.",
-            caller_tg_id,
-        )
         return None
 
     if filters.same_city and not caller.city:
-        logger.warning(
-            "User %s triggered a city filter but has no city set.",
-            caller_tg_id,
-        )
         return None
 
-    # ── Subqueries for bilateral block exclusion ─────────────────────────────
-    # Rows where the caller is the blocker → tg_ids the caller blocked.
     blocked_by_caller_sq = (
         select(BlockList.blocked_id)
         .where(BlockList.blocker_id == caller_tg_id)
@@ -241,7 +170,6 @@ async def _query_user(
         .scalar_subquery()
     )
 
-    # Rows where the caller is the blocked party → tg_ids that blocked them.
     blockers_of_caller_sq = (
         select(BlockList.blocker_id)
         .where(BlockList.blocked_id == caller_tg_id)
@@ -249,7 +177,6 @@ async def _query_user(
         .scalar_subquery()
     )
 
-    # ── Base query: exclude self, incomplete profiles, and blocked parties ────
     stmt = (
         select(User)
         .where(
@@ -261,7 +188,6 @@ async def _query_user(
         )
     )
 
-    # ── Apply optional filters ────────────────────────────────────────────────
     if filters.gender:
         stmt = stmt.where(User.gender == filters.gender)
 
@@ -272,14 +198,11 @@ async def _query_user(
         stmt = stmt.where(User.province == caller.province)
 
     if filters.same_city:
-        # City filter implies province filter as well (prevents cross-province
-        # city name collisions like two cities named "مرکز" in different provinces).
         stmt = stmt.where(
             User.province == caller.province,
             User.city == caller.city,
         )
 
-    # ── Randomise and return exactly one row ─────────────────────────────────
     stmt = stmt.order_by(_RANDOM_FUNC).limit(1)
 
     result = await db_session.execute(stmt)
@@ -290,7 +213,6 @@ async def _query_user(
 # Section 1 – Search & Nearby handler
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 @router.callback_query(
     F.data.startswith("search_") | F.data.startswith("nearby_")
 )
@@ -298,30 +220,12 @@ async def execute_search(
     call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Unified handler for all explore-type search callbacks.
-
-    Flow
-    ────
-    1. Fetch the caller's User record (needed for province/city values).
-    2. Parse the callback suffix into a :class:`SearchFilters` instance.
-    3. Execute the block-aware, filtered query.
-    4. If no match: answer with an alert and return.
-    5. If match: send the result header + action keyboard to the caller.
-
-    The keyboard's "جستجوی مجدد" button carries ``call.data`` verbatim, so
-    re-clicking it goes through this same handler and returns a fresh random
-    user without any additional state management.
-    """
     caller_tg_id = call.from_user.id
 
-    # ── 1. Fetch caller profile ───────────────────────────────────────────────
     try:
         caller = await crud.get_user_by_tg_id(db_session, caller_tg_id)
     except Exception as exc:
-        logger.error(
-            "DB error while fetching caller %s during search: %s", caller_tg_id, exc
-        )
+        logger.error("DB error while fetching caller %s during search: %s", caller_tg_id, exc)
         await call.answer("❌ خطای سرور. لطفاً دوباره تلاش کنید.", show_alert=True)
         return
 
@@ -329,37 +233,78 @@ async def execute_search(
         await call.answer("❌ حساب کاربری شما یافت نشد.", show_alert=True)
         return
 
-    # ── 2. Parse filters from callback suffix ────────────────────────────────
     filters = _parse_filters(call.data)
 
-    # ── 3. Execute query ──────────────────────────────────────────────────────
     try:
         found_user = await _query_user(db_session, caller_tg_id, caller, filters)
     except Exception as exc:
-        logger.error(
-            "Search query failed for user %s (callback=%s): %s",
-            caller_tg_id,
-            call.data,
-            exc,
-        )
+        logger.error("Search query failed for user %s (callback=%s): %s", caller_tg_id, call.data, exc)
         await call.answer("❌ خطای سرور در جستجو. لطفاً دوباره تلاش کنید.", show_alert=True)
         return
 
-    # ── 4. No match ───────────────────────────────────────────────────────────
     if not found_user:
         await call.answer(_NO_RESULT_TEXT, show_alert=True)
         return
 
     await call.answer()
 
-    # ── 5. Send result with action keyboard ──────────────────────────────────
-    # ``call.data`` is forwarded verbatim as the "search again" payload.
+    # FIX: Using edit_text instead of answer to prevent chat cluttering on "Search Again"
     try:
+        await call.message.edit_text(
+            text=_RESULT_HEADER_TEXT,
+            reply_markup=_build_result_keyboard(found_user.tg_id, call.data),
+        )
+    except Exception:
+        # Fallback if message cannot be edited (e.g., if it's the first time from a different menu)
         await call.message.answer(
             text=_RESULT_HEADER_TEXT,
             reply_markup=_build_result_keyboard(found_user.tg_id, call.data),
         )
-    except Exception as exc:
-        logger.error(
-            "Failed to send search result to user %s: %s", caller_tg_id, exc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 2 – Anonymous DM Forwarding (ADDED)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.message(StateFilter(ChatStates.typing_direct_message))
+async def process_anonymous_dm(message: Message, state: FSMContext) -> None:
+    """
+    Handles the actual text input from the user when they are in the
+    process of sending a direct message via the explore action keyboard.
+    """
+    if not message.text:
+        await message.answer(_MEDIA_REJECTED_TEXT)
+        return
+
+    data = await state.get_data()
+    target_id = data.get("target_user_id")
+
+    if not target_id:
+        await state.clear()
+        await message.answer(
+            "❌ خطای پردازش. لطفاً دوباره امتحان کنید.",
+            reply_markup=get_main_menu_keyboard()
         )
+        return
+
+    safe_text = html.escape(message.text)
+    final_message = _DM_ANONYMOUS_TEMPLATE.format(body=safe_text)
+
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text=final_message,
+            parse_mode="HTML"
+        )
+        await message.answer(
+            text=_DM_SENT_ACK,
+            reply_markup=get_main_menu_keyboard()
+        )
+    except (TelegramForbiddenError, TelegramAPIError) as exc:
+        logger.warning("Could not forward DM to %s: %s", target_id, exc)
+        await message.answer(
+            "❌ کاربر مورد نظر ربات را مسدود کرده یا در دسترس نیست.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    finally:
+        await state.clear()

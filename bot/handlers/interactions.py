@@ -12,18 +12,24 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timezone, timedelta
 from typing import Optional
-from aiogram.enums import ParseMode
+
 from aiogram import F, Router
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matching_bot_project.bot.core.loader import bot, dp, redis_client
+# Project Imports
+from matching_bot_project.bot.core.config import settings
+from matching_bot_project.bot.core.loader import bot, dp, redis_client, dating_scheduler
 from matching_bot_project.bot.keyboards.inline import (
     get_end_chat_confirm_keyboard,
     get_end_date_confirm_keyboard,
@@ -39,12 +45,10 @@ from matching_bot_project.bot.states.states import (
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory
 from matching_bot_project.database.queries import crud
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from sqlalchemy import select, delete
 
-from aiogram.filters import StateFilter
-
+logger = logging.getLogger(__name__)
 router = Router(name="interactions_handler")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +57,6 @@ _DATE_CANCELLED_TEXT = (
     "🛑 دیت توسط یکی از طرفین لغو شد و به منوی اصلی بازگشتید."
 )
 
-# Maps DB-stored gender values to a display string
 _GENDER_DISPLAY: dict[str, str] = {
     "male": "مرد 👨",
     "female": "زن 👩",
@@ -65,28 +68,13 @@ _GENDER_DISPLAY: dict[str, str] = {
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 def get_user_state(user_id: int) -> FSMContext:
-    """
-    Resolve an FSMContext for *any* Telegram user by their ID.
-
-    aiogram 3.x FSMContext is request-scoped.  This helper constructs one
-    manually so we can read or write another user's FSM state (e.g. clearing
-    a match partner's context after the date is cancelled).
-    """
     return FSMContext(
         storage=dp.storage,
         key=StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id),
     )
 
-
 def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
-    """
-    Render a clean, HTML-safe profile card from a User ORM object.
-
-    Every dynamic field is passed through ``html.escape`` to prevent injection
-    of HTML tags stored in user-supplied strings (names, city names, etc.).
-    """
     name = html.escape(str(user.first_name or "نامشخص"))
     gender_raw = str(user.gender or "").lower()
     gender = html.escape(_GENDER_DISPLAY.get(gender_raw, html.escape(str(user.gender or "نامشخص"))))
@@ -120,40 +108,21 @@ def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
 
     return card
 
-
 def _parse_int_suffix(callback_data: str, prefix: str) -> int | None:
-    """
-    Extract the integer ID that follows a known prefix in callback_data.
-
-    Returns ``None`` when the suffix is missing or not a valid integer, so
-    callers can return an early alert without raising unhandled exceptions.
-    """
     try:
         return int(callback_data.removeprefix(prefix))
     except ValueError:
         return None
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 1 – View Profile
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 @router.callback_query(F.data.startswith("view_profile_"))
 async def view_partner_profile(
     call: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Display the requested user's profile card ONLY to the caller.
-
-    Employer requirement:
-    "When I click view profile, it should only be shown to me,
-     not the other person."
-
-    This is enforced by targeting `call.from_user.id` explicitly and never
-    sending anything to the partner.
-    """
     target_id = _parse_int_suffix(call.data, "view_profile_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -165,7 +134,6 @@ async def view_partner_profile(
         return
 
     profile_card = _build_profile_card(user)
-    # Check block status for action keyboard
     block_result = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == call.from_user.id,
@@ -175,31 +143,24 @@ async def view_partner_profile(
     is_blocked = block_result.scalar_one_or_none() is not None
     action_kb  = get_user_action_keyboard(target_id, is_blocked=is_blocked)
 
-    # ── Log View for VIP Target ───────────────────────────────────────────────
-    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
+    # ── Log View for VIP Target ──
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
     if is_target_vip and call.from_user.id != target_id:
-        from matching_bot_project.bot.core.loader import redis_client
-        from datetime import timedelta
-        import time
         key = f"user:{target_id}:viewers"
-        # Log view with Unix timestamp as score
         await redis_client.zadd(key, {str(call.from_user.id): time.time()})
-        # TTL of 7 days (604800 seconds)
         await redis_client.expire(key, 604800)
 
-    # ── Send ONLY to the caller ───────────────────────────────────────────────
     try:
-        # 1. Send Photo if exists (with text as caption)
         if getattr(user, 'profile_photo_file_id', None):
             await bot.send_photo(
-                chat_id=call.from_user.id, # اگر داخل هندلر message هستی به جاش بذار message.from_user.id
+                chat_id=call.from_user.id,
                 photo=user.profile_photo_file_id,
-                caption=profile_card[:1024], # تلگرام محدودیت کاراکتر کپشن داره
+                caption=profile_card[:1024],
                 parse_mode="HTML",
                 reply_markup=action_kb,
             )
         else:
-            # Fallback to normal text
             await bot.send_message(
                 chat_id=call.from_user.id,
                 text=profile_card,
@@ -207,7 +168,6 @@ async def view_partner_profile(
                 reply_markup=action_kb,
             )
             
-        # 2. Send Voice if exists
         profile_voice = getattr(user, 'profile_voice_file_id', None)
         if profile_voice:
             await bot.send_voice(
@@ -217,46 +177,30 @@ async def view_partner_profile(
                 parse_mode="HTML"
             )
 
-        if isinstance(call, CallbackQuery):
-            await call.answer()
+        await call.answer()
 
     except Exception as exc:
-        logger.error(
-            "Failed to send profile message: %s", exc
-        )
+        logger.error("Failed to send profile message: %s", exc)
 
-# ──(Reply Keyboard) ──────────────
 @router.message(F.text.contains("پروفایل کاربر"))
 async def view_partner_profile_from_reply(
     message: Message,
     db_session: AsyncSession,
 ) -> None:
-    """
-    وقتی کاربر دکمه 'پروفایل کاربر' را از کیبورد پایین صفحه می‌زند،
-    ربات دیت فعال او را پیدا کرده و پروفایل پارتنرش را نمایش می‌دهد.
-    """
     caller_id = message.from_user.id
-    
-    # پیدا کردن مچ (دیت) فعالِ این کاربر
     active_match = await crud.get_active_match(db_session, caller_id)
     
     if not active_match:
         await message.answer("⚠️ شما در حال حاضر در دیت یا چت فعالی نیستید.")
         return
 
-    # پیدا کردن آیدی طرف مقابل
     partner_id = active_match.user_two_id if active_match.user_one_id == caller_id else active_match.user_one_id
-    
-    # گرفتن اطلاعات پارتنر از دیتابیس
     partner = await crud.get_user_by_tg_id(db_session, partner_id)
     if not partner:
         await message.answer("❌ پروفایل پارتنر یافت نشد.")
         return
 
-    # ساخت کارت پروفایل
     profile_card = _build_profile_card(partner)
-    
-    # بررسی وضعیت مسدودی برای دکمه بلاک/آنبلاک
     block_result = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == caller_id,
@@ -279,67 +223,41 @@ async def view_partner_profile_from_reply(
 # Section 2 – End Date Early (and Extracted Helpers)
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 async def execute_chat_termination(db_session: AsyncSession, match_id: int, caller_id: int) -> bool:
-    """
-    Core logic to safely terminate an active match, update the database,
-    clean up Redis keys, clear FSM states, and notify both users.
-    Returns True if successfully terminated, False if not found or already inactive.
-    """
-    # ── 1. Fetch match record ────────────────────────────────────────────────
     result = await db_session.execute(
         select(MatchHistory).where(MatchHistory.id == match_id)
     )
     match_history: MatchHistory | None = result.scalar_one_or_none()
 
-    if not match_history:
+    if not match_history or not match_history.is_active:
         return False
 
-    # ── Guard: already cancelled ─────────────────────────────────────────────
-    if not match_history.is_active:
-        return False
-
-    # ── 2. Deactivate the match ──────────────────────────────────────────────
     match_history.is_active = False
-    match_history.ended_at = datetime.utcnow()
+    match_history.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     try:
         await db_session.commit()
     except Exception as exc:
-        logger.error(
-            "Failed to deactivate match %s in the database: %s", match_id, exc
-        )
+        logger.error("Failed to deactivate match %s in the database: %s", match_id, exc)
         await db_session.rollback()
         return False
 
-    # ── 3. Stop timeout tracking from scheduler ──────────────────────────────
-    from matching_bot_project.bot.core.loader import dating_scheduler
-
     try:
         await dating_scheduler.redis.delete(f"date:timeout:{match_id}")
-        # Clean up users from matching queue / state
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_one_id}")
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_two_id}")
     except Exception as exc:
         logger.warning("Could not delete core Redis tracking keys for match cancellation %s: %s", match_id, exc)
 
-    # ── 4 & 5. Clear state and notify both participants ──────────────────────
     for uid in (match_history.user_one_id, match_history.user_two_id):
-        # Clear FSM regardless of which state the user is currently in
         ctx = get_user_state(uid)
         try:
             await ctx.clear()
         except Exception as exc:
-            logger.warning(
-                "Could not clear FSM state for user %s after match cancellation: %s",
-                uid,
-                exc,
-            )
+            logger.warning("Could not clear FSM state for user %s: %s", uid, exc)
 
-        # Notify and return to main menu
         try:
             if uid != caller_id:
-                # Target partner
                 await bot.send_message(
                     chat_id=uid,
                     text="طرف مقابل دیت را پایان داد.",
@@ -352,33 +270,23 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
                     reply_markup=get_main_menu_keyboard(),
                 )
         except Exception as exc:
-            logger.error(
-                "Failed to send cancellation notice to user %s: %s", uid, exc
-            )
+            logger.error("Failed to send cancellation notice to user %s: %s", uid, exc)
 
     return True
 
-# ── Reply button: "🛑 اتمام دیت" → show confirmation ─────────────────────
 @router.message(F.text == "🛑 اتمام دیت")
-async def request_end_date_confirm(
-    message: Message, db_session: AsyncSession
-) -> None:
+async def request_end_date_confirm(message: Message, db_session: AsyncSession) -> None:
     active_match = await crud.get_active_match(db_session, message.from_user.id)
     if not active_match:
-        await message.answer(
-            "⚠️ دیت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard()
-        )
+        await message.answer("⚠️ دیت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard())
         return
     await message.answer(
-        "⚠️ آیا مطمئن هستید که می‌خواهید دیت را پایان دهید؟\n"
-        "این عمل قابل بازگشت نیست.",
+        "⚠️ آیا مطمئن هستید که می‌خواهید دیت را پایان دهید؟\nاین عمل قابل بازگشت نیست.",
         reply_markup=get_end_date_confirm_keyboard(),
     )
 
 @router.callback_query(F.data == "confirm_end_date")
-async def confirm_end_date(
-    call: CallbackQuery, db_session: AsyncSession
-) -> None:
+async def confirm_end_date(call: CallbackQuery, db_session: AsyncSession) -> None:
     active_match = await crud.get_active_match(db_session, call.from_user.id)
     if not active_match:
         await call.answer("دیت فعالی یافت نشد.", show_alert=True)
@@ -386,8 +294,11 @@ async def confirm_end_date(
     await call.answer()
     try:
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
+        
     await execute_chat_termination(db_session, active_match.id, call.from_user.id)
 
 @router.callback_query(F.data == "cancel_end_date")
@@ -395,19 +306,16 @@ async def cancel_end_date(call: CallbackQuery) -> None:
     await call.answer("❌ لغو شد. دیت ادامه دارد.")
     try:
         await call.message.delete()
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error deleting message: {e}")
 
-# ── Reply button: "🛑 اتمام چت" → show confirmation ──────────────────────
 @router.message(F.text == "🛑 اتمام چت")
-async def request_end_chat_confirm(
-    message: Message, state: FSMContext
-) -> None:
+async def request_end_chat_confirm(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current != ChatStates.anonymous_chat_active.state:
-        await message.answer(
-            "⚠️ چت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard()
-        )
+        await message.answer("⚠️ چت فعالی یافت نشد.", reply_markup=get_main_menu_keyboard())
         return
     await message.answer(
         "⚠️ آیا مطمئن هستید که می‌خواهید چت را پایان دهید؟",
@@ -415,38 +323,35 @@ async def request_end_chat_confirm(
     )
 
 @router.callback_query(ChatStates.anonymous_chat_active, F.data == "confirm_end_chat")
-async def confirm_end_chat(
-    call: CallbackQuery, state: FSMContext, db_session: AsyncSession
-) -> None:
+async def confirm_end_chat(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
     await call.answer()
     try:
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
-    fsm_data         = await state.get_data()
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
+        
+    fsm_data = await state.get_data()
     match_history_id = fsm_data.get("match_history_id")
     if match_history_id:
         await execute_chat_termination(db_session, match_history_id, call.from_user.id)
     else:
         await state.clear()
-        await call.message.answer(
-            "به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard()
-        )
+        await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
 
 @router.callback_query(F.data == "cancel_end_chat")
 async def cancel_end_chat(call: CallbackQuery) -> None:
     await call.answer("❌ لغو شد. چت ادامه دارد.")
     try:
         await call.message.delete()
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error deleting message: {e}")
 
 @router.callback_query(F.data.startswith("end_date_early_"))
-async def end_date_early(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
-    """Callback wrapper for terminate date early logic."""
+async def end_date_early(call: CallbackQuery, db_session: AsyncSession) -> None:
     match_id = _parse_int_suffix(call.data, "end_date_early_")
     if match_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -458,31 +363,20 @@ async def end_date_early(
     else:
         await call.answer()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Section 3 – Block User (and Extracted Helpers)
+# Section 3 – Block User
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, blocked_id: int) -> tuple[bool, str]:
-    """
-    Core logic to block a user, updating MySQL BlockList and Redis block sets.
-    Terminates any active match between the two users.
-    Returns (Success: bool, Message: str).
-    """
     if blocker_id == blocked_id:
         return False, "❌ نمی‌توانید خودتان را مسدود کنید."
-
-    from sqlalchemy import select, or_, and_
-    from matching_bot_project.bot.core.loader import redis_client
 
     db_session.add(BlockList(blocker_id=blocker_id, blocked_id=blocked_id))
 
     try:
         await db_session.commit()
-        # Add to Redis Sets for atomic evaluation in matching engine
         await redis_client.sadd(f"user:{blocker_id}:blocks", str(blocked_id))
         
-        # Check for active match and terminate if exists
         match_query = await db_session.execute(
             select(MatchHistory).where(
                 MatchHistory.is_active == True,
@@ -494,54 +388,37 @@ async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, block
         )
         active_match = match_query.scalar_one_or_none()
         if active_match:
+            # Note: execute_chat_termination manages its own commits safely
             await execute_chat_termination(db_session, active_match.id, blocker_id)
 
         return True, "🚫 کاربر مسدود شد و دیگر به شما متصل نخواهد شد."
     except IntegrityError:
-        # The unique constraint on (blocker_id, blocked_id) was violated —
-        # the user is already blocked; no further action needed.
         await db_session.rollback()
         return False, "⚠️ این کاربر قبلاً مسدود شده است."
     except Exception as exc:
         await db_session.rollback()
-        logger.error(
-            "Unexpected error while user %s attempted to block user %s: %s",
-            blocker_id,
-            blocked_id,
-            exc,
-        )
+        logger.error("Unexpected error while user %s attempted to block user %s: %s", blocker_id, blocked_id, exc)
         return False, "❌ خطای سرور. لطفاً دوباره تلاش کنید."
     
-    
 @router.callback_query(F.data.startswith("block_user_"))
-async def block_user(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
-    """هندلر مسدود کردن با قابلیت تغییر داینامیک دکمه به آنبلاک"""
+async def block_user(call: CallbackQuery, db_session: AsyncSession) -> None:
     target_id = _parse_int_suffix(call.data, "block_user_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
 
     caller_id = call.from_user.id
-    from matching_bot_project.bot.core.loader import redis_client
-
-    # اجرای عملیات مسدودسازی در دیتابیس
     success, msg = await execute_user_blocking(db_session, caller_id, target_id)
 
     if success:
-        # ── اعمال محدودیت‌های کاربر (اسپم بلاک) ──
-        from datetime import datetime, timedelta
         limit_key = f"user:blocks_today:{caller_id}"
-
         blocks_count_str = await redis_client.get(limit_key)
         blocks_count = int(blocks_count_str) if blocks_count_str else 0
 
         pipe = redis_client.pipeline()
         pipe.incr(limit_key)
         if blocks_count == 0:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             seconds_to_midnight = int((midnight - now).total_seconds())
             pipe.expire(limit_key, seconds_to_midnight)
@@ -551,53 +428,31 @@ async def block_user(
 
         await pipe.execute()
 
-        # 🎯 ── تغییر داینامیک دکمه بلاک به آنبلاک ──
         if call.message and call.message.reply_markup:
             new_kb = []
             for row in call.message.reply_markup.inline_keyboard:
                 new_row = []
                 for btn in row:
                     if btn.callback_data == f"block_user_{target_id}":
-                        # تبدیل دکمه به آنبلاک در همان جای قبلی
                         new_row.append(InlineKeyboardButton(text="🔓 آنبلاک کاربر", callback_data=f"unblock_user_{target_id}"))
                     else:
                         new_row.append(btn)
                 new_kb.append(new_row)
             try:
                 await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
-            except Exception:
+            except TelegramBadRequest:
                 pass
+            except Exception as e:
+                logger.error(f"Unexpected error editing reply markup: {e}")
 
     await call.answer(msg, show_alert=True)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Section 4 – Direct Message Request (costs 1 coin)
+# Section 4 – Direct Message Request
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 @router.callback_query(F.data.startswith("req_direct_"))
-async def request_direct_message(
-    call: CallbackQuery,
-    state: FSMContext,
-    db_session: AsyncSession,
-) -> None:
-    """
-    Initiate an anonymous direct message request to another user.
-
-    Flow
-    ─────
-    1. Parse and validate the target ID.
-    2. Fetch the caller's DB record; verify coin balance ≥ 1.
-    3. Deduct 1 coin atomically and commit.
-    4. Transition the caller's FSM to ChatStates.typing_direct_message.
-    5. Persist the target's ID in the caller's FSM data.
-    6. Prompt the caller to type their message.
-
-    The coin is deducted *before* the FSM transition so that a crash between
-    the two steps does not leave the user in the input state without having
-    paid (the safer direction of failure).
-    """
+async def request_direct_message(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
     target_id = _parse_int_suffix(call.data, "req_direct_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -610,15 +465,10 @@ async def request_direct_message(
         await call.answer("❌ حساب کاربری شما یافت نشد.", show_alert=True)
         return
 
-    # ── Coin balance check ───────────────────────────────────────────────────
     if caller.coin_balance < 1:
-        await call.answer(
-            "❌ سکه‌های شما کافی نیست! برای دریافت سکه از منوی اصلی اقدام کنید.",
-            show_alert=True,
-        )
+        await call.answer("❌ سکه‌های شما کافی نیست! برای دریافت سکه از منوی اصلی اقدام کنید.", show_alert=True)
         return
 
-    # ── Deduct coin and commit ───────────────────────────────────────────────
     caller.coin_balance -= 1
     caller.total_spent_coins += 1
     try:
@@ -626,22 +476,14 @@ async def request_direct_message(
         await db_session.refresh(caller)
     except Exception as exc:
         await db_session.rollback()
-        logger.error(
-            "Failed to deduct coin from user %s for DM request to %s: %s",
-            caller_id,
-            target_id,
-            exc,
-        )
+        logger.error("Failed to deduct coin from user %s for DM request to %s: %s", caller_id, target_id, exc)
         await call.answer("❌ خطای سرور. لطفاً دوباره تلاش کنید.", show_alert=True)
         return
 
-    # ── FSM transition ───────────────────────────────────────────────────────
     await state.set_state(ChatStates.typing_direct_message)
     await state.update_data(target_direct_id=target_id)
-
     await call.answer()
 
-    # ── Prompt the caller ────────────────────────────────────────────────────
     try:
         await bot.send_message(
             chat_id=caller_id,
@@ -653,19 +495,14 @@ async def request_direct_message(
             reply_markup=get_cancel_keyboard(),
         )
     except Exception as exc:
-        logger.error(
-            "Failed to send DM prompt to user %s: %s", caller_id, exc
-        )
+        logger.error("Failed to send DM prompt to user %s: %s", caller_id, exc)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 5 – Gamification, Social, & Moderation 
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Like with gamification ──
 @router.callback_query(F.data.startswith("like_user_"))
-async def handle_like_user(
-    call: CallbackQuery, db_session: AsyncSession
-) -> None:
+async def handle_like_user(call: CallbackQuery, db_session: AsyncSession) -> None:
     target_id_str = call.data.removeprefix("like_user_")
     if not target_id_str.isdigit():
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -681,21 +518,16 @@ async def handle_like_user(
 
     total_likes = await crud.get_received_like_count(db_session, target_id)
 
-    # Milestone reward: every 20 likes received → 5 free coins
     if total_likes > 0 and total_likes % 20 == 0:
         target_user = await crud.get_user_by_tg_id(db_session, target_id)
         if target_user:
-            await crud.process_coin_transaction(
-                db_session, target_user, 5, f"جایزه دریافت {total_likes} لایک"
-            )
+            await crud.process_coin_transaction(db_session, target_user, 5, f"جایزه دریافت {total_likes} لایک")
             await db_session.commit()
             try:
                 await bot.send_message(
                     chat_id=target_id,
-                    text=(
-                        f"🎉 تبریک! پروفایل شما به <b>{total_likes} لایک</b> رسید!\n"
-                        "🎁 <b>۵ سکه</b> جایزه به حساب شما واریز شد. ✨"
-                    ),
+                    text=(f"🎉 تبریک! پروفایل شما به <b>{total_likes} لایک</b> رسید!\n"
+                          "🎁 <b>۵ سکه</b> جایزه به حساب شما واریز شد. ✨"),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -714,30 +546,19 @@ async def handle_like_user(
 
     await call.answer(f"❤️ لایک شد! (مجموع: {total_likes})", show_alert=True)
 
-# ── Add friend ──
 @router.callback_query(F.data.startswith("add_friend_"))
-async def handle_add_friend(
-    call: CallbackQuery, db_session: AsyncSession
-) -> None:
+async def handle_add_friend(call: CallbackQuery, db_session: AsyncSession) -> None:
     target_id_str = call.data.removeprefix("add_friend_")
     if not target_id_str.isdigit():
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
-    success = await crud.add_friend(
-        db_session, call.from_user.id, int(target_id_str)
-    )
+    success = await crud.add_friend(db_session, call.from_user.id, int(target_id_str))
     if success:
         await db_session.commit()
-    await call.answer(
-        "✅ به لیست دوستان اضافه شد." if success else "⚠️ قبلاً اضافه شده بود.",
-        show_alert=True,
-    )
+    await call.answer("✅ به لیست دوستان اضافه شد." if success else "⚠️ قبلاً اضافه شده بود.", show_alert=True)
 
-# ── Report flow ──
 @router.callback_query(F.data.startswith("report_user_"))
-async def show_report_reasons(
-    call: CallbackQuery
-) -> None:
+async def show_report_reasons(call: CallbackQuery) -> None:
     reported_id_str = call.data.removeprefix("report_user_")
     if not reported_id_str.isdigit():
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
@@ -749,10 +570,7 @@ async def show_report_reasons(
     )
 
 @router.callback_query(F.data.startswith("report_reason_"))
-async def process_report_reason(
-    call: CallbackQuery, db_session: AsyncSession
-) -> None:
-    # Format: report_reason_{reported_tg_id}_{reason_code}
+async def process_report_reason(call: CallbackQuery, db_session: AsyncSession) -> None:
     parts = call.data.removeprefix("report_reason_").rsplit("_", 1)
     if len(parts) != 2 or not parts[0].isdigit():
         await call.answer("❌ خطای پردازش.", show_alert=True)
@@ -775,16 +593,9 @@ async def process_report_reason(
     persian_reason = reason_map.get(reason_code, "نامشخص")
     reporter_id    = call.from_user.id
 
-    await crud.create_user_report(
-        session=db_session,
-        reporter_id=reporter_id,
-        reported_id=reported_id,
-        reason=persian_reason,
-    )
+    await crud.create_user_report(session=db_session, reporter_id=reporter_id, reported_id=reported_id, reason=persian_reason)
     await db_session.commit()
 
-    # Notify admins
-    from matching_bot_project.bot.core.config import settings
     admin_text = (
         "🚨 <b>گزارش تخلف جدید:</b>\n"
         f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
@@ -799,8 +610,11 @@ async def process_report_reason(
 
     try:
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
+        
     await call.answer("✅ گزارش شما ثبت شد. با تشکر.", show_alert=True)
 
 @router.callback_query(F.data == "report_cancel")
@@ -808,26 +622,20 @@ async def cancel_report_from_profile(call: CallbackQuery) -> None:
     await call.answer("❌ گزارش لغو شد.")
     try:
         await call.message.delete()
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error deleting message: {e}")
 
-
-# ── هندلر آنبلاک کردن ───────────────────────────────────────────────
 @router.callback_query(F.data.startswith("unblock_user_"))
-async def unblock_user(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
-    """هندلر آنبلاک کردن با قابلیت تغییر داینامیک دکمه به بلاک"""
+async def unblock_user(call: CallbackQuery, db_session: AsyncSession) -> None:
     target_id = _parse_int_suffix(call.data, "unblock_user_")
     if target_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
 
     caller_id = call.from_user.id
-    from matching_bot_project.bot.core.loader import redis_client
-
-    # حذف ریکورد مسدودیت از دیتابیس
+    
     await db_session.execute(
         delete(BlockList).where(
             BlockList.blocker_id == caller_id,
@@ -836,28 +644,26 @@ async def unblock_user(
     )
     await db_session.commit()
     
-    # حذف از کش ردیس
     await redis_client.srem(f"user:{caller_id}:blocks", str(target_id))
     await call.answer("🔓 کاربر با موفقیت از لیست سیاه شما خارج شد.", show_alert=True)
     
-    # 🎯 ── تغییر داینامیک دکمه آنبلاک به بلاک ──
     if call.message and call.message.reply_markup:
         new_kb = []
         for row in call.message.reply_markup.inline_keyboard:
             new_row = []
             for btn in row:
                 if btn.callback_data == f"unblock_user_{target_id}":
-                    # بازگرداندن دکمه به حالت مسدود کردن در همان جای قبلی
                     new_row.append(InlineKeyboardButton(text="🚫 بلاک کردن", callback_data=f"block_user_{target_id}"))
                 else:
                     new_row.append(btn)
             new_kb.append(new_row)
         try:
             await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_kb))
-        except Exception:
+        except TelegramBadRequest:
             pass
-        
-# ── هندلر درخواست چت و دیت ───────────────────────────────────────────────
+        except Exception as e:
+            logger.error(f"Unexpected error editing reply markup: {e}")
+
 @router.callback_query(F.data.startswith("req_chat_"))
 @router.callback_query(F.data.startswith("req_date_"))
 async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession) -> None:
@@ -871,7 +677,6 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         
     caller_id = call.from_user.id
     
-    # چک کردن وضعیت بلاک
     block_check = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == target_id,
@@ -884,7 +689,6 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
 
     req_type_str = "چت 💬" if is_chat else "دیت 💘"
     
-    # 🎯 دکمه‌های جدید اضافه شدند:
     target_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ قبول", callback_data=f"accept_req_{caller_id}"),
@@ -905,7 +709,6 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
     except Exception:
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
 
-# ── هندلر قبول کردن درخواست چت/دیت ───────────────────────────────────────────────
 @router.callback_query(F.data.startswith("accept_req_"))
 async def accept_request(call: CallbackQuery, db_session: AsyncSession):
     caller_id = _parse_int_suffix(call.data, "accept_req_")
@@ -913,25 +716,23 @@ async def accept_request(call: CallbackQuery, db_session: AsyncSession):
         return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
 
     target_id = call.from_user.id
-
     await call.answer("✅ درخواست قبول شد! در حال اتصال...", show_alert=False)
     
-    # ویرایش پیام برای شخصی که درخواست رو قبول کرده
     try:
         await call.message.edit_text("✅ شما درخواست این کاربر را قبول کردید. در حال اتصال... 🚀")
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing message text: {e}")
 
-    # ارسال نوتیفیکیشن شاد به فرستنده
     try:
         await bot.send_message(caller_id, "🎉 درخواست شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
     except Exception:
         pass
 
-    
+    # Resolve local import for matching logic safely
     from matching_bot_project.bot.handlers.matching import handle_successful_match
     await handle_successful_match(db_session, caller_id, target_id)
-
 
 @router.callback_query(F.data.startswith("reject_req_"))
 async def reject_request(call: CallbackQuery):
@@ -940,64 +741,54 @@ async def reject_request(call: CallbackQuery):
         return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
 
     await call.answer("❌ درخواست رد شد.", show_alert=False)
-    
     try:
         await call.message.edit_text("❌ شما این درخواست را رد کردید. (به فرستنده اطلاعی داده نشد)")
-    except Exception:
+    except TelegramBadRequest:
         pass
-
+    except Exception as e:
+        logger.error(f"Unexpected error editing message text: {e}")
 
 @router.callback_query(
     F.data.startswith("ans_"), 
     ~StateFilter(QuestionnaireStates.answering_questions, QuestionnaireStates.waiting_for_partner_answer)
 )
 async def stale_questionnaire_button(call: CallbackQuery) -> None:
-    """
-    هنگامی که دیت تمام شده و کاربر روی گزینه‌های سوالات (A, B, C, D) کلیک می‌کند.
-    علامت ~ (مد) یعنی: اگر کاربر در این وضعیت‌ها "نبود" این تابع اجرا شود.
-    """
     await call.answer("⚠️ این دیت پایان یافته است و پاسخ شما ثبت نمی‌شود.", show_alert=True)
     try:
-        
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
-
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
 
 @router.callback_query(
     F.data.in_({"approve_chat_yes", "approve_chat_no"}), 
     ~StateFilter(ChatStates.waiting_for_approval)
 )
 async def stale_approval_button(call: CallbackQuery) -> None:
-    """
-    هنگامی که درخواست چت در پایان پرسشنامه منقضی شده یا دیت پایان یافته است.
-    """
     await call.answer("⚠️ این درخواست منقضی شده یا دیت پایان یافته است.", show_alert=True)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
-
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
 
 @router.callback_query(
     F.data.startswith("vip_age_filter_"),
     ~StateFilter(VIPStates.waiting_for_age_filter)
 )
 async def stale_vip_button(call: CallbackQuery) -> None:
-    """
-    هنگامی که کاربر روی فیلتر سنی VIP قدیمی کلیک می‌کند.
-    """
     await call.answer("⚠️ این منو منقضی شده است. لطفاً مجدداً از منوی اصلی اقدام کنید.", show_alert=True)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing reply markup: {e}")
 
 @router.message(ChatStates.typing_direct_message)
 async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    """
-    دریافت پیام متنی دایرکت از فرستنده و ارسال آن به همراه کیبورد شیشه‌ای به گیرنده.
-    """
     if message.text == "❌ انصراف و منوی اصلی":
         await state.clear()
         await message.answer("عملیات ارسال دایرکت لغو شد.", reply_markup=get_main_menu_keyboard())
@@ -1015,7 +806,6 @@ async def process_direct_message(message: Message, state: FSMContext, db_session
         await state.clear()
         return
 
-    # ── بررسی وضعیت بلاک (آیا گیرنده، فرستنده را بلاک کرده است؟) ──
     block_check = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == target_id,
@@ -1029,8 +819,6 @@ async def process_direct_message(message: Message, state: FSMContext, db_session
         await state.clear()
         return
 
-    # 🎯 ساخت کیبورد شیشه‌ای دایرکت با چیدمان استاندارد و زیبا
-    # ردیف اول: پاسخ (تمام‌عرض) | ردیف دوم: بلاک و گزارش (نصف-نصف)
     target_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 پاسخ دادن", callback_data=f"req_direct_{caller_id}")],
         [
@@ -1040,7 +828,6 @@ async def process_direct_message(message: Message, state: FSMContext, db_session
     ])
 
     try:
-        # ارسال پیام به گیرنده با دکمه‌های جدید (متن زشت قدیمی به طور کامل حذف شد)
         await bot.send_message(
             chat_id=target_id,
             text=f"📩 <b>یک پیام دایرکت ناشناس دریافت کردید:</b>\n\n{html.escape(message.text)}",

@@ -26,6 +26,7 @@ from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,25 +153,22 @@ async def handle_like(call: CallbackQuery, state: FSMContext, db_session: AsyncS
     caller_id = call.from_user.id
 
     limit_key = f"user:{caller_id}:likes_today"
-    likes_count_str = await redis_client.get(limit_key)
-    likes_count = int(likes_count_str) if likes_count_str else 0
+    
+    # FIX: Use incr first to avoid race conditions
+    likes_count = await redis_client.incr(limit_key)
+    
+    # If it's the first like of the day, set expiration to midnight
+    if likes_count == 1:
+        now = datetime.utcnow()
+        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_to_midnight = int((midnight - now).total_seconds())
+        await redis_client.expire(limit_key, seconds_to_midnight)
 
-    if likes_count >= DAILY_LIKE_LIMIT:
+    if likes_count > DAILY_LIKE_LIMIT:
         await call.answer("🚫 سهمیه لایک روزانه شما به پایان رسیده است.", show_alert=True)
         await state.clear()
         await call.message.edit_text("🚫 سهمیه لایک روزانه شما (۳۰ از ۳۰) به پایان رسیده است. فردا دوباره تلاش کنید! ⏰")
         return
-
-    # Increment Redis counter
-    pipe = redis_client.pipeline()
-    pipe.incr(limit_key)
-    if likes_count == 0:
-        # Calculate seconds until next midnight to set TTL
-        now = datetime.utcnow()
-        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_to_midnight = int((midnight - now).total_seconds())
-        pipe.expire(limit_key, seconds_to_midnight)
-    await pipe.execute()
 
     # Save the like
     await save_like(db_session, caller_id, target_id, is_pass=False)
@@ -278,6 +276,11 @@ async def receive_province(message: Message, state: FSMContext) -> None:
 
     await state.update_data(province=province, selected_interests=[])
     await state.set_state(DiscoveryStates.choosing_interests)
+    
+    # FIX: Remove ReplyKeyboard before sending the InlineKeyboard
+    msg = await message.answer("✅ استان ثبت شد. در حال بارگذاری مرحله بعد...", reply_markup=ReplyKeyboardRemove())
+    await msg.delete() # Optional: delete the temporary message so the chat stays clean
+
     await message.answer(
         "🔍 <b>مرحله ۲/۳ — علایق</b>\n\n"
         "علایق مورد نظر خود را انتخاب کنید (می‌توانید چند مورد انتخاب کنید).\n"
@@ -309,7 +312,9 @@ async def toggle_discovery_interest(call: CallbackQuery, state: FSMContext) -> N
 async def confirm_interests(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.set_state(DiscoveryStates.choosing_age_range)
-    await call.message.answer(
+    
+    # FIX: Edit the existing message instead of sending a new one to prevent orphaned buttons
+    await call.message.edit_text(
         "🔍 <b>مرحله ۳/۳ — بازه سنی</b>\n\nبازه سنی مورد نظر را انتخاب کنید:",
         reply_markup=get_discovery_age_keyboard(),
         parse_mode="HTML",
@@ -345,14 +350,16 @@ async def receive_age_range(
     )
 
     if not candidates:
-        await call.message.answer(
+        # FIX: Also edit text here to clear the age selection buttons
+        await call.message.edit_text(
             "😔 متأسفانه کاربری با این مشخصات یافت نشد.\n"
             "فیلترها را تغییر دهید و دوباره جستجو کنید.",
             reply_markup=_restart_keyboard(),
         )
         return
 
-    await call.message.answer(
+    # Clear the age selection keyboard gracefully before showing results
+    await call.message.edit_text(
         f"✅ <b>{len(candidates)} کاربر یافت شد:</b>",
         parse_mode="HTML",
     )
@@ -380,6 +387,9 @@ async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.clear()
     await state.set_state(DiscoveryStates.choosing_province)
+    
+    # When restarting, ensure we send a fresh message to get the reply keyboard back
+    await call.message.delete()
     await call.message.answer(
         "🔍 <b>جستجوی کاربران — مرحله ۱/۳</b>\n\nاستان مورد نظر خود را انتخاب کنید:",
         reply_markup=_province_keyboard(),
@@ -391,4 +401,5 @@ async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
 async def disc_main_menu(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.clear()
+    await call.message.delete()
     await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
