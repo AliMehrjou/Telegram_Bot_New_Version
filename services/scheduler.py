@@ -1,6 +1,8 @@
+# services/scheduler.py
+
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict
 
 import redis.asyncio as aioredis
@@ -8,8 +10,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import update
 
-from matching_bot_project.database.models.models import MatchHistory
+from matching_bot_project.database.models.models import MatchHistory, User
+from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +148,7 @@ class DatingScheduler:
                         "برای مچ جدید از دکمه 🎯 در منوی اصلی استفاده کنید."
                     ),
                     parse_mode="Markdown",
+                    reply_markup=get_main_menu_keyboard(),
                 )
             except Exception:
                 pass  
@@ -158,3 +163,50 @@ class DatingScheduler:
         if not self._running_task or self._running_task.done():
             self._running_task = asyncio.create_task(self.verify_timeout_loops())
             logger.info("Dating Scheduler background polling successfully started.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Online Status Worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OnlineStatusWorker:
+    """
+    Background worker that periodically checks for users who are marked as online
+    but whose last activity was more than 5 minutes ago, and sets them offline.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker, idle_minutes: int = 5):
+        self.session_factory = session_factory
+        self.idle_minutes = idle_minutes
+        self._running_task: Optional[asyncio.Task] = None
+
+    async def sync_offline_users(self):
+        """
+        Runs every 60 seconds to clean up stale online statuses.
+        """
+        while True:
+            try:
+                async with self.session_factory() as session:
+                    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=self.idle_minutes)
+                    
+                    stmt = (
+                        update(User)
+                        .where(User.is_online.is_(True))
+                        .where(User.last_active < cutoff_time)
+                        .values(is_online=False)
+                    )
+                    
+                    result = await session.execute(stmt)
+                    if result.rowcount > 0:
+                        await session.commit()
+                        logger.info(f"Offline sync: Updated {result.rowcount} stale online users to offline.")
+            
+            except Exception as e:
+                logger.error(f"Error in background offline sync loop: {e}")
+
+            await asyncio.sleep(60)
+
+    def start_polling(self):
+        if not self._running_task or self._running_task.done():
+            self._running_task = asyncio.create_task(self.sync_offline_users())
+            logger.info("Online Status Worker background polling successfully started.")

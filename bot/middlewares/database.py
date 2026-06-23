@@ -1,3 +1,5 @@
+# bot/middlewares/database.py
+
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Awaitable
@@ -46,9 +48,9 @@ class DbSessionMiddleware(BaseMiddleware):
                                 user.last_active = datetime.now(timezone.utc)
                                 await redis_client.setex(redis_key, 300, "1")
 
-                                # session.commit() removed. The user object is now marked as 'dirty'
-                                # in SQLAlchemy's unit of work and will only flush/commit if the
-                                # downstream handler explicitly commits the session.
+                                # FIXED: Send the change to DB without concluding the transaction
+                                # so downstream handlers still govern the commit/rollback logic.
+                                await session.flush()
 
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)

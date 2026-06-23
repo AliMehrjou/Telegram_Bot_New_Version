@@ -1,14 +1,3 @@
-"""
-bot/handlers/matching.py
-
-Production-ready match-queue handler for the Telegram dating bot.
-
-Covers:
-  1. Queue cancellation  (text: "❌ انصراف و منوی اصلی")
-  2. Coin-gated match entry  (callbacks: match_random / match_boy / match_girl / match_nearby)
-  3. VIP age-filtered match entry
-  4. Employer-mandated 5-second match-initialisation countdown
-"""
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +27,9 @@ from matching_bot_project.bot.states.states import MatchingStates, Questionnaire
 from matching_bot_project.database.queries import crud
 from matching_bot_project.database.models.models import User
 
+# --- NEW CONSTANTS IMPORT ---
+from matching_bot_project.bot.core.constants import SystemMsg
+
 logger = logging.getLogger(__name__)
 router = Router(name="matching_handler")
 
@@ -45,11 +37,7 @@ router = Router(name="matching_handler")
 # Employer-mandated exact notification text (do not modify wording)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_MATCH_FOUND_TEXT = (
-    "🎉 تبریک شما با یک نفر برای رفتن به دیت متصل شدین ، "
-    "(از دکمه های پایین منو میتونید پروفایل کاربر را مشاهده کنید و یا دیت را تمام کنید.)"
-    "\n\nسوالات دیت ۵ ثانیه دیگه شروع میشه"
-)
+_MATCH_FOUND_TEXT = SystemMsg.MATCH_FOUND_TEXT
 
 _MATCH_TYPE_CONFIG = {
     "random": {
@@ -61,14 +49,14 @@ _MATCH_TYPE_CONFIG = {
     },
     "boy": {
         "cost": 1,
-        "target_gender": "boy",
+        "target_gender": "Male",    # ← Fixed: Mapped to Model values
         "uses_province": False,
         "label": "👦 دیت با پسر",
         "cost_display": "۱ سکه",
     },
     "girl": {
         "cost": 1,
-        "target_gender": "girl",
+        "target_gender": "Female",  # ← Fixed: Mapped to Model values
         "uses_province": False,
         "label": "👧 دیت با دختر",
         "cost_display": "۱ سکه",

@@ -23,7 +23,6 @@ async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]
     return result.scalar_one_or_none()
 
 async def get_user_by_public_id(session: AsyncSession, public_id: str) -> Optional[User]:
-    
     stmt = select(User).where(User.public_id == public_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
@@ -110,11 +109,11 @@ async def complete_user_registration(
     city: str,
     tags: str = None,
     profile_photo_file_id: str = None
-) -> bool:
-    """Completes profile, rewards 5 coins, and handles referral rewards."""
+) -> dict:
+    """Completes profile, rewards coins, handles referral rewards and returns status dictionary."""
     user = await get_user_by_tg_id(session, tg_id)
     if not user:
-        return False
+        return {"success": False, "referrer_tg_id": None}
         
     user.gender = gender
     user.age = age
@@ -127,19 +126,26 @@ async def complete_user_registration(
     # Reward for completing profile (+5 Coins)
     await process_coin_transaction(session, user, 5, "تکمیل اطلاعات پروفایل")
     
+    referrer_tg_id = None
+    
     # Process Referral Reward
     if user.referrer_id:
-        # جستجوی مستقیم بر اساس آیدی دیتابیس (چون referrer_id الان به id وصل است)
         stmt = select(User).where(User.id == user.referrer_id)
         result = await session.execute(stmt)
         referrer = result.scalar_one_or_none()
         
         if referrer:
+            # واریز سکه به دعوت‌کننده
             await process_coin_transaction(session, referrer, 5, f"پاداش دعوت کاربر {tg_id}")
-            logger.info(f"Referral Success: User {tg_id} completed onboarding. Referrer {referrer.tg_id} awarded 5 coins.")
+            # واریز سکه اضافه به کاربر دعوت‌شده
+            await process_coin_transaction(session, user, 5, "پاداش ورود از طریق لینک دعوت")
+            
+            referrer_tg_id = referrer.tg_id
+            logger.info(f"Referral Success: User {tg_id} completed onboarding. Referrer {referrer.tg_id} awarded 5 coins, invited user awarded extra 5 coins.")
 
     await session.flush()
-    return True
+    return {"success": True, "referrer_tg_id": referrer_tg_id}
+
 
 async def create_match_history(
     session: AsyncSession, 
@@ -174,8 +180,6 @@ async def get_active_match(session: AsyncSession, tg_id: int) -> Optional[MatchH
 
 async def get_random_questions(session: AsyncSession, limit: int = 20) -> List[Question]:
     """Retrieves random questions from the 60-question database bank."""
-    # We can use order_by(func.rand()) in MySQL or equivalent, or fetch a sample
-    # Here, using standard SQLAlchemy order limit. In production, order_by(func.random()) or MySQL order_by(func.rand()) is standard.
     from sqlalchemy.sql import func
     stmt = select(Question).order_by(func.rand()).limit(limit)
     res = await session.execute(stmt)
@@ -259,14 +263,12 @@ async def create_user_report(
 async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
     """Saves a like or pass interaction into the database and updates likes_count."""
     
-    # 1. Check existing record state to prevent duplicate increments
     check_stmt = select(UserLike.is_pass).where(
         and_(UserLike.liker_id == liker_id, UserLike.liked_id == liked_id)
     )
     existing_record = await session.execute(check_stmt)
     existing_is_pass = existing_record.scalar_one_or_none()
     
-    # 2. Update or insert the like record via on_duplicate_key_update
     stmt = insert(UserLike).values(
         liker_id=liker_id, 
         liked_id=liked_id, 
@@ -276,9 +278,6 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     )
     await session.execute(stmt)
     
-    # 3. Increment likes_count only if:
-    # - The new action is a "like" (not is_pass) AND
-    # - There was no previous record OR the previous record was a "pass"
     if not is_pass and (existing_is_pass is None or existing_is_pass is True):
         await session.execute(
             update(User)
@@ -294,6 +293,7 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     res = await session.execute(fetch_stmt)
     return res.scalar_one_or_none()
 
+
 async def update_silent_mode(session: AsyncSession, tg_id: int, silent_until: Optional[datetime]) -> bool:
     """آپدیت زمان سایلنت مود برای جلوگیری از دریافت نوتیفیکیشن مچ"""
     result = await session.execute(
@@ -304,6 +304,7 @@ async def update_silent_mode(session: AsyncSession, tg_id: int, silent_until: Op
     await session.flush()
     return result.rowcount > 0
 
+
 async def ensure_public_id_exists(session: AsyncSession, tg_id: int) -> str:
     """بررسی می‌کند که آیا کاربر public_id دارد یا نه، اگر نداشت برایش می‌سازد"""
     user = await get_user_by_tg_id(session, tg_id)
@@ -311,7 +312,6 @@ async def ensure_public_id_exists(session: AsyncSession, tg_id: int) -> str:
         return ""
         
     if not user.public_id:
-        
         characters = string.ascii_letters + string.digits
         new_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
         
@@ -323,23 +323,12 @@ async def ensure_public_id_exists(session: AsyncSession, tg_id: int) -> str:
 
 
 async def get_discovery_candidate(session: AsyncSession, current_user_id: int, current_user_gender: str) -> Optional[User]:
-    """
-    Fetches the next random profile for discovery based on strict filtering:
-    - Opposite gender
-    - Not self
-    - completed_registration = True
-    - Not in BlockList (mutual)
-    - Not already liked/passed by the current user
-    - Not invisible mode
-    - Orders by (Target Liked Caller DESC), RAND()
-    """
     target_gender = "Female" if current_user_gender.lower() == "male" else "Male"
     if current_user_gender.lower() == "boy": target_gender = "girl"
     if current_user_gender.lower() == "girl": target_gender = "boy"
 
     from sqlalchemy import select, case, func, and_, exists
 
-    # Exists Subquery: Users who have already liked the current user
     liked_me_exists = select(1).where(
         and_(
             UserLike.liker_id == User.tg_id, 
@@ -348,7 +337,6 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         )
     ).correlate(User).exists()
 
-    # Exists Subquery: Users the current user has already acted upon
     acted_by_me_exists = select(1).where(
         and_(
             UserLike.liker_id == current_user_id, 
@@ -356,7 +344,6 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         )
     ).correlate(User).exists()
 
-    # Exists Subquery: Users who blocked the current user
     blocked_me_exists = select(1).where(
         and_(
             BlockList.blocker_id == User.tg_id, 
@@ -364,7 +351,6 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         )
     ).correlate(User).exists()
 
-    # Exists Subquery: Users the current user blocked
     blocked_by_me_exists = select(1).where(
         and_(
             BlockList.blocker_id == current_user_id, 
@@ -372,7 +358,6 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         )
     ).correlate(User).exists()
 
-    # Priority condition: If target user is IN the list of users who liked the current user, priority = 1, else 0
     priority_expr = case(
         (liked_me_exists, 1),
         else_=0
@@ -417,7 +402,6 @@ async def save_user_answer(
     match_history_id: int, 
     selected_option: str
 ) -> UserAnswer:
-    """Saves answer option choice atomically and checks for synchronization rules."""
     ans = UserAnswer(
         user_id=user_id,
         question_id=question_id,
@@ -434,7 +418,6 @@ async def check_question_status(
     match_history_id: int, 
     question_id: int
 ) -> List[UserAnswer]:
-    """Gets all answers for a specific questionnaire query inside an active date session."""
     stmt = select(UserAnswer).where(
         and_(
             UserAnswer.match_history_id == match_history_id,
@@ -446,14 +429,12 @@ async def check_question_status(
 
 
 async def seed_sixty_question_bank_if_empty(session: AsyncSession):
-    """Ensures 60 production questionnaire models exist inside the table database."""
     stmt = select(Question).limit(1)
     res = await session.execute(stmt)
     if res.scalar_one_or_none():
-        return # Already seeded
+        return
         
     questions_data = [
-        # Relationship Preferences
         ("به نظر شما در رابطه عاطفی، کدام گزینه از اهمیت بشتری برخوردار است؟", "احترام متقابل و درک شرایط", "عشق پرشور و هیجان عاطفی", "عاطفی"),
         ("ترجیح می‌دهید اوقات فراغت خود را چگونه سپری کنید؟", "استراحت در خانه و تماشای فیلم", "تفریحات گروهی و سفرهای ماجراجویانه", "تفریحات"),
         ("اگر در بین زوجین اختلافی پیش بیاید، بهترین راه حل چیست؟", "گفتگوی منطقی و سریع درباره موضوع", "کمی صبوری و صحبت کردن در زمان مناسب‌تر", "حل‌مسئله"),
@@ -466,7 +447,6 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
         ("میزان فعالیت در شبکه‌های اجتماعی همسرتان چقدر برایتان مهم است؟", "باید محدود و تحت نظارت مشترک باشد", "یک حریم شخصی است و چندان مهم نیست", "فضای‌مجازی"),
     ]
     
-    # Add dummy/real lines to reach 60 items so user gets exact rich schema seeded
     for i in range(11, 81):
         questions_data.append((
             f"سوال نمونه {i}: نظر شما در مورد معیار زندگی مشترک برای انتخاب {i} چیست؟",
@@ -482,8 +462,8 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
     await session.commit()
     logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")
 
-async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
 
+async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     user = await get_user_by_tg_id(session, tg_id)
     if not user:
         return 0
@@ -492,9 +472,7 @@ async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     return result.scalar() or 0
 
 
-
 async def get_nearby_candidates(session: AsyncSession, current_user: User, limit: int = 5) -> List[User]:
-    """کاربران جنس مخالف که در همون استان و شهر کاربر هستن رو پیدا میکنه"""
     target_gender = "Female" if current_user.gender == "Male" else "Male"
     
     stmt = select(User).where(
@@ -512,8 +490,8 @@ async def get_nearby_candidates(session: AsyncSession, current_user: User, limit
     res = await session.execute(stmt)
     return list(res.scalars().all())
 
+
 async def get_received_like_count(session: AsyncSession, tg_id: int) -> int:
-    """Returns total number of non-pass likes received by a user."""
     stmt = select(func.count(UserLike.id)).where(
         UserLike.liked_id == tg_id,
         UserLike.is_pass  == False
@@ -522,12 +500,7 @@ async def get_received_like_count(session: AsyncSession, tg_id: int) -> int:
     return result.scalar() or 0
 
 
-async def add_friend(
-    session: AsyncSession,
-    user_id:   int,
-    friend_id: int
-) -> bool:
-    """Adds friend_id to user_id's friend list. Returns False if already exists."""
+async def add_friend(session: AsyncSession, user_id: int, friend_id: int) -> bool:
     from sqlalchemy.exc import IntegrityError
     try:
         session.add(FriendList(user_id=user_id, friend_id=friend_id))
@@ -538,16 +511,7 @@ async def add_friend(
         return False
 
 
-async def transfer_coins(
-    session:     AsyncSession,
-    from_tg_id:  int,
-    to_tg_id:    int,
-    amount:      int
-) -> tuple[bool, str]:
-    """
-    Atomically transfers `amount` coins from sender to receiver.
-    Returns (success: bool, message: str).
-    """
+async def transfer_coins(session: AsyncSession, from_tg_id: int, to_tg_id: int, amount: int) -> tuple[bool, str]:
     if amount <= 0:
         return False, "مقدار انتقال باید بیشتر از صفر باشد."
     sender   = await get_user_by_tg_id(session, from_tg_id)
@@ -570,10 +534,6 @@ async def find_interest_match_candidates(
     target_gender:        Optional[str] = None,
     limit:                int = 20
 ) -> List[User]:
-    """
-    Finds users sharing at least one interest with the caller.
-    Results are sorted by number of shared interests (descending).
-    """
     if not caller_interests_str:
         return []
     interests_list = [i.strip() for i in caller_interests_str.split(",") if i.strip()]
@@ -627,11 +587,6 @@ async def get_filtered_discovery_candidates(
     max_age:    int = 99,
     limit:      int = 10
 ) -> List[User]:
-    """
-    Returns users matching the discovery wizard filters:
-    optional province, optional interests (OR logic), and age range.
-    Block relationships in both directions are excluded.
-    """
     blocked_by_caller  = (
         select(BlockList.blocked_id)
         .where(BlockList.blocker_id == caller_tg_id)
@@ -666,7 +621,6 @@ async def get_filtered_discovery_candidates(
 
 
 async def get_user_friends(session: AsyncSession, tg_id: int) -> List[User]:
-    """Returns the list of users added to tg_id's friend list."""
     stmt = (
         select(User)
         .join(FriendList, FriendList.friend_id == User.tg_id)
@@ -676,14 +630,11 @@ async def get_user_friends(session: AsyncSession, tg_id: int) -> List[User]:
     return list(result.scalars().all())
 
 async def add_xp_to_user(session: AsyncSession, tg_id: int, amount: int) -> bool:
-    """اضافه کردن XP به کاربر و بررسی لول‌آپ شدن"""
     user = await get_user_by_tg_id(session, tg_id)
     if not user:
         return False
         
     user.xp_points += amount
-    
-
     next_level_xp = user.level * 100 
     
     if user.xp_points >= next_level_xp:

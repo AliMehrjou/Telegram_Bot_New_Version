@@ -39,7 +39,10 @@ class MatchingEngine:
             logger.info("Disconnected from Redis Matchmaking engine.")
 
     def _get_queue_key(self, gender: str, target_gender: Optional[str] = None, province: Optional[str] = None) -> str:
-        """Computes the queue key for the current user."""
+        """
+        Computes the queue key where the current user will WAIT.
+        Format: match:queue:want_{target}:{gender}
+        """
         if province:
             normalized_province = province.strip().lower().replace(" ", "_")
             return f"match:queue:province:{normalized_province}"
@@ -53,8 +56,14 @@ class MatchingEngine:
 
     def _get_target_queue_key(self, gender: str, target_gender: Optional[str] = None, province: Optional[str] = None) -> str:
         """
-        Computes the target queue key where the user should look for candidates.
-        Inverts the gender requirements for targeted matching.
+        Computes the target queue key where the current user should LOOK for candidates.
+        Format: match:queue:want_{gender}:{target}
+        
+        Logic Proof: 
+        If User A (female seeking male) is waiting, her queue_key is "want_male:female".
+        If User B (male seeking female) is searching, his target_queue_key resolves to
+        want_{B_gender}:{B_target} -> want_male:female.
+        This perfectly matches User A's queue_key. The symmetry is mathematically sound.
         """
         if province:
             normalized_province = province.strip().lower().replace(" ", "_")

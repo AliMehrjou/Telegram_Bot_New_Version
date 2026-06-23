@@ -1,44 +1,5 @@
-import logging
-
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from matching_bot_project.bot.states.states import ReportStates
-from matching_bot_project.database.queries.crud import create_user_report, get_user_by_tg_id
-from matching_bot_project.bot.handlers.interactions import execute_chat_termination, execute_user_blocking
-from matching_bot_project.bot.core.loader import bot
-from matching_bot_project.services.broadcast_worker import BroadcastWorker
-from matching_bot_project.bot.core.config import settings
-from matching_bot_project.database.models.models import MatchHistory
-
-logger = logging.getLogger(__name__)
-router = Router(name="safety_handler")
-
-def get_report_reasons_keyboard(match_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔞 محتوای نامناسب", callback_data=f"report_reason_inappropriate_{match_id}")],
-            [InlineKeyboardButton(text="💬 اسپم", callback_data=f"report_reason_spam_{match_id}")],
-            [InlineKeyboardButton(text="😠 آزار و اذیت", callback_data=f"report_reason_harassment_{match_id}")],
-            [InlineKeyboardButton(text="🤖 ربات/فیک", callback_data=f"report_reason_fake_{match_id}")],
-            [InlineKeyboardButton(text="❌ انصراف", callback_data="report_cancel")]
-        ]
-    )
-
-async def update_trust_score(session: AsyncSession, reported_id: int) -> None:
-    user = await get_user_by_tg_id(session, reported_id)
-    if not user:
-        return
-        
-    await session.refresh(user) # این خط را اضافه کن تا دیتای جدید جایگزین شود
-
-    user.trust_score = max(0, user.trust_score - 10)
-    if user.report_count >= 5:
-        user.is_banned = True
-        logger.info(f"User {reported_id} auto-banned.")
+from aiogram.filters import StateFilter
+from aiogram.types import Message # اطمینان از ایمپورت Message
 
 @router.callback_query(F.data.startswith("trigger_report_"))
 async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
@@ -49,8 +10,6 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
 
     target_id = int(target_id_str)
 
-    # We need the match_id to associate with the report.
-    # Check if they have an active match together
     stmt = select(MatchHistory.id).where(
         MatchHistory.is_active == True,
         (
@@ -65,18 +24,48 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
         await call.answer("هیچ چت فعالی با این کاربر یافت نشد.", show_alert=True)
         return
 
-    # Set FSM to keep context of the reported user
-    await state.set_state(ReportStates.selecting_reason)
-    await state.update_data(reported_id=target_id)
+    # به جای selecting_reason، استیت را روی درخواست مدرک قرار می‌دهیم
+    await state.set_state(ReportStates.waiting_for_evidence_before_reason)
+    await state.update_data(reported_id=target_id, match_id=match_id)
+
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ انصراف", callback_data="report_cancel")]
+    ])
 
     await call.message.answer(
-        "لطفاً دلیل گزارش خود را انتخاب کنید:",
-        reply_markup=get_report_reasons_keyboard(match_id)
+        "لطفاً پیامی که از طرف کاربر خاطی نقض قانون را نشان می‌دهد را فوروارد کنید.\n"
+        "(این مرحله اجباری است و بدون آن گزارش ثبت نمی‌شود)",
+        reply_markup=cancel_kb
     )
     await call.answer()
 
+@router.message(ReportStates.waiting_for_evidence_before_reason, F.forward_date)
+async def handle_evidence_for_safety(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    match_id = data.get("match_id")
+    
+    if not match_id:
+        await state.clear()
+        return
 
-@router.callback_query(ReportStates.selecting_reason, F.data == "report_cancel")
+    # ثبت اطلاعات پیام فوروارد شده در استیت
+    await state.update_data(
+        forward_chat_id=message.chat.id,
+        forward_message_id=message.message_id
+    )
+    
+    await state.set_state(ReportStates.selecting_reason)
+    await message.answer(
+        "مدرک دریافت شد. لطفاً دلیل گزارش خود را انتخاب کنید:",
+        reply_markup=get_report_reasons_keyboard(match_id)
+    )
+
+@router.message(ReportStates.waiting_for_evidence_before_reason, F.text)
+async def handle_evidence_text_warning(message: Message) -> None:
+    await message.answer("⚠️ لطفاً پیام کاربر خاطی را فوروارد کنید، نه متن آزاد.")
+
+# اصلاح استیت فیلتر برای دکمه لغو
+@router.callback_query(StateFilter(ReportStates.selecting_reason, ReportStates.waiting_for_evidence_before_reason), F.data == "report_cancel")
 async def cancel_report(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     try:
@@ -85,11 +74,12 @@ async def cancel_report(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.edit_text("❌ گزارش لغو شد.")
     await call.answer("گزارش لغو شد.")
 
-
 @router.callback_query(ReportStates.selecting_reason, F.data.startswith("report_reason_"))
 async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
     data = await state.get_data()
     reported_id = data.get("reported_id")
+    forward_chat_id = data.get("forward_chat_id")
+    forward_message_id = data.get("forward_message_id")
     reporter_id = call.from_user.id
 
     if not reported_id:
@@ -108,7 +98,6 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
 
     match_id = int(match_id_str)
 
-    # Map raw reason string to a nice Persian string
     reason_map = {
         "inappropriate": "محتوای نامناسب",
         "spam": "اسپم",
@@ -117,7 +106,6 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     }
     persian_reason = reason_map.get(reason, "نامشخص")
 
-    # 1. Save the report (this will increment report_count inside crud.py)
     await create_user_report(
         session=db_session,
         reporter_id=reporter_id,
@@ -126,22 +114,11 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
         match_history_id=match_id
     )
 
-    # 2. Update trust score & check for auto-ban
     await update_trust_score(db_session, reported_id)
-
-    # Flush explicitly just in case, before termination logic commits
     await db_session.flush()
-
-    # 3. Terminate the active chat (this handles the commit internally)
     await execute_chat_termination(db_session, match_id, reporter_id)
-
-    # 4. Automatically block the user (this handles the commit internally)
     await execute_user_blocking(db_session, reporter_id, reported_id)
 
-    # Note: execute_chat_termination and execute_user_blocking manage their own transactions.
-    # It is safe because we passed the same db_session and they execute sequential commits.
-
-    # 5. Alert the admins via BroadcastWorker
     admin_alert_text = (
         "🚨 <b>گزارش جدید:</b>\n"
         f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
@@ -150,8 +127,19 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
         f"مچ: #{match_id}"
     )
 
+    # فوروارد مدرک به ادمین‌ها پیش از ارسال نوتیفیکیشن
+    if forward_chat_id and forward_message_id:
+        for admin_id in settings.parsed_admin_ids:
+            try:
+                await bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=forward_chat_id,
+                    message_id=forward_message_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to forward evidence to admin {admin_id}: {e}")
+
     worker = BroadcastWorker(bot=bot)
-    # Broadcast asynchronously to admins with 40ms delay
     worker.start_background_broadcast(user_ids=settings.parsed_admin_ids, text=admin_alert_text, delay_ms=40)
 
     await state.clear()

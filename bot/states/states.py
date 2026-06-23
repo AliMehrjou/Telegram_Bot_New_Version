@@ -48,7 +48,8 @@ class DiscoveryStates(StatesGroup):
 
 class ReportStates(StatesGroup):
     selecting_reason = State()
-    waiting_for_report_description = State()  
+    waiting_for_report_description = State() 
+    waiting_for_evidence_before_reason = State() 
 
 class VIPStates(StatesGroup):
     waiting_for_age_filter = State()

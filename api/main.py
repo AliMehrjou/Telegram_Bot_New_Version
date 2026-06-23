@@ -13,6 +13,9 @@ from matching_bot_project.database.session import async_session_factory
 from matching_bot_project.database.models import models
 from matching_bot_project.bot.handlers.admin import _daily_report_loop
 
+# ---> NEW: ایمپورت کلاس پاکسازی کاربران آفلاین <---
+from matching_bot_project.services.scheduler import OnlineStatusWorker
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +43,10 @@ async def lifespan(app: FastAPI):
     
     # Active 3-mins date timeout scanner activation
     dating_scheduler.start_polling()
+
+    # ---> NEW: راه‌اندازی سرویس پاکسازی وضعیت آنلاین (Sync Offline Users) <---
+    online_worker = OnlineStatusWorker(async_session_factory, idle_minutes=5)
+    online_worker.start_polling()
 
     asyncio.create_task(_daily_report_loop(async_session_factory))
 

@@ -1,9 +1,3 @@
-"""
-bot/handlers/start.py — Production-Ready Onboarding & Main Menu Handler
-=========================================================================
-Telegram Anonymous Dating Bot | aiogram 3.x + FastAPI + SQLAlchemy 2.0 Async
-"""
-
 import html
 import json
 import logging
@@ -338,7 +332,7 @@ async def register_city(message: Message, state: FSMContext, db_session: AsyncSe
         return
 
     try:
-        success: bool = await crud.complete_user_registration(
+        result: dict = await crud.complete_user_registration(
             session=db_session,
             tg_id=tg_id,
             gender=gender,
@@ -346,6 +340,8 @@ async def register_city(message: Message, state: FSMContext, db_session: AsyncSe
             province=province,
             city=city,
         )
+        success = result.get("success", False)
+        referrer_tg_id = result.get("referrer_tg_id")
     except Exception as e:
         logger.exception("complete_user_registration raised unexpectedly for user %d", tg_id)
         await db_session.rollback()
@@ -357,14 +353,42 @@ async def register_city(message: Message, state: FSMContext, db_session: AsyncSe
         return
 
     await db_session.commit()
+    
+    # Send notification to the referrer if exists
+    if referrer_tg_id:
+        try:
+            await bot.send_message(
+                chat_id=referrer_tg_id,
+                text=(
+                    "🎉 <b>تبریک!</b>\n"
+                    "یک نفر با لینک دعوت شما ثبت‌نام را تکمیل کرد و "
+                    "🪙 <b>۵ سکه</b> به حساب شما واریز شد!"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.warning("Could not notify referrer %s: %s", referrer_tg_id, exc)
+
     await state.clear()
-    await message.answer(
-        "🥳 <b>ثبت‌نام شما با موفقیت تکمیل شد!</b>\n"
-        "🎁 <b>۵ سکه</b> به عنوان پاداش تکمیل پروفایل به حساب شما واریز شد.\n\n"
-        "حالا می‌توانید وارد مچ‌یابی شده و دیت جدیدی را آغاز کنید.\n"
-        "از منوی اصلی زیر استفاده کنید 👇",
-        reply_markup=get_main_menu_keyboard(),
-    )
+    
+    # Send dynamic success message to the newly registered user
+    if referrer_tg_id:
+        msg_text = (
+            "🥳 <b>ثبت‌نام شما با موفقیت تکمیل شد!</b>\n"
+            "🎁 <b>۵ سکه</b> به عنوان پاداش تکمیل پروفایل به حساب شما واریز شد.\n"
+            "🎁 <b>۵ سکه اضافه</b> نیز به عنوان پاداش ورود از طریق لینک دعوت دریافت کردید!\n\n"
+            "حالا می‌توانید وارد مچ‌یابی شده و دیت جدیدی را آغاز کنید.\n"
+            "از منوی اصلی زیر استفاده کنید 👇"
+        )
+    else:
+        msg_text = (
+            "🥳 <b>ثبت‌نام شما با موفقیت تکمیل شد!</b>\n"
+            "🎁 <b>۵ سکه</b> به عنوان پاداش تکمیل پروفایل به حساب شما واریز شد.\n\n"
+            "حالا می‌توانید وارد مچ‌یابی شده و دیت جدیدی را آغاز کنید.\n"
+            "از منوی اصلی زیر استفاده کنید 👇"
+        )
+        
+    await message.answer(msg_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Main Menu

@@ -1,33 +1,3 @@
-"""
-bot/handlers/questionnaire.py
-
-Manages the 20-question gamified compatibility survey that runs immediately
-after two users are matched and the 5-second countdown completes.
-
-Core contract
-─────────────
-Both participants MUST answer a question before the next one is delivered.
-Synchronisation is enforced via a Redis INCR counter that is atomically
-incremented by each user's answer.  The participant whose increment returns
-``2`` drives the entire advancement for both users.  This avoids the need
-for any locking beyond the atomic Redis operation itself.
-
-Handler map
-────────────────────────────────────────────────────────────────────────────
-QuestionnaireStates.answering_questions + F.data.startswith("ans_")
-    → register_question_response        (main answer → sync → advance flow)
-
-QuestionnaireStates.waiting_for_partner_answer  (any callback)
-    → ignore_input_on_wait_state        (reject all taps gracefully)
-
-Internal helpers (not handlers)
-────────────────────────────────────────────────────────────────────────────
-_parse_answer_callback      Extract (option, question_id) from callback_data.
-_fetch_question_pool        Read + validate the Redis question-ID list.
-_deliver_next_question      Advance both users to the next question.
-finalize_questionnaire_and_request_approval
-                            Score answers, set approval state, notify both.
-"""
 from __future__ import annotations
  
 import logging
@@ -48,6 +18,9 @@ from matching_bot_project.bot.keyboards.inline import (
 from matching_bot_project.bot.states.states import ChatStates, QuestionnaireStates
 from matching_bot_project.database.models.models import MatchHistory, Question, UserAnswer
 from matching_bot_project.database.queries import crud
+
+# --- NEW CONSTANTS IMPORT ---
+from matching_bot_project.bot.core.constants import SystemMsg
 
 
 logger = logging.getLogger(__name__)
@@ -72,16 +45,9 @@ _SYNC_KEY_TTL_SECONDS: int = 3600
 # Appended to the question message text when the user locks in their answer.
 # Using _WAITING_SUFFIX on the existing message avoids sending an extra
 # message and keeps the conversation thread compact.
-_WAITING_SUFFIX: str = "\n\n⏳ پاسخ شما ثبت شد. در انتظار پاسخ پارتنر..."
-
-# Toast text shown in the Telegram callback-answer notification.
-_ANSWER_ACK_TOAST: str = "✅ پاسخ ثبت شد"
-
-# Alert shown whenever a user taps anything while waiting for their partner.
-_PARTNER_WAIT_ALERT: str = (
-    "⏳ لطفا شکیبا باشید، پارتنر شما هنوز پاسخ نداده است."
-)
-
+_WAITING_SUFFIX: str = SystemMsg.WAITING_SUFFIX
+_ANSWER_ACK_TOAST: str = SystemMsg.ANSWER_ACK_TOAST
+_PARTNER_WAIT_ALERT: str = SystemMsg.PARTNER_WAIT_ALERT
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
