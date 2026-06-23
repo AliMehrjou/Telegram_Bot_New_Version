@@ -29,17 +29,16 @@ def get_report_reasons_keyboard(match_id: int) -> InlineKeyboardMarkup:
     )
 
 async def update_trust_score(session: AsyncSession, reported_id: int) -> None:
-    """Updates the user's trust score and automatically bans if they receive 5 or more reports."""
     user = await get_user_by_tg_id(session, reported_id)
     if not user:
         return
+        
+    await session.refresh(user) # این خط را اضافه کن تا دیتای جدید جایگزین شود
 
     user.trust_score = max(0, user.trust_score - 10)
-
     if user.report_count >= 5:
         user.is_banned = True
-        logger.info(f"User {reported_id} has been auto-banned due to exceeding report limits.")
-
+        logger.info(f"User {reported_id} auto-banned.")
 
 @router.callback_query(F.data.startswith("trigger_report_"))
 async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
@@ -80,7 +79,10 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
 @router.callback_query(ReportStates.selecting_reason, F.data == "report_cancel")
 async def cancel_report(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await call.message.delete()
+    try:
+        await call.message.delete()
+    except Exception:
+        await call.message.edit_text("❌ گزارش لغو شد.")
     await call.answer("گزارش لغو شد.")
 
 

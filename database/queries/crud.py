@@ -9,7 +9,6 @@ from sqlalchemy.dialects.mysql import insert
 from matching_bot_project.database.models.models import User
 from sqlalchemy import select
 from matching_bot_project.bot.core.loader import redis_client
-# مطمئن شو که ایمپورت مدل‌ها درسته
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
     CoinTransaction, FriendList, BlockList, UserLike, UserReport
@@ -259,7 +258,15 @@ async def create_user_report(
 
 async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
     """Saves a like or pass interaction into the database and updates likes_count."""
-    # 1. آپدیت رکورد لایک به صورت on_duplicate_key_update
+    
+    # 1. Check existing record state to prevent duplicate increments
+    check_stmt = select(UserLike.is_pass).where(
+        and_(UserLike.liker_id == liker_id, UserLike.liked_id == liked_id)
+    )
+    existing_record = await session.execute(check_stmt)
+    existing_is_pass = existing_record.scalar_one_or_none()
+    
+    # 2. Update or insert the like record via on_duplicate_key_update
     stmt = insert(UserLike).values(
         liker_id=liker_id, 
         liked_id=liked_id, 
@@ -269,8 +276,10 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     )
     await session.execute(stmt)
     
-    # 2. افزایش یا کاهش کانتر لایک در جدول User (فقط اگه Pass نبود)
-    if not is_pass:
+    # 3. Increment likes_count only if:
+    # - The new action is a "like" (not is_pass) AND
+    # - There was no previous record OR the previous record was a "pass"
+    if not is_pass and (existing_is_pass is None or existing_is_pass is True):
         await session.execute(
             update(User)
             .where(User.tg_id == liked_id)

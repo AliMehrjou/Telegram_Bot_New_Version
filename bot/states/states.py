@@ -12,17 +12,17 @@ class MatchingStates(StatesGroup):
     matched_active = State()
 
 class QuestionnaireStates(StatesGroup):
-    waiting_for_questions_to_start = State()  # جدید (برای وقفه ۵ ثانیه)
+    waiting_for_questions_to_start = State()  
     answering_questions = State()
     waiting_for_partner_answer = State()
 
 class ChatStates(StatesGroup):
     waiting_for_approval = State()
     anonymous_chat_active = State()
-    typing_direct_message = State()  # جدید (برای پیام ناشناس)
+    typing_direct_message = State()  
 
 class SupportStates(StatesGroup):
-    waiting_for_support_message = State()  # جدید
+    waiting_for_support_message = State()  
 
 class AdminStates(StatesGroup):
     waiting_for_support_reply       = State()
@@ -48,6 +48,7 @@ class DiscoveryStates(StatesGroup):
 
 class ReportStates(StatesGroup):
     selecting_reason = State()
+    waiting_for_report_description = State()  
 
 class VIPStates(StatesGroup):
     waiting_for_age_filter = State()
@@ -68,4 +69,3 @@ class PBroadcastStates(StatesGroup):
 class CoinTransferStates(StatesGroup):
     waiting_for_amount = State()
     confirming         = State()
- 

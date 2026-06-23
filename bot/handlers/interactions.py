@@ -41,14 +41,14 @@ from matching_bot_project.bot.states.states import (
     ChatStates,
     MatchingStates,
     QuestionnaireStates,
-    VIPStates
+    VIPStates,
+    ReportStates
 )
-from matching_bot_project.database.models.models import BlockList, MatchHistory
+from matching_bot_project.database.models.models import BlockList, MatchHistory, UserLike
 from matching_bot_project.database.queries import crud
 
 logger = logging.getLogger(__name__)
 router = Router(name="interactions_handler")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -513,6 +513,19 @@ async def handle_like_user(call: CallbackQuery, db_session: AsyncSession) -> Non
         await call.answer("نمی‌توانید خودتان را لایک کنید!", show_alert=True)
         return
 
+    # Check if a duplicate like already exists
+    check_stmt = select(UserLike).where(
+        and_(
+            UserLike.liker_id == caller_id,
+            UserLike.liked_id == target_id,
+            UserLike.is_pass == False
+        )
+    )
+    existing_like = await db_session.execute(check_stmt)
+    if existing_like.scalar_one_or_none():
+        await call.answer("قبلاً این کاربر را لایک کرده‌اید!", show_alert=True)
+        return
+
     await crud.save_like(db_session, caller_id, target_id, is_pass=False)
     await db_session.commit()
 
@@ -570,14 +583,44 @@ async def show_report_reasons(call: CallbackQuery) -> None:
     )
 
 @router.callback_query(F.data.startswith("report_reason_"))
-async def process_report_reason(call: CallbackQuery, db_session: AsyncSession) -> None:
+async def process_report_reason(call: CallbackQuery, state: FSMContext) -> None:
     parts = call.data.removeprefix("report_reason_").rsplit("_", 1)
     if len(parts) != 2 or not parts[0].isdigit():
         await call.answer("❌ خطای پردازش.", show_alert=True)
         return
+        
     reported_id = int(parts[0])
     reason_code = parts[1]
 
+    # Save reason and reported user for the next step
+    await state.update_data(reported_id=reported_id, reason_code=reason_code)
+    await state.set_state(ReportStates.waiting_for_report_description)
+
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ رد کردن و ثبت", callback_data="report_skip_description")]
+    ])
+
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+
+    await call.message.answer(
+        "لطفاً توضیحات بیشتری درباره تخلف کاربر بنویسید یا پیامی که قوانین را نقض کرده فروارد کنید (اختیاری):",
+        reply_markup=skip_kb
+    )
+    await call.answer()
+
+
+# Add new helper function for submitting reports
+async def _submit_report(
+    reporter_id: int,
+    reported_id: int,
+    reason_code: str,
+    description: str,
+    db_session: AsyncSession,
+    forwarded_message: Optional[Message] = None
+) -> None:
     reason_map = {
         "inappropriate_photo": "عکس نامناسب",
         "scammer":             "کلاهبردار",
@@ -591,31 +634,90 @@ async def process_report_reason(call: CallbackQuery, db_session: AsyncSession) -
         "other":               "سایر موارد",
     }
     persian_reason = reason_map.get(reason_code, "نامشخص")
-    reporter_id    = call.from_user.id
 
-    await crud.create_user_report(session=db_session, reporter_id=reporter_id, reported_id=reported_id, reason=persian_reason)
+    await crud.create_user_report(
+        session=db_session, 
+        reporter_id=reporter_id, 
+        reported_id=reported_id, 
+        reason=persian_reason
+    )
     await db_session.commit()
 
     admin_text = (
-        "🚨 <b>گزارش تخلف جدید:</b>\n"
-        f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
-        f"گزارش‌شده:   <code>{reported_id}</code>\n"
-        f"دلیل: {persian_reason}"
+        "🚨 New Report\n"
+        f"Reporter ID: {reporter_id}\n"
+        f"Reported ID: {reported_id}\n"
+        f"Reason: {persian_reason}\n"
+        f"Description: {description or 'ندارد'}"
     )
+    
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 پاسخ به گزارش‌دهنده", callback_data=f"admin_reply_{reporter_id}")]
+    ])
+
     for admin_id in settings.parsed_admin_ids:
         try:
-            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
-        except Exception:
-            pass
+            if forwarded_message:
+                await bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=forwarded_message.chat.id,
+                    message_id=forwarded_message.message_id
+                )
+            await bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=admin_kb)
+        except Exception as e:
+            logger.error(f"Failed to send report notification to admin {admin_id}: {e}")
 
+@router.message(ReportStates.waiting_for_report_description, F.forward_date)
+async def handle_report_forwarded_evidence(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    data = await state.get_data()
+    reported_id = data.get("reported_id")
+    reason_code = data.get("reason_code")
+    
+    if not reported_id or not reason_code:
+        await state.clear()
+        return
+
+    await _submit_report(message.from_user.id, reported_id, reason_code, "", db_session, forwarded_message=message)
+    await state.clear()
+    await message.answer("✅ گزارش شما همراه با مدرک ثبت شد. با تشکر.")
+
+@router.message(ReportStates.waiting_for_report_description, F.text)
+async def handle_report_text_description(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    data = await state.get_data()
+    reported_id = data.get("reported_id")
+    reason_code = data.get("reason_code")
+    
+    if not reported_id or not reason_code:
+        await state.clear()
+        return
+
+    await _submit_report(message.from_user.id, reported_id, reason_code, message.text, db_session)
+    await state.clear()
+    await message.answer("✅ گزارش شما به همراه توضیحات ثبت شد. با تشکر.")
+
+
+@router.callback_query(ReportStates.waiting_for_report_description, F.data == "report_skip_description")
+async def handle_report_skip_description(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
+    data = await state.get_data()
+    reported_id = data.get("reported_id")
+    reason_code = data.get("reason_code")
+    
+    if not reported_id or not reason_code:
+        await state.clear()
+        await call.answer("❌ خطای داده.", show_alert=True)
+        return
+
+    await _submit_report(call.from_user.id, reported_id, reason_code, "", db_session)
+    await state.clear()
+    
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
         pass
-    except Exception as e:
-        logger.error(f"Unexpected error editing reply markup: {e}")
         
     await call.answer("✅ گزارش شما ثبت شد. با تشکر.", show_alert=True)
+    await call.message.answer("✅ گزارش شما با موفقیت ثبت شد.")
+
 
 @router.callback_query(F.data == "report_cancel")
 async def cancel_report_from_profile(call: CallbackQuery) -> None:

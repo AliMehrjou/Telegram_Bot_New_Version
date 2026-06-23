@@ -347,11 +347,25 @@ async def register_question_response(
             )
         return
 
-    # ── Section 2.2 – Redis atomic sync counter ───────────────────────────────
+# ── Section 2.2 – Redis atomic sync using Set (Anti-Spam & Safe) ───────────
     sync_key = f"match:{match_history_id}:q:{question_id}:sync"
 
     try:
-        sync_count: int = await redis_client.incr(sync_key)
+        # دریافت آیدی کاربر جاری از کال‌بک تلگرام
+        # (اگر نام متغیر کال‌بک شما در ورودی تابع چیزی غیر از `call` است، آن را اصلاح کنید)
+        current_user_id = call.from_user.id
+        
+        # افزودن آیدی کاربر به مجموعه (Set) در ردیس به صورت اتمیک
+        # اگر کاربر قبلاً کلیک کرده باشد، ردیس مقدار 0 برمی‌گرداند.
+        added: int = await redis_client.sadd(sync_key, current_user_id)
+
+        if added == 0:
+            # کلیک تکراری پیش از اعمال کامل قفل FSM؛ درخواست بدون اثر نادیده گرفته می‌شود.
+            await call.answer()
+            return
+
+        # محاسبه تعداد کاربران منحصربه‌فردی که به این سوال پاسخ داده‌اند
+        sync_count: int = await redis_client.scard(sync_key)
 
         if sync_count == 1:
             # First to answer.  Set a safety TTL so abandoned matches do not
@@ -360,7 +374,7 @@ async def register_question_response(
             return
 
         if sync_count > 2:
-            # Guard against a third increment, which should be impossible given
+            # Guard against a third element, which should be impossible given
             # state locking but is handled defensively.
             logger.warning(
                 "sync_count=%s on key %r; expected 1 or 2. Ignoring.",
@@ -376,13 +390,14 @@ async def register_question_response(
             match_history_id,
             exc,
         )
-        # If Redis is unavailable we cannot safely determine who has answered.
-        # Abort rather than risk sending a duplicate question or skipping one.
+        # رفع خطای Soft-lock: بازگرداندن وضعیت کاربر به حالت مجاز برای پاسخگویی تا کاربر گیر نکند
+        # (اگر نام متغیر FSM شما در ورودی تابع چیزی غیر از `state` است، آن را اصلاح کنید)
+        await state.set_state(QuestionnaireStates.answering_questions)
+        await call.answer("⚠️ خطای موقت در سرور. لطفا مجدداً گزینه را انتخاب کنید.", show_alert=True)
         return
 
     # sync_count == 2: BOTH users have answered this question.
     # The current coroutine is responsible for driving the entire match forward.
-
     # ── Section 3.1 – Compute next question index ─────────────────────────────
     next_q_index: int = current_q_index + 1
 

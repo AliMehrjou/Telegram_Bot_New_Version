@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 import time
-
+from aiogram.exceptions import TelegramBadRequest
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,10 @@ async def open_vip_panel(call: CallbackQuery, db_session: AsyncSession):
 
     user = await get_user_by_tg_id(db_session, tg_id)
 
-    await call.message.edit_reply_markup(reply_markup=get_vip_panel_keyboard(user.invisible_mode))
+    try:
+        await call.message.edit_reply_markup(reply_markup=get_vip_panel_keyboard(user.invisible_mode))
+    except TelegramBadRequest:
+        pass 
     await call.answer()
 
 
@@ -116,7 +119,7 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
 
     # Check if partner is queuing or matched
     partner_state = await redis_client.hget(f"user:state:{partner_id}", "status")
-    if partner_state in ["matched", "chatting"]:
+    if partner_state in ["matched", "chatting", b"matched", b"chatting"]:
         await call.answer("❌ کاربر قبلی در حال حاضر در حال چت یا مچ شدن است.", show_alert=True)
         return
 

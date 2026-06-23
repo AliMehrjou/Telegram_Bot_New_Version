@@ -117,8 +117,14 @@ async def receive_transfer_amount(
         await message.reply(f"⚠️ موجودی کافی نیست. موجودی فعلی: {balance} سکه.")
         return
 
-    data        = await state.get_data()
-    target_id   = data["target_id"]
+    data = await state.get_data()
+    target_id = data.get("target_id")
+
+    if not target_id:
+        await state.clear()
+        await message.reply("⚠️ سشن شما منقضی شده است. لطفاً مجدداً تلاش کنید.")
+        return
+
     target_name = data.get("target_name", "کاربر")
 
     await state.update_data(amount=amount)

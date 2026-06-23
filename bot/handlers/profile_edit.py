@@ -9,7 +9,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update # <--- این ایمپورت اضافه شد
+from sqlalchemy import update 
 
 from matching_bot_project.bot.states.states import ProfileEditStates
 from matching_bot_project.database.queries.crud import update_user_profile
@@ -21,11 +21,8 @@ logger = logging.getLogger(__name__)
 router = Router(name="profile_edit_handler")
 
 try:
-    
     json_path = Path("json_files/iran_data.json")
-    
     if not json_path.exists():
-        
         json_path = Path("/app/json_files/iran_data.json")
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -67,7 +64,6 @@ def get_interests_keyboard(selected_interests: List[str]) -> InlineKeyboardMarku
 
 
 def get_provinces_reply_keyboard() -> ReplyKeyboardMarkup:
-    """ساخت کیبورد متنی معمولی برای استان‌ها از فایل JSON"""
     buttons = []
     provinces = list(IRAN_DATA.keys())
     for i in range(0, len(provinces), 2):
@@ -80,7 +76,6 @@ def get_provinces_reply_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_cities_reply_keyboard(province_name: str) -> ReplyKeyboardMarkup:
-    """ساخت کیبورد متنی معمولی برای شهرهای یک استان از فایل JSON"""
     buttons = []
     cities = IRAN_DATA.get(province_name, [])
     for i in range(0, len(cities), 2):
@@ -108,8 +103,12 @@ async def show_edit_menu(call: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
         [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests")],
         [InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
-        [InlineKeyboardButton(text="🎵 تغییر آهنگ پروفایل (گرامافون)", callback_data="change_voice")], # <--- این دکمه اضافه شد
-        [InlineKeyboardButton(text="📍 تغییر سن و محل سکونت", callback_data="change_demographics")]
+        [InlineKeyboardButton(text="🎵 تغییر آهنگ پروفایل", callback_data="change_voice")],
+        # 👇 این دو دکمه در یک خط قرار داده شدند 👇
+        [
+            InlineKeyboardButton(text="📍 تغییر محل سکونت", callback_data="change_location"),
+            InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")
+        ]
     ])
     
     text_content = "⚙️ <b>کدام بخش از پروفایل خود را می‌خواهید ویرایش کنید؟</b>"
@@ -215,23 +214,21 @@ async def process_new_photo(message: Message, state: FSMContext, db_session: Asy
     await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
 
-
-
-@router.callback_query(F.data == "change_demographics")
-async def start_demographics_edit(call: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(ProfileEditStates.updating_age)
-    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
-    await call.message.answer("📍 لطفاً سن جدید خود را به صورت عدد انگلیسی ارسال کنید:", reply_markup=cancel_kb)
-    await call.answer()
-
 @router.message(ProfileEditStates.waiting_for_photo, F.document)
 async def process_new_photo_document(message: Message) -> None:
     await message.answer("⚠️ لطفاً عکس را به صورت تصویری (Photo) ارسال کنید، نه به عنوان فایل!")
 
+# ==================== بخش مربوط به ویرایش سن ====================
 
+@router.callback_query(F.data == "change_age")
+async def start_age_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.updating_age)
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    await call.message.answer("🎂 لطفاً سن جدید خود را به صورت عدد انگلیسی ارسال کنید:", reply_markup=cancel_kb)
+    await call.answer()
 
 @router.message(ProfileEditStates.updating_age)
-async def process_new_age(message: Message, state: FSMContext) -> None:
+async def process_new_age(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     age_text = message.text or ""
     if age_text == "🔙 برگشت به منوی اصلی": return
 
@@ -239,10 +236,21 @@ async def process_new_age(message: Message, state: FSMContext) -> None:
         await message.answer("⚠️ لطفاً یک سن معتبر (عددی بین ۱۸ تا ۹۹) وارد کنید:")
         return
         
-    await state.update_data(age=int(age_text))
-    await state.set_state(ProfileEditStates.updating_province)
-    await message.answer("📍 سن شما ثبت شد.\n\nاکنون استان خود را از کیبورد زیر انتخاب کنید:", reply_markup=get_provinces_reply_keyboard())
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    if user:
+        user.age = int(age_text)
+        await db_session.commit()
+        await message.answer("✅ سن شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
+    
+    await state.clear()
 
+# ==================== بخش مربوط به ویرایش محل سکونت ====================
+
+@router.callback_query(F.data == "change_location")
+async def start_location_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ProfileEditStates.updating_province)
+    await call.message.answer("📍 لطفاً استان جدید خود را از کیبورد زیر انتخاب کنید:", reply_markup=get_provinces_reply_keyboard())
+    await call.answer()
 
 @router.message(ProfileEditStates.updating_province)
 async def process_edit_province(message: Message, state: FSMContext):
@@ -264,18 +272,18 @@ async def process_edit_city(message: Message, state: FSMContext, db_session: Asy
     if selected_city == "🔙 برگشت به منوی اصلی": return
 
     data = await state.get_data()
-    new_age = data.get("age")
     new_province = data.get("province")
     new_city = html.escape(selected_city.strip())
 
     user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
     if user:
-        user.age = new_age
         user.province = new_province
         user.city = new_city
         await db_session.commit()
-        await message.answer("🎉 مشخصات و محل سکونت شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
+        await message.answer("🎉 محل سکونت شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
+
+# ==================== بخش مربوط به ویرایش وویس ====================
 
 @router.callback_query(F.data == "change_voice")
 async def start_voice_edit(call: CallbackQuery, state: FSMContext) -> None:
@@ -299,7 +307,6 @@ async def process_new_voice(message: Message, state: FSMContext, db_session: Asy
         file_id = message.audio.file_id
 
     tg_id = message.from_user.id
-    
     
     await db_session.execute(
         update(User).where(User.tg_id == tg_id).values(profile_voice_file_id=file_id)

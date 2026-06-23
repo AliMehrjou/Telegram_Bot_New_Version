@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Callable, Dict, Awaitable
 from aiogram import BaseMiddleware
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import TelegramObject, CallbackQuery
 from matching_bot_project.bot.core.loader import redis_client
 
 logger = logging.getLogger(__name__)
@@ -17,14 +17,18 @@ class ThrottlingMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
-        event: Message | CallbackQuery,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        if not event.from_user:
+        
+        # روش استاندارد و امن Aiogram 3.x برای دریافت اطلاعات کاربر
+        user = data.get("event_from_user")
+        
+        if not user:
             return await handler(event, data)
 
-        user_id = event.from_user.id
+        user_id = user.id
         cache_key = f"throttling:{user_id}"
 
         try:
@@ -42,6 +46,7 @@ class ThrottlingMiddleware(BaseMiddleware):
 
         if not key_set:
             # Key already existed — user is sending too fast
+            # برای پاسخ به کال‌بک کوئری، نوع event را چک می‌کنیم
             if isinstance(event, CallbackQuery):
                 await event.answer("⚠️ لطفا اسپم نکنید! کمی صبور باشید.", show_alert=True)
             return None

@@ -7,9 +7,6 @@ import random
 from pathlib import Path
 from datetime import datetime, timedelta
 
-import string
-import random
-
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
