@@ -51,7 +51,7 @@ from matching_bot_project.bot.keyboards.reply import (
 )
 from matching_bot_project.database.models.models import MatchHistory
 from matching_bot_project.database.queries import crud
-
+from matching_bot_project.bot.core.constants import ReplyBtn
 
 logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")
@@ -382,7 +382,10 @@ async def register_chat_consent(
 # Handler 2 – Live anonymous message routing
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.message(ChatStates.anonymous_chat_active)
+@router.message(
+    ChatStates.anonymous_chat_active,
+    ~F.text.in_({ReplyBtn.PHASE_USER_PROFILE, ReplyBtn.CHAT_PHASE_END_CHAT, ReplyBtn.DATE_PHASE_END_DATE, ReplyBtn.END_CHAT, ReplyBtn.END_DATE})
+)
 async def route_anonymous_chat_message(message: Message, state: FSMContext) -> None:
     """
     Intercepts **every** inbound message from an active participant and relays

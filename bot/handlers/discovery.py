@@ -111,7 +111,7 @@ async def send_next_candidate(message_or_call, db_session: AsyncSession, state: 
         await message_or_call.answer(profile_card, reply_markup=keyboard, parse_mode="HTML")
 
 
-@router.message(ReplyBtn.DISCOVER)
+@router.message(F.text == ReplyBtn.DISCOVER)
 async def start_discovery(message: Message, state: FSMContext, db_session: AsyncSession):
     """Triggers the swipe discovery flow."""
     tg_id = message.from_user.id
@@ -163,10 +163,10 @@ async def handle_like(call: CallbackQuery, state: FSMContext, db_session: AsyncS
     
     # If it's the first like of the day, set expiration to midnight
     if likes_count == 1:
-    now_tehran = datetime.now(ZoneInfo("Asia/Tehran"))
-    midnight_tehran = (now_tehran + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    seconds_to_midnight = int((midnight_tehran - now_tehran).total_seconds())
-    await redis_client.expire(limit_key, seconds_to_midnight)
+        now_tehran = datetime.now(ZoneInfo("Asia/Tehran"))
+        midnight_tehran = (now_tehran + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_to_midnight = int((midnight_tehran - now_tehran).total_seconds())
+        await redis_client.expire(limit_key, seconds_to_midnight)
     
     if likes_count > DAILY_LIKE_LIMIT:
         await call.answer("🚫 سهمیه لایک روزانه شما به پایان رسیده است.", show_alert=True)
@@ -329,12 +329,18 @@ async def confirm_interests(call: CallbackQuery, state: FSMContext) -> None:
 async def receive_age_range(
     call: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ) -> None:
-    parts = call.data.removeprefix("disc_age_").split("_")
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        await call.answer("❌ خطای پردازش.", show_alert=True)
-        return
+    age_data = call.data.removeprefix("disc_age_")
+    
+    
+    if age_data == "all":
+        min_age, max_age = 0, 99
+    else:
+        parts = age_data.split("_")
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            await call.answer("❌ خطای پردازش.", show_alert=True)
+            return
+        min_age, max_age = int(parts[0]), int(parts[1])
 
-    min_age, max_age = int(parts[0]), int(parts[1])
     await call.answer()
 
     data       = await state.get_data()

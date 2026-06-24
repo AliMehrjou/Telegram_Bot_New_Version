@@ -382,17 +382,24 @@ async def enter_match_queue(
     await handle_successful_match(db_session, tg_id, matched_partner_id)
 
 
-@router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_filter_"))
+@router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_"))
 async def process_vip_age_filter(
     call: CallbackQuery,
     state: FSMContext,
     db_session: AsyncSession,
 ) -> None:
     """Processes the VIP age filter selection and delegates to the matching engine."""
-    parts = call.data.split("_")
-    min_age = int(parts[3])
-    max_age = int(parts[4])
-    match_type = parts[5]
+    
+    # حذف پیشوند مشترک برای استخراج تمیزتر دیتا (مثلاً خروجی: "18_25_boy" یا "all_girl")
+    data_parts = call.data.removeprefix("vip_age_").split("_")
+    
+    if data_parts[0] == "all":
+        min_age, max_age = 0, 99
+        match_type = data_parts[1] if len(data_parts) > 1 else "random"
+    else:
+        min_age = int(data_parts[0])
+        max_age = int(data_parts[1])
+        match_type = data_parts[2] if len(data_parts) > 2 else "random"
 
     data = await state.get_data()
     target_gender = data.get("target_gender")

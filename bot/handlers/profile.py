@@ -5,8 +5,7 @@ import json
 import string
 import random
 from pathlib import Path
-from datetime import datetime, timedelta
-
+from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
@@ -19,6 +18,9 @@ from matching_bot_project.bot.core.config import settings
 
 from matching_bot_project.bot.core.constants import ReplyBtn
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
+from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
+from matching_bot_project.database.models.models import BlockList
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 router = Router(name="profile_handler")
@@ -110,13 +112,16 @@ async def silent_mode_command(message: Message):
 @router.callback_query(F.data.startswith("silent_"))
 async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
     action = call.data.split("_")[1]
-    now = datetime.now()
+    
+    
+    now = datetime.now(timezone.utc).replace(tzinfo=None) 
     
     if action == "off":
         silent_until = None
         msg = "🔔 حالت سایلنت با موفقیت غیرفعال شد."
     elif action == "20m":
         silent_until = now + timedelta(minutes=20)
+
         msg = "🔕 ربات تا 20 دقیقه برای شما سایلنت شد."
     elif action == "1h":
         silent_until = now + timedelta(hours=1)
@@ -182,7 +187,7 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
     await message.answer(text=ref_text, parse_mode=ParseMode.HTML)
 
 
-@router.messageF.text == ReplyBtn.HELP)
+@router.message(F.text == ReplyBtn.HELP)
 async def view_help_panel(message: Message):
     """خواند داینامیک متن راهنمای ربات از فایل JSON موجود در json_files"""
     try:
@@ -216,7 +221,7 @@ async def view_help_panel(message: Message):
 @router.message(F.text.startswith("/user_"))
 async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
     command_text = message.text.strip()
-    public_id = command_text[1:]  # جدا کردن عبارت بعد از اسلش (مثلاً user_7mPUCm)
+    public_id = command_text[1:] 
 
     # جستجوی کاربر مورد نظر در دیتابیس
     target_user = await crud.get_user_by_public_id(db_session, public_id)
@@ -227,20 +232,35 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
 
     # بررسی اینکه آیا کاربر دکمه‌ی آیدی خودش را زده یا شخص دیگری
     is_own_profile = (message.from_user.id == target_user.tg_id)
-
-    # ساخت کارت پروفایل با استفاده از تابع یکپارچه
     profile_card = build_unified_profile_card(target_user, is_own_profile=is_own_profile)
 
-    # شخصی‌سازی کیبورد شیشه‌ای بر اساس مالکیت پروفایل
-    inline_kb = []
+    # ساخت کیبورد بر اساس مالکیت پروفایل
     if is_own_profile:
-        inline_kb.append([InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")])
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")]
+        ])
         profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
     else:
-        inline_kb.append([InlineKeyboardButton(text="💬 ارسال درخواست چت", callback_data=f"req_chat_{target_user.tg_id}")])
-        inline_kb.append([InlineKeyboardButton(text="❤️ لایک کردن پروفایل", callback_data=f"like_user_{target_user.tg_id}")])
+        # بررسی وضعیت بلاک بودن و دوستی برای نمایش دکمه‌های صحیح
+        block_result = await db_session.execute(
+            select(BlockList).where(
+                BlockList.blocker_id == message.from_user.id,
+                BlockList.blocked_id == target_user.tg_id,
+            )
+        )
+        is_blocked = block_result.scalar_one_or_none() is not None
+        
+        try:
+            already_friend = await crud.is_friend(db_session, message.from_user.id, target_user.tg_id)
+        except Exception:
+            already_friend = False
 
-    markup = InlineKeyboardMarkup(inline_keyboard=inline_kb)
+        # 👈 فراخوانی تابع جامع دکمه‌های پروفایل به جای دکمه‌های دستی
+        markup = get_user_action_keyboard(
+            target_tg_id=target_user.tg_id, 
+            is_blocked=is_blocked, 
+            is_friend=already_friend
+        )
 
     # ارسال مدیا یا متن ساختاریافته‌ی پروفایل
     if target_user.profile_photo_file_id:

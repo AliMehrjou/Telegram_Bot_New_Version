@@ -113,82 +113,46 @@ async def _send_profile_card(target_chat_id: int, user, action_kb: InlineKeyboar
 # Section 1 – View Profile
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.startswith("view_profile_"))
-async def view_partner_profile(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
-    target_id = _parse_int_suffix(call.data, "view_profile_")
-    if target_id is None:
-        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-        return
-
-    user = await crud.get_user_by_tg_id(db_session, target_id)
-    if not user:
-        await call.answer("❌ پروفایل کاربر یافت نشد.", show_alert=True)
-        return
-
-    block_result = await db_session.execute(
-        select(BlockList).where(
-            BlockList.blocker_id == call.from_user.id,
-            BlockList.blocked_id == target_id,
-        )
-    )
-    is_blocked = block_result.scalar_one_or_none() is not None
-    action_kb  = get_user_action_keyboard(target_id, is_blocked=is_blocked)
-
-    # ── Log View for VIP Target ──
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
-    if is_target_vip and call.from_user.id != target_id:
-        key = f"user:{target_id}:viewers"
-        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
-        await redis_client.expire(key, 604800)
-
-    await _send_profile_card(target_chat_id=call.from_user.id, user=user, action_kb=action_kb)
-    await call.answer()
-
-@router.callback_query(F.data.startswith("view_profile_"))
-async def view_partner_profile(
-    call: CallbackQuery,
-    db_session: AsyncSession,
-) -> None:
-    target_id = _parse_int_suffix(call.data, "view_profile_")
-    if target_id is None:
-        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-        return
-
-    user = await crud.get_user_by_tg_id(db_session, target_id)
-    if not user:
-        await call.answer("❌ پروفایل کاربر یافت نشد.", show_alert=True)
-        return
-
+@router.message(F.text == ReplyBtn.PHASE_USER_PROFILE)
+async def view_partner_profile_from_reply_btn(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
+    fsm_data = await state.get_data()
     
+    # پیدا کردن آیدی پارتنر از استیت (پشتیبانی از نام‌گذاری‌های مختلف در بات)
+    target_id = fsm_data.get("partner_id") or fsm_data.get("partner_tg_id")
+    
+    # اگر توی بخش سوالات باشن، آیدی از طریق match_history استخراج میشه
+    if not target_id:
+        match_id = fsm_data.get("match_history_id")
+        if match_id:
+            match_history = await db_session.get(MatchHistory, match_id)
+            if match_history:
+                target_id = match_history.user_two_id if match_history.user_one_id == message.from_user.id else match_history.user_one_id
+        
+    if not target_id:
+        await message.answer("⚠️ هنوز به کسی متصل نشده‌اید یا دیت پایان یافته است.")
+        return
+
+    user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not user:
+        await message.answer("❌ پروفایل کاربر یافت نشد.")
+        return
+
     block_result = await db_session.execute(
         select(BlockList).where(
-            BlockList.blocker_id == call.from_user.id,
+            BlockList.blocker_id == message.from_user.id,
             BlockList.blocked_id == target_id,
         )
     )
     is_blocked = block_result.scalar_one_or_none() is not None
     
-    
-    already_friend = await crud.is_friend(db_session, call.from_user.id, target_id)
+    try:
+        already_friend = await crud.is_friend(db_session, message.from_user.id, target_id)
+    except Exception:
+        already_friend = False
 
-    
-    action_kb  = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
+    action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
 
-    # ── Log View for VIP Target ──
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
-    if is_target_vip and call.from_user.id != target_id:
-        key = f"user:{target_id}:viewers"
-        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
-        await redis_client.expire(key, 604800)
-
-    await _send_profile_card(target_chat_id=call.from_user.id, user=user, action_kb=action_kb)
-    await call.answer()
-
+    await _send_profile_card(target_chat_id=message.from_user.id, user=user, action_kb=action_kb)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – End Date Early (and Extracted Helpers)
@@ -245,7 +209,7 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
 
     return True
 
-@router.message(ReplyBtn.END_DATE)
+@router.message(F.text == ReplyBtn.END_DATE)
 async def request_end_date_confirm(message: Message, db_session: AsyncSession) -> None:
     active_match = await crud.get_active_match(db_session, message.from_user.id)
     if not active_match:
@@ -282,7 +246,7 @@ async def cancel_end_date(call: CallbackQuery) -> None:
     except Exception as e:
         logger.error(f"Unexpected error deleting message: {e}")
 
-@router.message(ReplyBtn.END_CHAT)
+@router.message(F.text == ReplyBtn.END_CHAT)
 async def request_end_chat_confirm(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current != ChatStates.anonymous_chat_active.state:
@@ -817,16 +781,19 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
         
-    caller_id = call.from_user.id
+    caller_id = call.from_user.id 
     
-    # واکشی اطلاعات کاربر مقصد برای بررسی وضعیت سایلنت
+    
     target_user = await crud.get_user_by_tg_id(db_session, target_id)
     if not target_user:
         await call.answer("❌ کاربر مورد نظر یافت نشد.", show_alert=True)
         return
 
-    # بررسی فعال بودن حالت سایلنت کاربر مقصد
-    if target_user.silent_until and target_user.silent_until > datetime.now():
+    
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    
+    
+    if target_user.silent_until and target_user.silent_until > now_utc:
         await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت قرار دارد و امکان دریافت درخواست را ندارد.", show_alert=True)
         return
 
