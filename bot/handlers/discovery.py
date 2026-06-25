@@ -231,9 +231,10 @@ def _province_keyboard() -> ReplyKeyboardMarkup:
         if i + 1 < len(provinces):
             row.append(KeyboardButton(text=provinces[i + 1]))
         buttons.append(row)
-    buttons.append([KeyboardButton(text="🔙 برگشت به منوی اصلی")])
+    
+    
+    buttons.append([KeyboardButton(text=ReplyBtn.BACK_TO_MENU)])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
 
 def _restart_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -265,7 +266,8 @@ async def start_wizard(message: Message, state: FSMContext) -> None:
 async def receive_province(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
 
-    if text == "🔙 برگشت به منوی اصلی":
+    # اصلاح شد: استفاده از متغیر constants
+    if text == ReplyBtn.BACK_TO_MENU:
         await state.clear()
         await message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
         return
@@ -277,7 +279,7 @@ async def receive_province(message: Message, state: FSMContext) -> None:
     else:
         await message.answer("⚠️ لطفاً استان را از کیبورد انتخاب کنید.")
         return
-
+    
     await state.update_data(province=province, selected_interests=[])
     await state.set_state(DiscoveryStates.choosing_interests)
     

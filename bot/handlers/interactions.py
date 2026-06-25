@@ -32,7 +32,8 @@ from matching_bot_project.bot.states.states import (
     MatchingStates,
     QuestionnaireStates,
     VIPStates,
-    ReportStates
+    ReportStates,
+    
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory, UserLike
 from matching_bot_project.database.queries import crud
@@ -59,7 +60,12 @@ _GENDER_DISPLAY: dict[str, str] = {
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
+def _parse_int_suffix(data: str, prefix: str) -> Optional[int]:
+    try:
+        return int(data.removeprefix(prefix))
+    except ValueError:
+        return None
+    
 def get_user_state(user_id: int) -> FSMContext:
     return FSMContext(
         storage=dp.storage,
@@ -113,14 +119,48 @@ async def _send_profile_card(target_chat_id: int, user, action_kb: InlineKeyboar
 # Section 1 – View Profile
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.callback_query(F.data.startswith("view_profile_"))
+async def view_partner_profile(call: CallbackQuery, db_session: AsyncSession) -> None:
+    target_id = _parse_int_suffix(call.data, "view_profile_")
+    if target_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+        return
+
+    user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not user:
+        await call.answer("❌ پروفایل کاربر یافت نشد.", show_alert=True)
+        return
+
+    block_result = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == call.from_user.id,
+            BlockList.blocked_id == target_id,
+        )
+    )
+    is_blocked = block_result.scalar_one_or_none() is not None
+    
+    try:
+        already_friend = await crud.is_friend(db_session, call.from_user.id, target_id)
+    except Exception:
+        already_friend = False
+
+    action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
+    if is_target_vip and call.from_user.id != target_id:
+        key = f"user:{target_id}:viewers"
+        await redis_client.zadd(key, {str(call.from_user.id): time.time()})
+        await redis_client.expire(key, 604800)
+
+    await _send_profile_card(target_chat_id=call.from_user.id, user=user, action_kb=action_kb)
+    await call.answer()
+
 @router.message(F.text == ReplyBtn.PHASE_USER_PROFILE)
 async def view_partner_profile_from_reply_btn(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     fsm_data = await state.get_data()
-    
-    # پیدا کردن آیدی پارتنر از استیت (پشتیبانی از نام‌گذاری‌های مختلف در بات)
     target_id = fsm_data.get("partner_id") or fsm_data.get("partner_tg_id")
     
-    # اگر توی بخش سوالات باشن، آیدی از طریق match_history استخراج میشه
     if not target_id:
         match_id = fsm_data.get("match_history_id")
         if match_id:
@@ -151,7 +191,6 @@ async def view_partner_profile_from_reply_btn(message: Message, state: FSMContex
         already_friend = False
 
     action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
-
     await _send_profile_card(target_chat_id=message.from_user.id, user=user, action_kb=action_kb)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,9 +324,14 @@ async def cancel_end_chat(call: CallbackQuery) -> None:
     except Exception as e:
         logger.error(f"Unexpected error deleting message: {e}")
 
-@router.callback_query(F.data.startswith("end_date_early_"))
+@router.callback_query(F.data.startswith("end_date_"))
 async def end_date_early(call: CallbackQuery, db_session: AsyncSession) -> None:
-    match_id = _parse_int_suffix(call.data, "end_date_early_")
+    # پشتیبانی از هر دو حالت نام‌گذاری (برای جلوگیری از تداخل کدهای قدیمی و جدید)
+    if call.data.startswith("end_date_early_"):
+        match_id = _parse_int_suffix(call.data, "end_date_early_")
+    else:
+        match_id = _parse_int_suffix(call.data, "end_date_")
+        
     if match_id is None:
         await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
@@ -296,7 +340,7 @@ async def end_date_early(call: CallbackQuery, db_session: AsyncSession) -> None:
     if not success:
         await call.answer("⚠️ این دیت قبلا لغو شده یا وجود ندارد.", show_alert=True)
     else:
-        await call.answer()
+        await call.answer("دیت با موفقیت لغو شد.", show_alert=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 – Block User
@@ -400,14 +444,25 @@ async def request_direct_message(call: CallbackQuery, state: FSMContext, db_sess
         await call.answer("❌ حساب کاربری شما یافت نشد.", show_alert=True)
         return
 
-    # واکشی اطلاعات کاربر مقصد برای بررسی وضعیت سایلنت دایرکت
+    # 👈 بررسی اینکه آیا فرستنده توسط گیرنده مسدود (بلاک) شده است یا خیر
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    if block_check.scalar_one_or_none():
+        await call.answer("🚫 امکان ارسال دایرکت وجود ندارد (شما توسط این کاربر بلاک شده‌اید).", show_alert=True)
+        return
+
     target_user = await crud.get_user_by_tg_id(db_session, target_id)
     if not target_user:
         await call.answer("❌ کاربر مقصد یافت نشد.", show_alert=True)
         return
         
-    # بررسی فعال بودن حالت سایلنت کاربر مقصد پیش از کسر سکه
-    if target_user.silent_until and target_user.silent_until > datetime.now():
+    # 👈 اصلاح باگ تایم‌زون در سایلنت مود
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if target_user.silent_until and target_user.silent_until > now_utc:
         await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت است و امکان دریافت پیام دایرکت را ندارد.", show_alert=True)
         return
 
@@ -964,7 +1019,8 @@ async def stale_vip_button(call: CallbackQuery) -> None:
 
 @router.message(ChatStates.typing_direct_message)
 async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    if message.text == "❌ انصراف و منوی اصلی":
+    # اصلاح شد: استفاده از ReplyBtn.CANCEL به جای استرینگ دستی
+    if message.text == ReplyBtn.CANCEL:
         await state.clear()
         await message.answer("عملیات ارسال دایرکت لغو شد.", reply_markup=get_main_menu_keyboard())
         return

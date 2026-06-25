@@ -1,5 +1,46 @@
+"""
+bot/handlers/safety.py
+──────────────────────────────────────────────────────────────────────────────
+Isolated safety report handler for active live chat sessions.
+Requires forwarded message proof before selecting report reasons.
+──────────────────────────────────────────────────────────────────────────────
+"""
+import logging
+from typing import Optional
+from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
-from aiogram.types import Message # اطمینان از ایمپورت Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from matching_bot_project.bot.core.config import settings
+from matching_bot_project.bot.core.loader import bot
+from matching_bot_project.bot.states.states import ReportStates
+from matching_bot_project.database.models.models import MatchHistory
+from matching_bot_project.database.queries.crud import create_user_report
+from matching_bot_project.bot.handlers.interactions import execute_chat_termination, execute_user_blocking
+from matching_bot_project.services.broadcast_worker import BroadcastWorker
+
+logger = logging.getLogger(__name__)
+router = Router(name="safety_handler")
+
+def get_safety_report_reasons_keyboard(reported_id: int, match_id: int) -> InlineKeyboardMarkup:
+    """ساخت کیبورد اختصاصی گزارش داخل چت ناشناس جهت عدم تداخل با گزارش پروفایل عمومی"""
+    reasons = [
+        ("عکس نامناسب 📸", "inappropriate"),
+        ("اسپم و تبلیغات 📢", "spam"),
+        ("آزار و اذیت و فحاشی 🤬", "harassment"),
+        ("ربات یا حساب فیک 🤖", "fake")
+    ]
+    keyboard = [
+        [InlineKeyboardButton(text=label, callback_data=f"safety_reason_{reported_id}_{match_id}_{code}")]
+        for label, code in reasons
+    ]
+    keyboard.append([InlineKeyboardButton(text="❌ انصراف", callback_data="report_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 @router.callback_query(F.data.startswith("trigger_report_"))
 async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
@@ -24,7 +65,6 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
         await call.answer("هیچ چت فعالی با این کاربر یافت نشد.", show_alert=True)
         return
 
-    # به جای selecting_reason، استیت را روی درخواست مدرک قرار می‌دهیم
     await state.set_state(ReportStates.waiting_for_evidence_before_reason)
     await state.update_data(reported_id=target_id, match_id=match_id)
 
@@ -33,22 +73,25 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
     ])
 
     await call.message.answer(
-        "لطفاً پیامی که از طرف کاربر خاطی نقض قانون را نشان می‌دهد را فوروارد کنید.\n"
-        "(این مرحله اجباری است و بدون آن گزارش ثبت نمی‌شود)",
-        reply_markup=cancel_kb
+        "🚨 <b>ثبت گزارش تخلف در چت</b>\n\n"
+        "لطفاً پیامی که از طرف کاربر خاطی نقض قانون را نشان می‌دهد را روی این پیام <b>فوروارد (Forward)</b> کنید.\n"
+        "<i>(این مرحله جهت تایید گزارش توسط مدیریت الزامی است)</i>",
+        reply_markup=cancel_kb,
+        parse_mode="HTML"
     )
     await call.answer()
+
 
 @router.message(ReportStates.waiting_for_evidence_before_reason, F.forward_date)
 async def handle_evidence_for_safety(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     match_id = data.get("match_id")
+    reported_id = data.get("reported_id")
     
-    if not match_id:
+    if not match_id or not reported_id:
         await state.clear()
         return
 
-    # ثبت اطلاعات پیام فوروارد شده در استیت
     await state.update_data(
         forward_chat_id=message.chat.id,
         forward_message_id=message.message_id
@@ -56,25 +99,27 @@ async def handle_evidence_for_safety(message: Message, state: FSMContext) -> Non
     
     await state.set_state(ReportStates.selecting_reason)
     await message.answer(
-        "مدرک دریافت شد. لطفاً دلیل گزارش خود را انتخاب کنید:",
-        reply_markup=get_report_reasons_keyboard(match_id)
+        "✅ مدرک با موفقیت دریافت شد.\n\nلطفاً دلیل اصلی گزارش خود را از منوی زیر انتخاب کنید:",
+        reply_markup=get_safety_report_reasons_keyboard(reported_id, match_id)
     )
+
 
 @router.message(ReportStates.waiting_for_evidence_before_reason, F.text)
 async def handle_evidence_text_warning(message: Message) -> None:
-    await message.answer("⚠️ لطفاً پیام کاربر خاطی را فوروارد کنید، نه متن آزاد.")
+    await message.answer("⚠️ لطفاً پیام حریف خاطی را فوروارد کنید، نوشتن متن آزاد به عنوان مدرک معتبر نیست.")
 
-# اصلاح استیت فیلتر برای دکمه لغو
+
 @router.callback_query(StateFilter(ReportStates.selecting_reason, ReportStates.waiting_for_evidence_before_reason), F.data == "report_cancel")
 async def cancel_report(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     try:
         await call.message.delete()
     except Exception:
-        await call.message.edit_text("❌ گزارش لغو شد.")
+        await call.message.edit_text("❌ عملیات گزارش لغو شد.")
     await call.answer("گزارش لغو شد.")
 
-@router.callback_query(ReportStates.selecting_reason, F.data.startswith("report_reason_"))
+
+@router.callback_query(ReportStates.selecting_reason, F.data.startswith("safety_reason_"))
 async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
     data = await state.get_data()
     reported_id = data.get("reported_id")
@@ -82,30 +127,23 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     forward_message_id = data.get("forward_message_id")
     reporter_id = call.from_user.id
 
-    if not reported_id:
-        await state.clear()
-        await call.answer("خطا در پردازش. لطفاً دوباره تلاش کنید.", show_alert=True)
+    parts = call.data.removeprefix("safety_reason_").split("_")
+    if len(parts) != 3:
+        await call.answer("خطا در پردازش اطلاعات.", show_alert=True)
         return
-
-    parts = call.data.split("_")
+        
+    match_id = int(parts[1])
     reason = parts[2]
-    match_id_str = parts[3]
-
-    if not match_id_str.isdigit():
-        await state.clear()
-        await call.answer("خطا در پردازش.", show_alert=True)
-        return
-
-    match_id = int(match_id_str)
 
     reason_map = {
         "inappropriate": "محتوای نامناسب",
         "spam": "اسپم",
-        "harassment": "آزار و اذیت",
+        "harassment": "آزار و اذیت و فحاشی",
         "fake": "ربات/فیک"
     }
     persian_reason = reason_map.get(reason, "نامشخص")
 
+    # ذخیره گزارش در دیتابیس
     await create_user_report(
         session=db_session,
         reporter_id=reporter_id,
@@ -114,20 +152,21 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
         match_history_id=match_id
     )
 
-    await update_trust_score(db_session, reported_id)
-    await db_session.flush()
+    # اتمام چت فعال و بلاک کردن کاربر خاطی به صورت دوطرفه
     await execute_chat_termination(db_session, match_id, reporter_id)
     await execute_user_blocking(db_session, reporter_id, reported_id)
+    await db_session.commit()
 
     admin_alert_text = (
-        "🚨 <b>گزارش جدید:</b>\n"
-        f"گزارش‌دهنده: <code>{reporter_id}</code>\n"
-        f"گزارش‌شده: <code>{reported_id}</code>\n"
-        f"دلیل: {persian_reason}\n"
-        f"مچ: #{match_id}"
+        "🚨 <b>گزارش تخلف جدید (داخل چت ناشناس)</b>\n\n"
+        f"👤 شاکی: <code>{reporter_id}</code>\n"
+        f"🎯 متخلف: <code>{reported_id}</code>\n"
+        f"⚠️ دلیل: {persian_reason}\n"
+        f"🆔 شناسه مچ: #{match_id}\n\n"
+        f"👆 مدرک فوروارد شده بالا ضمیمه این گزارش است."
     )
 
-    # فوروارد مدرک به ادمین‌ها پیش از ارسال نوتیفیکیشن
+    # فوروارد مدارک مالتی‌مدیا به ادمین‌ها
     if forward_chat_id and forward_message_id:
         for admin_id in settings.parsed_admin_ids:
             try:
@@ -139,9 +178,10 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
             except Exception as e:
                 logger.error(f"Failed to forward evidence to admin {admin_id}: {e}")
 
+    # ارسال هشدار متنی به ادمین‌ها
     worker = BroadcastWorker(bot=bot)
     worker.start_background_broadcast(user_ids=settings.parsed_admin_ids, text=admin_alert_text, delay_ms=40)
 
     await state.clear()
-    await call.message.edit_text("✅ گزارش شما با موفقیت ثبت شد و کاربر مسدود و چت پایان یافت. با تشکر از همکاری شما.")
+    await call.message.edit_text("✅ گزارش شما با موفقیت ثبت شد. گفتگو پایان یافت و کاربر خاطی برای همیشه مسدود شد.")
     await call.answer()

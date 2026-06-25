@@ -28,7 +28,6 @@ from matching_bot_project.database.models.models import MatchHistory, User
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
-from matching_bot_project.bot.core.loader import redis_client
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -230,6 +229,7 @@ async def cmd_addcoinsvip(message: Message, db_session: AsyncSession):
 
 @router.message(Command("banuser"))
 async def cmd_banuser(message: Message, db_session: AsyncSession):
+    from matching_bot_project.bot.core.config import settings  # اگر بالای فایل نیست
     args = message.text.split()
     if len(args) != 2:
         return await message.answer("Usage: /banuser <tg_id>")
@@ -239,17 +239,18 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
     except ValueError:
         return await message.answer("Invalid tg_id.")
 
+    # ── چک ادمین بودن قبل از بن کردن ──
+    if tg_id in settings.parsed_admin_ids:
+        return await message.answer("⚠️ شما نمی‌توانید یک ادمین را مسدود کنید!")
+
     user = await get_user_by_tg_id(db_session, tg_id)
     if not user:
         return await message.answer("User not found.")
 
     user.is_banned = True
     await db_session.commit()
-
     await message.answer(f"User {tg_id} has been banned.")
 
-    if tg_id in settings.parsed_admin_ids:
-        return await message.answer("⚠️ شما نمی‌توانید یک ادمین را مسدود کنید!")
 @router.message(Command("unbanuser"))
 async def cmd_unbanuser(message: Message, db_session: AsyncSession):
     args = message.text.split()
@@ -329,6 +330,18 @@ async def cmd_setvip(message: Message, db_session: AsyncSession):
     await db_session.commit()
 
     await message.answer(f"User {tg_id} is now VIP for {days} days.")
+
+    # 🟢 اطلاع‌رسانی مستقیم به کاربر
+    try:
+        await bot.send_message(
+            chat_id=tg_id,
+            text=f"🎉 <b>تبریک!</b>\n\nاشتراک ویژه (VIP) شما از طرف مدیریت فعال شد.\nشما برای <b>{days} روز</b> آینده به تمامی امکانات ویژه دسترسی خواهید داشت.",
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await message.answer(f"⚠️ پیام به {tg_id} ارسال نشد (کاربر ربات را بلاک کرده است).")
+    except TelegramAPIError as e:
+        logger.error(f"Failed to send VIP notification to {tg_id}: {e}")
 
 
 @router.message(Command("resetprofile"))
@@ -1046,11 +1059,8 @@ _AUTO_REPORT_ADMIN_IDS: set[int] = set()
  
  
 async def build_daily_report(db_session: AsyncSession) -> str:
-    """
-    ساخت متن گزارش روزانه.
-    تمام کوئری‌ها برای بازه ۲۴ ساعت گذشته هستن.
-    """
-    now   = datetime.utcnow()
+
+    now   = datetime.now(timezone.utc)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday = today - timedelta(days=1)
  
@@ -1222,21 +1232,31 @@ async def cmd_addsponsor(message: Message):
     except ValueError:
         target_chat = channel_id
 
-    
     try:
         bot_member = await bot.get_chat_member(chat_id=target_chat, user_id=bot.id)
         if bot_member.status not in ("administrator", "creator"):
-            return await message.answer("⚠️ <b>خطا:</b> ربات در این کانال ادمین نیست!\nابتدا ربات را در کانال ادمین کنید.")
+            return await message.answer(
+                "⚠️ <b>خطا:</b> ربات در این کانال ادمین نیست!\nابتدا ربات را در کانال ادمین کنید.",
+                parse_mode="HTML"
+            )
     except TelegramAPIError as e:
         logger.error(f"Failed to verify sponsor channel {target_chat}: {e}")
         return await message.answer(
-            f"⚠️ <b>خطا در دسترسی به کانال:</b>\nآیدی کانال نامعتبر است یا ربات در آن عضو نیست.\nکد خطا: <code>{e}</code>", 
+            f"⚠️ <b>خطا در دسترسی به کانال:</b>\nآیدی کانال نامعتبر است یا ربات در آن عضو نیست.\nکد خطا: <code>{e}</code>",
             parse_mode="HTML"
         )
 
-    
     await redis_client.hset("bot:sponsors", channel_id, invite_link)
-    await message.answer(f"✅ کانال <code>{channel_id}</code> با موفقیت تایید و به لیست اسپانسرها اضافه شد.", parse_mode="HTML")
+
+    await redis_client.incr("bot:sponsors_version")
+    # ──────────────────────────────────────────────────────────────────────
+
+    await message.answer(
+        f"✅ کانال <code>{channel_id}</code> با موفقیت تایید و به لیست اسپانسرها اضافه شد.\n"
+        f"⚡️ کش عضویت تمام کاربران پاکسازی شد — دفعه بعد از ورود چک مجدد انجام میشه.",
+        parse_mode="HTML"
+    )
+
 @router.message(Command("removesponsor"))
 async def cmd_removesponsor(message: Message):
     """حذف کانال اسپانسر"""
@@ -1253,10 +1273,17 @@ async def cmd_removesponsor(message: Message):
     deleted = await redis_client.hdel("bot:sponsors", channel_id)
     
     if deleted:
-        await message.answer(f"🗑 کانال <code>{channel_id}</code> از لیست اسپانسرها حذف شد.", parse_mode="HTML")
+        # ── Invalidate کش force_join ──
+        await redis_client.incr("bot:sponsors_version")
+        # ─────────────────────────────
+        await message.answer(
+            f"🗑 کانال <code>{channel_id}</code> از لیست اسپانسرها حذف شد.\n"
+            f"⚡️ کش عضویت کاربران ریست شد.",
+            parse_mode="HTML"
+        )
     else:
         await message.answer("⚠️ این کانال در لیست اسپانسرها یافت نشد.", parse_mode="HTML")
-
+        
 @router.message(Command("sponsors"))
 async def cmd_sponsors(message: Message):
     """مشاهده لیست اسپانسرها"""
@@ -1266,7 +1293,10 @@ async def cmd_sponsors(message: Message):
     
     text = "📢 <b>لیست کانال‌های اسپانسر:</b>\n\n"
     for i, (ch_id, link) in enumerate(sponsors.items(), 1):
-        text += f"<b>{i}.</b> شناسه: <code>{ch_id.decode('utf-8')}</code>\nلینک: {link.decode('utf-8')}\n\n"
+        # اگر bytes بود decode کن، اگر str بود همونطور استفاده کن
+        ch_id_str = ch_id.decode('utf-8') if isinstance(ch_id, bytes) else ch_id
+        link_str  = link.decode('utf-8')  if isinstance(link, bytes)  else link
+        text += f"<b>{i}.</b> شناسه: <code>{ch_id_str}</code>\nلینک: {link_str}\n\n"
         
     await message.answer(text, parse_mode="HTML")
  

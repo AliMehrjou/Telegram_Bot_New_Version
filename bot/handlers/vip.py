@@ -82,7 +82,7 @@ async def show_profile_viewers(call: CallbackQuery, db_session: AsyncSession):
     await call.answer()
 
 
-@router.callback_query(F.data == "vip_toggle_invisible")
+@router.callback_query(F.data == "vip_toggle_inv")
 async def toggle_invisible_mode(call: CallbackQuery, db_session: AsyncSession):
     tg_id = call.from_user.id
     if not await is_vip(db_session, tg_id):
@@ -95,8 +95,12 @@ async def toggle_invisible_mode(call: CallbackQuery, db_session: AsyncSession):
 
     status = "روشن 🟢" if user.invisible_mode else "خاموش 🔴"
     await call.answer(f"حالت مخفی {status} شد.", show_alert=True)
-    await call.message.edit_reply_markup(reply_markup=get_vip_panel_keyboard(user.invisible_mode))
-
+    
+    
+    try:
+        await call.message.edit_reply_markup(reply_markup=get_vip_panel_keyboard(user.invisible_mode))
+    except TelegramBadRequest:
+        pass
 
 @router.callback_query(F.data == "vip_rematch")
 async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession):

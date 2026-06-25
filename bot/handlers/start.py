@@ -82,9 +82,10 @@ GENDER_LABELS: dict[str, str] = {
 #  /start  — Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 def get_gender_reply_keyboard() -> ReplyKeyboardMarkup:
+   
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="آقا 🙋‍♂️"), KeyboardButton(text="خانم 🙋‍♀️")]
+            [KeyboardButton(text=GENDER_LABELS["Male"]), KeyboardButton(text=GENDER_LABELS["Female"])]
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -220,11 +221,12 @@ async def accept_terms(call: CallbackQuery, state: FSMContext) -> None:
 #  Onboarding FSM — Step 1: Gender
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(OnboardingStates.waiting_for_gender, F.text.in_({"آقا 🙋‍♂️", "خانم 🙋‍♀️"}))
+@router.message(OnboardingStates.waiting_for_gender, F.text.in_(set(GENDER_LABELS.values())))
 async def register_gender(message: Message, state: FSMContext) -> None:
     raw_text = message.text
-    gender = "Male" if "آقا" in raw_text else "Female"
-    gender_label = "آقا 🙋‍♂️" if gender == "Male" else "خانم 🙋‍♀️"
+    # اصلاح شد: بررسی تطابق با متغیرها
+    gender = "Male" if raw_text == GENDER_LABELS["Male"] else "Female"
+    gender_label = GENDER_LABELS[gender]
 
     await state.update_data(gender=gender)
     await state.set_state(OnboardingStates.waiting_for_age)
@@ -235,6 +237,7 @@ async def register_gender(message: Message, state: FSMContext) -> None:
         reply_markup=get_cancel_keyboard(),
         parse_mode="HTML"
     )
+
 
 @router.message(OnboardingStates.waiting_for_gender)
 async def reject_unknown_gender_message(message: Message) -> None:
@@ -663,3 +666,78 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
+    
+@router.message(F.text == ReplyBtn.MY_PROFILE)
+async def show_my_profile_menu(message: Message, db_session: AsyncSession) -> None:
+    tg_id = message.from_user.id
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
+    if not user or not user.completed_registration:
+        await message.answer("⚠️ ابتدا باید ثبت‌نام خود را تکمیل کنید. /start")
+        return
+
+    from matching_bot_project.bot.handlers.interactions import _build_profile_card
+    profile_card = _build_profile_card(user)
+    
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ ویرایش مشخصات پروفایل", callback_data="edit_profile_triggered")]
+    ])
+
+    try:
+        if user.profile_photo_file_id:
+            await bot.send_photo(
+                chat_id=tg_id,
+                photo=user.profile_photo_file_id,
+                caption=profile_card[:1024],
+                parse_mode="HTML",
+                reply_markup=inline_kb,
+            )
+        else:
+            await bot.send_message(
+                chat_id=tg_id,
+                text=profile_card,
+                parse_mode="HTML",
+                reply_markup=inline_kb,
+            )
+            
+        if user.profile_voice_file_id:
+            await bot.send_voice(
+                chat_id=tg_id,
+                voice=user.profile_voice_file_id,
+                caption="🎵 <b>آهنگ/وویس پروفایل شما</b>",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"Failed to show own profile: {e}")
+
+
+@router.message(F.text == ReplyBtn.REFERRAL_VIP)
+async def show_referral_and_vip_zone(message: Message, db_session: AsyncSession) -> None:
+    tg_id = message.from_user.id
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
+    if not user or not user.completed_registration:
+        await message.answer("⚠️ ابتدا ثبت‌نام خود را تکمیل کنید. /start")
+        return
+
+    ref_count = await crud.get_referral_count(db_session, tg_id)
+    bot_name = str(settings.BOT_USERNAME).replace("@", "")
+    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
+    
+    from matching_bot_project.bot.handlers.vip import is_vip
+    user_is_vip = await is_vip(db_session, tg_id)
+    vip_status = "💎 فعال" if user_is_vip else "❌ غیرفعال"
+
+    text = (
+        "👑 <b>بخش ویژه زیرمجموعه‌گیری و حساب ویژه (VIP)</b>\n\n"
+        f"👥 تعداد دعوت‌های موفق شما: <b>{ref_count} نفر</b>\n"
+        f"🔗 لینک دعوت اختصاصی شما:\n<code>{invite_link}</code>\n\n"
+        f"💎 وضعیت اشتراک VIP شما: {vip_status}\n\n"
+        "💡 <i>با دعوت از دوستان خود سکه رایگان دریافت کنید. در صورت داشتن اشتراک VIP، از دکمه زیر برای مدیریت قابلیت‌های ویژه خود استفاده کنید.</i>"
+    )
+
+    kb = None
+    if user_is_vip:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ ورود به پنل تنظیمات VIP", callback_data="vip_panel")]
+        ])
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")

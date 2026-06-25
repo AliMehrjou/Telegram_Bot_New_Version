@@ -122,11 +122,11 @@ def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=InlineBtn.REPORT_USER,
-            callback_data=f"trigger_report_{target_id}",
+            # اصلاح شد: از trigger_report_ به report_user_ تغییر یافت
+            callback_data=f"report_user_{target_id}",
             icon_custom_emoji_id="5467928559664242360" # ❗️
         )],
     ])
-
 # --- Main Menu Sub-menus ---
 def get_nearby_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -193,9 +193,11 @@ def get_end_chat_confirm_keyboard() -> InlineKeyboardMarkup:
 def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_friend: bool = False) -> InlineKeyboardMarkup:
     block_text = InlineBtn.ACTION_UNBLOCK if is_blocked else InlineBtn.ACTION_BLOCK
     block_style = "success" if is_blocked else "danger"
+    block_callback = f"unblock_user_{target_tg_id}" if is_blocked else f"block_user_{target_tg_id}"
     
     friend_text = "حذف از دوستان" if is_friend else InlineBtn.ACTION_ADD_FRIEND
     friend_style = "danger" if is_friend else "primary"
+    friend_callback = f"remove_friend_{target_tg_id}" if is_friend else f"add_friend_{target_tg_id}"
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -204,15 +206,16 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
         ],
         [
             InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}", icon_custom_emoji_id="5472019095106886003", style="primary"), # 💌
-            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"trans_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary") # 💸
+            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary") # 💸 اصلاح شد جهت اتصال مستقیم به transfer.py
         ],
         [
-            InlineKeyboardButton(text=friend_text, callback_data=f"friend_action_{target_tg_id}", icon_custom_emoji_id="5370867268051806190", style=friend_style), # 🫂
-            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="danger") # ❤️
+            InlineKeyboardButton(text=friend_text, callback_data=friend_callback, icon_custom_emoji_id="5370867268051806190", style=friend_style), # 🫂 اصلاح شد
+            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="danger") # ❤️ اصلاح شد
         ],
-        [InlineKeyboardButton(text=block_text, callback_data=f"block_action_{target_tg_id}", icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒
-        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️
+        [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒 اصلاح شد
+        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️ اصلاح شد
     ])
+
 
 # ── Report reasons ──
 def get_report_reasons_keyboard(reported_tg_id: int) -> InlineKeyboardMarkup:
@@ -229,11 +232,12 @@ def get_report_reasons_keyboard(reported_tg_id: int) -> InlineKeyboardMarkup:
         (InlineBtn.REPORT_OTHER, "other"),
     ]
     
+    # 🟢 اطمینان از استفاده از پیشوند دقیق report_reason_
     keyboard = [
-        [InlineKeyboardButton(text=label, callback_data=f"report_{reported_tg_id}_{code}", icon_custom_emoji_id="5467928559664242360")] # ❗️
+        [InlineKeyboardButton(text=label, callback_data=f"report_reason_{reported_tg_id}_{code}", icon_custom_emoji_id="5467928559664242360")] 
         for label, code in reasons
     ]
-    keyboard.append([InlineKeyboardButton(text=InlineBtn.REPORT_CANCEL, callback_data="report_cancel", icon_custom_emoji_id="5465665476971471368", style="danger")]) # ❌
+    keyboard.append([InlineKeyboardButton(text=InlineBtn.REPORT_CANCEL, callback_data="report_cancel", icon_custom_emoji_id="5465665476971471368", style="danger")]) 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # ── Discovery ──

@@ -70,3 +70,6 @@ class PBroadcastStates(StatesGroup):
 class CoinTransferStates(StatesGroup):
     waiting_for_amount = State()
     confirming         = State()
+
+class TransferCoinStates(StatesGroup):
+    waiting_for_amount = State()

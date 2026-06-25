@@ -25,7 +25,7 @@ class ReplyBtn:
     BACK_TO_MENU = "برگشت به منوی اصلی"
 
     # --- Active Date & Chat Phases ---
-    VIEW_PARTNER_PROFILE = "پروفایل کاربر"
+    PHASE_USER_PROFILE = "پروفایل کاربر"
     END_DATE = "اتمام دیت"
     END_CHAT = "اتمام چت"
 

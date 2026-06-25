@@ -42,7 +42,7 @@ def get_date_phase_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ReplyBtn.PHASE_USER_PROFILE, icon_custom_emoji_id="5373012449597335010", style="primary")], # 👤
-            [KeyboardButton(text=ReplyBtn.DATE_PHASE_END_DATE, icon_custom_emoji_id="5465665476971471368", style="danger")] # ❌
+            [KeyboardButton(text=ReplyBtn.END_DATE, icon_custom_emoji_id="5465665476971471368", style="danger")] # ❌ اصلاح شد: استفاده از ثابت یکتا
         ],
         resize_keyboard=True,
         input_field_placeholder="در حال دیت..."
@@ -53,11 +53,12 @@ def get_chat_phase_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ReplyBtn.PHASE_USER_PROFILE, icon_custom_emoji_id="5373012449597335010", style="primary")], # 👤
-            [KeyboardButton(text=ReplyBtn.CHAT_PHASE_END_CHAT, icon_custom_emoji_id="5465665476971471368", style="danger")] # ❌
+            [KeyboardButton(text=ReplyBtn.END_CHAT, icon_custom_emoji_id="5465665476971471368", style="danger")] # ❌ اصلاح شد: استفاده از ثابت یکتا
         ],
         resize_keyboard=True,
         input_field_placeholder="در حال چت ناشناس..."
     )
+
 
 # ── Terms acceptance keyboard ──
 def get_terms_reply_keyboard() -> ReplyKeyboardMarkup:

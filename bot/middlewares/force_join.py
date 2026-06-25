@@ -10,10 +10,18 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_STATUSES = {"creator", "administrator", "member"}
 
+
+def _to_str(val) -> str:
+    """تبدیل bytes یا str به str — سازگار با هر دو حالت decode_responses."""
+    return val.decode('utf-8') if isinstance(val, bytes) else val
+
+
 class ForceJoinMiddleware(BaseMiddleware):
     """
     Enforces subscription to mandatory Telegram channels.
     Caches successful checks in Redis to reduce Telegram API calls.
+    Cache key includes sponsors_version — invalidated automatically
+    whenever admin adds/removes a sponsor channel.
     """
     async def __call__(
         self,
@@ -26,34 +34,34 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         user_id = event.from_user.id
 
-        # ── Capture Referral ID before blocking the user ────────────
+        # ── Capture Referral ID before blocking the user ──────────────────
         if isinstance(event, Message) and event.text and event.text.startswith("/start ref_"):
             try:
                 ref_id = event.text.split("_", 1)[1]
                 await redis_client.setex(f"pending_ref:{user_id}", 3600, ref_id)
             except IndexError:
                 pass
-        # ─────────────────────────────────────────────────────────────────
+        # ──────────────────────────────────────────────────────────────────
 
-        # 1. Admin bypass check first
+        # 1. Admin bypass
         if user_id in settings.parsed_admin_ids:
             return await handler(event, data)
 
-        # 2. Bypass for users in an active match / chat
+        # 2. Bypass برای کاربرانی که وسط چت یا دیت هستن
         try:
             user_state = await redis_client.hget(f"user:state:{user_id}", "status")
-            if user_state in (b"matched", b"chatting", "matched", "chatting"):
+            if user_state is not None and _to_str(user_state) in ("matched", "chatting"):
                 return await handler(event, data)
         except Exception as e:
-            pass
+            logger.warning("Redis HGET user state failed for %s: %s", user_id, e)
 
-        # 3. Fetch dynamic sponsors from Redis FIRST
-        sponsors = {}
+        # 3. دریافت اسپانسرهای داینامیک از Redis
+        sponsors: dict[str, str] = {}
         try:
             dynamic_sponsors = await redis_client.hgetall("bot:sponsors")
             if dynamic_sponsors:
                 for k, v in dynamic_sponsors.items():
-                    sponsors[k.decode('utf-8')] = v.decode('utf-8')
+                    sponsors[_to_str(k)] = _to_str(v)
         except Exception as e:
             logger.warning("Redis HGETALL sponsors failed: %s", e)
 
@@ -65,62 +73,68 @@ class ForceJoinMiddleware(BaseMiddleware):
         if not sponsors:
             return await handler(event, data)
 
-        # 4. Generate a unique signature for the current sponsor list
-        # با این کار اگر کانال جدیدی اضافه شود، کش همه کاربران فوراً باطل می‌شود
-        sponsors_signature = "_".join(sorted(sponsors.keys()))
-        cache_key = f"user:force_join:{user_id}:{sponsors_signature}"
+        # 4. دریافت version اسپانسرها برای cache key
+        # هر بار ادمین اسپانسر اضافه/حذف کنه، version عوض میشه → کش همه invalid میشه
+        try:
+            sponsors_version = await redis_client.get("bot:sponsors_version") or "0"
+            sponsors_version = _to_str(sponsors_version)
+        except Exception:
+            sponsors_version = "0"
 
-        # 5. Safely check Redis cache
+        cache_key = f"user:force_join:{user_id}:v{sponsors_version}"
+
+        # 5. چک کش Redis
         try:
             cached_joined = await redis_client.get(cache_key)
-            if cached_joined in ("1", b"1"):
+            if cached_joined is not None and _to_str(cached_joined) == "1":
                 return await handler(event, data)
         except Exception as e:
             logger.warning("Redis GET failed for user %s: %s", user_id, e)
 
-        # 6. Check Telegram API for each required channel
-        missing_sponsors = {}
-        try:
-            for channel_id, invite_link in sponsors.items():
-                
-                try:
-                    cid = int(channel_id)
-                except ValueError:
-                    cid = channel_id
+        # 6. چک Telegram API برای هر کانال
+        # نکته مهم: خطای هر کانال باید مجزا handle شه، وگرنه یک کانال خراب
+        # (مثلاً ربات از ادمینی خارج شده یا آیدی نامعتبره) کل ربات رو برای همه قفل می‌کنه.
+        missing_sponsors: dict[str, str] = {}
+        broken_channels: list[str] = []
+        for channel_id, invite_link in sponsors.items():
+            try:
+                cid = int(channel_id)
+            except ValueError:
+                cid = channel_id
 
+            try:
                 member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
-                if member.status not in _ALLOWED_STATUSES:
-                    missing_sponsors[channel_id] = invite_link
-        except TelegramAPIError as e:
-            logger.error("ForceJoin lookup failed for %s: %s", user_id, e)
-            error_msg = "⚠️ در حال حاضر بررسی وضعیت عضویت امکان‌پذیر نیست. لطفاً چند دقیقه دیگر تلاش کنید."
-            if isinstance(event, Message):
-                await event.answer(text=error_msg)
-            elif isinstance(event, CallbackQuery):
-                if event.message:
-                    await event.message.answer(text=error_msg)
-                else:
-                    await bot.send_message(chat_id=user_id, text=error_msg)
-                await event.answer("خطا در بررسی", show_alert=True)
-            return None
+            except TelegramAPIError as e:
+                logger.error("ForceJoin lookup failed for channel %s (user %s): %s", channel_id, user_id, e)
+                broken_channels.append(channel_id)
+                continue
 
-        # 7. If member of ALL channels, cache it and proceed (reduced TTL to 60s)
+            if member.status not in _ALLOWED_STATUSES:
+                missing_sponsors[channel_id] = invite_link
+
+        # اگه همه‌ی کانال‌ها خراب بودن (هیچ کدوم قابل چک نبودن)، کاربر رو بلاک نکن —
+        # فقط به کاربر اطلاع بده و اجازه بده از ربات استفاده کنه تا ادمین مشکل رو حل کنه.
+        if broken_channels and len(broken_channels) == len(sponsors):
+            logger.error("All sponsor channels unreachable, bypassing force-join check.")
+            return await handler(event, data)
+
+        # 7. اگه عضو همه کانال‌هاست → کش کن و ادامه بده (TTL: 5 دقیقه)
         if not missing_sponsors:
             try:
-                await redis_client.set(cache_key, "1", ex=60)  # زمان کش به ۱ دقیقه کاهش یافت
-            except Exception as e:
+                await redis_client.set(cache_key, "1", ex=300)
+            except Exception:
                 pass
             return await handler(event, data)
 
-        # 8. Handle Unauthorized User
+        # 8. کاربر عضو نیست → نمایش دکمه‌های عضویت
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-        count = 1
-        for channel_id, link in missing_sponsors.items():
+        for count, (channel_id, link) in enumerate(missing_sponsors.items(), 1):
             btn_text = f"📢 عضویت در کانال {count}" if len(missing_sponsors) > 1 else "📢 عضویت در کانال"
             keyboard.inline_keyboard.append([InlineKeyboardButton(text=btn_text, url=link)])
-            count += 1
-            
-        keyboard.inline_keyboard.append([InlineKeyboardButton(text="✅ بررسی عضویت مجدد", callback_data="check_membership")])
+
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text="✅ بررسی عضویت مجدد", callback_data="check_membership")
+        ])
 
         alert_text = (
             "⚠️ *جهت استفاده از ربات، ابتدا باید عضو کانال‌های حامی ما شوید!*\n\n"

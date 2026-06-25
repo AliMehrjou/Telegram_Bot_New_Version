@@ -533,8 +533,13 @@ async def end_active_anonymous_chat(
         await redis_client.delete(f"user:state:{tg_id}")
         if partner_id:
             await redis_client.setex(f"user:{tg_id}:last_match_partner", 86400, str(partner_id))
+            
+        
+        if match_history_id:
+            await redis_client.delete(f"date:timeout:{match_history_id}")
+            
     except Exception as exc:
-        logger.error("Redis delete failed for caller %d: %s", tg_id, exc)
+        logger.error("Redis operation failed for caller %d: %s", tg_id, exc)
  
 
     await state.clear()

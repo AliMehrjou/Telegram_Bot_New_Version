@@ -101,14 +101,27 @@ def get_silent_keyboard():
         [InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]
     ])
 @router.message(Command("silent"))
-async def silent_mode_command(message: Message):
+async def silent_mode_command(message: Message, db_session: AsyncSession):
+    # گرفتن اطلاعات کاربر از دیتابیس
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    if not user:
+        await message.answer("⚠️ حساب کاربری یافت نشد.")
+        return
+
+    # بررسی وضعیت سایلنت کاربر
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if user.silent_until and user.silent_until > now_utc:
+        status_text = "فعال 🔕"
+    else:
+        status_text = "غیرفعال 🔔"
+
     text = (
-        "🔻 حالت سایلنت: <b>غیرفعال</b> 🔔\n"
+        f"🔻 حالت سایلنت: <b>{status_text}</b>\n"
         "───────────────────\n"
-        "💡 با فعال شدن حالت سایلنت، درخواست چت دریافت نخواهید کرد."
+        "💡 با فعال شدن حالت سایلنت، درخواست چت یا دیت دریافت نخواهید کرد."
     )
     await message.answer(text, reply_markup=get_silent_keyboard(), parse_mode=ParseMode.HTML)
-
+    
 @router.callback_query(F.data.startswith("silent_"))
 async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
     action = call.data.split("_")[1]
