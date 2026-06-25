@@ -41,6 +41,13 @@ class Settings(BaseSettings):
 
     PROXY_URL: str | None = None   # 👈 FIX THIS
 
+    # ================== کدهای افزودنی ==================
+    # Payment Settings
+    PAYMENT_GATEWAY_ENABLED: bool = False
+    ZARINPAL_MERCHANT_ID: str = ""
+    CARD_NUMBER_FOR_PAYMENT: str = "۶۰۳۷۹۹۹۹۹۹۹۹۹۹۹۹" # شماره کارت پیش‌فرض
+    CARD_HOLDER_NAME: str = "نام ادمین / صاحب حساب"
+    
     @property
     def parsed_admin_ids(self) -> list[int]:
         try:

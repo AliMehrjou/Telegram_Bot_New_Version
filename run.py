@@ -14,7 +14,7 @@ from matching_bot_project.bot.handlers import (
     questionnaire, anonymous_chat, explore, 
     interactions, admin, discovery, transfer
 )
-
+from matching_bot_project.bot.handlers import payments
 
 logger = logging.getLogger("launcher")
 
@@ -47,6 +47,7 @@ def register_bot_middlewares_and_routers():
     dp.include_router(admin.router)
     dp.include_router(discovery.router)
     dp.include_router(transfer.router)
+    dp.include_router(payments.router)
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 

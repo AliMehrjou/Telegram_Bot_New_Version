@@ -3,6 +3,7 @@ import html
 import logging
 from pathlib import Path
 from typing import Optional
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,24 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
             f"<tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
         )
 
-    
+    # محاسبه زمان آخرین بازدید (فیچر ۲)
+    last_seen_text = ""
+    if not is_own_profile and hasattr(user, 'last_active') and user.last_active:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        diff = (now - user.last_active).total_seconds()
+        
+        if diff < 3600:
+            mins = max(1, int(diff // 60))
+            last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {mins} دقیقه پیش"
+        elif diff < 86400:
+            hrs = int(diff // 3600)
+            last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {hrs} ساعت پیش"
+        else:
+            days = int(diff // 86400)
+            last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {days} روز پیش"
+            
     try:
+        # last_seen_text به انتهای کارت چسبانده می‌شود
         return template_str.format(
             profile_title=profile_title,
             public_id=public_id,
@@ -75,7 +92,7 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
             likes_count=likes_count,
             compatibility_text=compatibility_text,
             private_info=private_info
-        )
+        ) + last_seen_text
     except Exception as e:
         logger.error(f"Error formatting profile string: {e}")
         return "⚠️ خطا در اعمال مقادیر پروفایل."

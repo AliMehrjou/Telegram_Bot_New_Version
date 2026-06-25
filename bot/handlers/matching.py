@@ -106,30 +106,24 @@ def _resolve_match_params(match_type: str, user: User) -> Optional[dict]:
     }
 
 
+# ================== کد جایگزین ==================
 async def _settle_coins_after_match(
     db_session: AsyncSession,
     user: User,
     cost: int,
     matched_partner_id: int,
 ) -> None:
-    """
-    Deducts the caller's coin cost unconditionally, and deducts 1 coin from the
-    partner only if they can afford it. If the partner can't afford it, the
-    match still proceeds — the partner simply doesn't pay for this round.
-    No refund logic applies since the caller's coin is only deducted here,
-    after the match is already confirmed.
-    """
     if cost <= 0:
         return
 
     try:
-        user.coin_balance -= cost
-        user.total_spent_coins += cost
+        # کسر هزینه از کاربر شروع کننده مچ
+        await crud.process_coin_transaction(db_session, user, -cost, "هزینه مچ موفق")
 
         partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
         if partner and partner.coin_balance >= 1:
-            partner.coin_balance -= 1
-            partner.total_spent_coins += 1
+            # کسر هزینه از پارتنر
+            await crud.process_coin_transaction(db_session, partner, -1, "هزینه مشارکت در مچ")
         elif partner:
             logger.info(
                 "Partner %s had insufficient coins; match with %s proceeds anyway.",

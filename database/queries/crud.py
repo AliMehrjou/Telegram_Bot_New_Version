@@ -13,6 +13,7 @@ from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
     CoinTransaction, FriendList, BlockList, UserLike, UserReport
 )
+from matching_bot_project.database.models.models import CoinPackage, CoinPurchaseOrder
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,7 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         else_=0
     )
 
+# ================== کدهای جایگزین (بخش return در تابع) ==================
     stmt = select(User).where(
         and_(
             User.tg_id != current_user_id,
@@ -375,7 +377,7 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         )
     ).order_by(
         priority_expr.desc(),
-        func.rand()
+        User.last_active.desc() # جایگزین شد با func.rand()
     ).limit(1)
 
     result = await session.execute(stmt)
@@ -582,10 +584,12 @@ async def find_interest_match_candidates(
         User.tg_id.not_in(blockers_of_caller),
         or_(*[User.interests.like(f"%{i}%") for i in interests_list])
     ]
+# ================== کدهای جایگزین (بخش اعمال order_by) ==================
     if target_gender:
         conditions.append(func.lower(User.gender) == target_gender.lower())
 
-    stmt   = select(User).where(*conditions).order_by(func.rand()).limit(limit)
+    # تغییر order_by به جای func.rand()
+    stmt   = select(User).where(*conditions).order_by(User.last_active.desc()).limit(limit)
     result = await session.execute(stmt)
     candidates = list(result.scalars().all())
 
@@ -634,10 +638,12 @@ async def get_filtered_discovery_candidates(
         conditions.append(User.age >= min_age)
     if max_age < 99:
         conditions.append(User.age <= max_age)
+# ================== کدهای جایگزین (بخش اعمال order_by) ==================
     if interests:
         conditions.append(or_(*[User.interests.like(f"%{i}%") for i in interests]))
 
-    stmt   = select(User).where(*conditions).order_by(func.rand()).limit(limit)
+    # تغییر order_by به جای func.rand()
+    stmt   = select(User).where(*conditions).order_by(User.last_active.desc()).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -697,3 +703,56 @@ async def is_friend(session: AsyncSession, user_id: int, friend_id: int) -> bool
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+async def get_active_coin_packages(session: AsyncSession) -> List[CoinPackage]:
+    stmt = select(CoinPackage).where(CoinPackage.is_active == True).order_by(CoinPackage.coin_amount.asc())
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+async def get_all_coin_packages(session: AsyncSession) -> List[CoinPackage]:
+    stmt = select(CoinPackage).order_by(CoinPackage.coin_amount.asc())
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+async def create_coin_package(session: AsyncSession, coin_amount: int, price_toman: int) -> CoinPackage:
+    package = CoinPackage(coin_amount=coin_amount, price_toman=price_toman)
+    session.add(package)
+    await session.flush()
+    return package
+
+async def update_coin_package_price(session: AsyncSession, package_id: int, new_price_toman: int) -> bool:
+    package = await session.get(CoinPackage, package_id)
+    if not package:
+        return False
+    package.price_toman = new_price_toman
+    await session.flush()
+    return True
+
+async def toggle_coin_package(session: AsyncSession, package_id: int) -> Optional[bool]:
+    package = await session.get(CoinPackage, package_id)
+    if not package:
+        return None
+    package.is_active = not package.is_active
+    await session.flush()
+    return package.is_active
+
+async def create_purchase_order(
+    session: AsyncSession, 
+    user_tg_id: int, 
+    package_id: int, 
+    payment_method: str, 
+    receipt_photo_file_id: Optional[str] = None
+) -> CoinPurchaseOrder:
+    order = CoinPurchaseOrder(
+        user_tg_id=user_tg_id,
+        package_id=package_id,
+        payment_method=payment_method,
+        receipt_photo_file_id=receipt_photo_file_id
+    )
+    session.add(order)
+    await session.flush()
+    return order
+    
+async def get_purchase_order(session: AsyncSession, order_id: int) -> Optional[CoinPurchaseOrder]:
+    return await session.get(CoinPurchaseOrder, order_id)

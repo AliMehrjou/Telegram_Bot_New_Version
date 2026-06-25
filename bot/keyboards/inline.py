@@ -1,6 +1,31 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from matching_bot_project.bot.core.constants import InlineBtn
+from matching_bot_project.database.models.models import CoinPackage
 
+# ================== کدهای افزودنی ==================
+def get_coin_packages_keyboard(packages: list[CoinPackage]) -> InlineKeyboardMarkup:
+    kb = []
+    for pkg in packages:
+        # فرمت نمایش: 50 سکه — 20,000 تومان
+        text = f"🪙 {pkg.coin_amount} سکه — {pkg.price_toman:,} تومان"
+        kb.append([InlineKeyboardButton(text=text, callback_data=f"buy_package_{pkg.id}")])
+    kb.append([InlineKeyboardButton(text="🔙 انصراف", callback_data="close_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def get_payment_method_keyboard(gateway_enabled: bool) -> InlineKeyboardMarkup:
+    kb = [[InlineKeyboardButton(text="💳 کارت به کارت (آفلاین)", callback_data="pay_method_card")]]
+    if gateway_enabled:
+        kb.append([InlineKeyboardButton(text="🏦 پرداخت آنلاین (درگاه)", callback_data="pay_method_gateway")])
+    kb.append([InlineKeyboardButton(text="🔙 انصراف", callback_data="cancel_payment")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def get_admin_receipt_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ تأیید واریز", callback_data=f"verify_receipt_{order_id}"),
+            InlineKeyboardButton(text="❌ رد کردن", callback_data=f"reject_receipt_{order_id}")
+        ]
+    ])
 # --- Onboarding ---
 def get_gender_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[

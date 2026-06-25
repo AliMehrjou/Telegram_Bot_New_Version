@@ -28,11 +28,81 @@ from matching_bot_project.database.models.models import MatchHistory, User
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
+# ================== کدهای افزودنی (زیر دستورات ادمین موجود) ==================
+from aiogram.filters import Command
+from matching_bot_project.bot.filters.custom import IsAdminFilter # مطمئن شو این فیلتر موجود و ایمپورت شده باشد
 logger = logging.getLogger(__name__)
 
 router = Router()
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
+
+
+@router.message(Command("addpackage"), IsAdminFilter())
+async def cmd_add_package(message: Message, db_session: AsyncSession):
+    args = message.text.split()
+    if len(args) != 3:
+        return await message.answer("❌ راهنما: `/addpackage <تعداد سکه> <قیمت به تومان>`\nمثال: `/addpackage 50 20000`", parse_mode="Markdown")
+    
+    try:
+        coin_amount = int(args[1])
+        price_toman = int(args[2])
+    except ValueError:
+        return await message.answer("❌ مقادیر باید عدد صحیح باشند.")
+        
+    await crud.create_coin_package(db_session, coin_amount, price_toman)
+    await db_session.commit()
+    await message.answer(f"✅ بسته جدید با موفقیت ساخته شد:\n🪙 {coin_amount} سکه | 💰 {price_toman:,} تومان")
+
+@router.message(Command("packages"), IsAdminFilter())
+async def cmd_list_packages(message: Message, db_session: AsyncSession):
+    packages = await crud.get_all_coin_packages(db_session)
+    if not packages:
+        return await message.answer("⚠️ هیچ بسته‌ای در سیستم تعریف نشده است.")
+        
+    text = "📦 <b>لیست بسته‌های سکه:</b>\n\n"
+    for p in packages:
+        status = "✅ فعال" if p.is_active else "❌ غیرفعال"
+        text += f"▪️ شناسه: <code>{p.id}</code> | {p.coin_amount} سکه | {p.price_toman:,} تومان | {status}\n"
+        
+    text += "\n💡 برای ویرایش قیمت: `/editpackage <id> <new_price>`\n💡 برای فعال/غیرفعال کردن: `/togglepackage <id>`"
+    await message.answer(text, parse_mode="HTML")
+
+@router.message(Command("editpackage"), IsAdminFilter())
+async def cmd_edit_package(message: Message, db_session: AsyncSession):
+    args = message.text.split()
+    if len(args) != 3:
+        return await message.answer("❌ راهنما: `/editpackage <شناسه بسته> <قیمت جدید>`")
+    try:
+        pkg_id = int(args[1])
+        new_price = int(args[2])
+    except ValueError:
+        return await message.answer("❌ مقادیر باید عدد صحیح باشند.")
+        
+    success = await crud.update_coin_package_price(db_session, pkg_id, new_price)
+    if success:
+        await db_session.commit()
+        await message.answer(f"✅ قیمت بسته {pkg_id} به {new_price:,} تومان تغییر کرد.")
+    else:
+        await message.answer("❌ بسته‌ای با این شناسه یافت نشد.")
+
+@router.message(Command("togglepackage"), IsAdminFilter())
+async def cmd_toggle_package(message: Message, db_session: AsyncSession):
+    args = message.text.split()
+    if len(args) != 2:
+        return await message.answer("❌ راهنما: `/togglepackage <شناسه بسته>`")
+    try:
+        pkg_id = int(args[1])
+    except ValueError:
+        return await message.answer("❌ شناسه باید عدد باشد.")
+        
+    new_status = await crud.toggle_coin_package(db_session, pkg_id)
+    if new_status is not None:
+        await db_session.commit()
+        stat_str = "فعال ✅" if new_status else "غیرفعال ❌"
+        await message.answer(f"وضعیت بسته {pkg_id} به {stat_str} تغییر یافت.")
+    else:
+        await message.answer("❌ بسته‌ای با این شناسه یافت نشد.")
 
 
 def get_admin_help_keyboard(current_page: int, total_pages: int) -> InlineKeyboardMarkup:

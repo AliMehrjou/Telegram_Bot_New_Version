@@ -73,3 +73,9 @@ class CoinTransferStates(StatesGroup):
 
 class TransferCoinStates(StatesGroup):
     waiting_for_amount = State()
+
+# ================== کدهای افزودنی ==================
+class PaymentStates(StatesGroup):
+    choosing_package = State()
+    choosing_method = State()
+    waiting_for_receipt_photo = State()

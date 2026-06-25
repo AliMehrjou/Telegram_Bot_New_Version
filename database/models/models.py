@@ -186,3 +186,29 @@ class UserReport(Base):
     reason: Mapped[str] = mapped_column(String(50), nullable=False)
     match_history_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("match_histories.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+# ================== کدهای افزودنی ==================
+class CoinPackage(Base):
+    __tablename__ = "coin_packages"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    coin_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_toman: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class CoinPurchaseOrder(Base):
+    __tablename__ = "coin_purchase_orders"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_tg_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
+    package_id: Mapped[int] = mapped_column(Integer, ForeignKey("coin_packages.id"), nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(20), nullable=False)  # "card_to_card" | "gateway"
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # pending | approved | rejected
+    receipt_photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gateway_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    

@@ -176,13 +176,15 @@ async def _query_user(
     if filters.same_province:
         stmt = stmt.where(User.province == caller.province)
 
+# ================== کدهای جایگزین (انتهای تابع) ==================
     if filters.same_city:
         stmt = stmt.where(
             User.province == caller.province,
             User.city == caller.city,
         )
 
-    stmt = stmt.order_by(_RANDOM_FUNC).limit(1)
+    # ثابت _RANDOM_FUNC با مرتب‌سازی بر اساس آخرین بازدید جایگزین شد
+    stmt = stmt.order_by(User.last_active.desc()).limit(1)
 
     result = await db_session.execute(stmt)
     return result.scalar_one_or_none()

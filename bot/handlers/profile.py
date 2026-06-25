@@ -86,16 +86,21 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
 # سیستم سایلنت مود
 # ==========================================
 
+# ================== کد جایگزین ==================
 def get_silent_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔔 غیر فعال کردن سایلنت", callback_data="silent_off")],
         [
-            InlineKeyboardButton(text="🔕 تا یک ساعت", callback_data="silent_1h"),
-            InlineKeyboardButton(text="🔕 تا 20 دقیقه", callback_data="silent_20m")
+            InlineKeyboardButton(text="🔕 تا ۱ ساعت", callback_data="silent_1h"),
+            InlineKeyboardButton(text="🔕 تا ۱ روز", callback_data="silent_1d")
         ],
-        [InlineKeyboardButton(text="🔕 همیشه سایلنت", callback_data="silent_forever")],
+        [
+            InlineKeyboardButton(text="🔕 تا ۱ هفته", callback_data="silent_1w"),
+            InlineKeyboardButton(text="🔕 همیشه سایلنت", callback_data="silent_forever")
+        ],
         [InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]
     ])
+
 @router.message(Command("silent"))
 async def silent_mode_command(message: Message, db_session: AsyncSession):
     # گرفتن اطلاعات کاربر از دیتابیس
@@ -118,29 +123,30 @@ async def silent_mode_command(message: Message, db_session: AsyncSession):
     )
     await message.answer(text, reply_markup=get_silent_keyboard(), parse_mode=ParseMode.HTML)
     
+# ================== کد جایگزین ==================
 @router.callback_query(F.data.startswith("silent_"))
 async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
     action = call.data.split("_")[1]
-    
-    
     now = datetime.now(timezone.utc).replace(tzinfo=None) 
     
     if action == "off":
         silent_until = None
         msg = "🔔 حالت سایلنت با موفقیت غیرفعال شد."
-    elif action == "20m":
-        silent_until = now + timedelta(minutes=20)
-
-        msg = "🔕 ربات تا 20 دقیقه برای شما سایلنت شد."
     elif action == "1h":
         silent_until = now + timedelta(hours=1)
-        msg = "🔕 ربات تا ۱ ساعت برای شما سایلنت شد."
+        msg = "🔕 با فعال کردن حالت سایلنت، درخواست‌های چت و دیت تا ۱ ساعت برای شما ارسال نخواهد شد."
+    elif action == "1d":
+        silent_until = now + timedelta(days=1)
+        msg = "🔕 با فعال کردن حالت سایلنت، درخواست‌های چت و دیت تا ۱ روز برای شما ارسال نخواهد شد."
+    elif action == "1w":
+        silent_until = now + timedelta(weeks=1)
+        msg = "🔕 با فعال کردن حالت سایلنت، درخواست‌های چت و دیت تا ۱ هفته برای شما ارسال نخواهد شد."
     elif action == "forever":
         # یک تاریخ خیلی دور برای حالت همیشه سایلنت
         silent_until = now + timedelta(days=3650)
-        msg = "🔕 حالت همیشه سایلنت فعال شد."
+        msg = "🔕 با فعال کردن حالت سایلنت، درخواست‌های چت و دیت دیگر برای شما ارسال نخواهد شد."
     
-    # 👈 دقیقاً اینجا: فراخوانی تابع دیتابیس و کامیت کردن تغییرات
+    # 👈 فراخوانی تابع دیتابیس و کامیت کردن تغییرات
     await crud.update_silent_mode(db_session, call.from_user.id, silent_until)
     await db_session.commit()
     
