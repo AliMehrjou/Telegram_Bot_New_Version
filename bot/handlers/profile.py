@@ -32,60 +32,56 @@ def generate_public_id(length=6):
 
 
 @router.message(F.text == ReplyBtn.MY_PROFILE)
-async def view_user_profile(message: Message, db_session: AsyncSession):
-    tg_id = message.from_user.id
+async def view_user_profile(message: Message, db_session: AsyncSession, state: FSMContext):
+    # ۱. خروج از هر استیتی که ممکنه ربات توش گیر کرده باشه تا دکمه حتما کار کنه
+    await state.clear()
     
-    
-    user = await crud.get_user_by_tg_id(db_session, tg_id)
+    try:
+        tg_id = message.from_user.id
+        user = await crud.get_user_by_tg_id(db_session, tg_id)
 
-    if not user or not user.completed_registration:
-        await message.answer("⚠️ شما هنوز ثبت نام نکرده‌اید! لطفا دکمه /start را ارسال کنید.")
-        return
+        if not user or not user.completed_registration:
+            await message.answer("⚠️ رفیق هنوز ثبت‌نامت کامل نشده! /start رو بفرست تا شروع کنیم.")
+            return
 
-    
-    if not getattr(user, 'public_id', None):
-        characters = string.ascii_letters + string.digits
-        new_public_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
-        user.public_id = new_public_id
-        await db_session.commit() 
-        
-    await db_session.refresh(user) 
+        # ۲. ساخت شناسه (حذف db_session.refresh برای جلوگیری از کرش مخفی)
+        if not getattr(user, 'public_id', None):
+            import string, random
+            characters = string.ascii_letters + string.digits
+            user.public_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
+            await db_session.commit() 
+            
+        profile_card = build_unified_profile_card(user, is_own_profile=True)
 
-    
-    profile_card = build_unified_profile_card(user, is_own_profile=True)
+        # ۳. رفع باگ دکمه VIP (قبلا vip_section_triggered بود که اشتباه است)
+        inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
+            [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")]
+        ])
 
-    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
-        [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_section_triggered")]
-    ])
-
-    
-    if user.profile_photo_file_id:
-        try:
+        if user.profile_photo_file_id:
             await message.answer_photo(
                 photo=user.profile_photo_file_id,
                 caption=profile_card[:1024],
                 parse_mode=ParseMode.HTML,
                 reply_markup=inline_kb
             )
-        except Exception as e:
-            logger.error(f"Failed to send profile photo: {e}")
+        else:
             await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
-    else:
-        await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 
-    # ارسال وویس/آهنگ پروفایل در صورت وجود
-    profile_voice = getattr(user, 'profile_voice_file_id', None)
-    if profile_voice:
-        try:
+        # ارسال وویس/آهنگ پروفایل در صورت وجود
+        profile_voice = getattr(user, 'profile_voice_file_id', None)
+        if profile_voice:
             await message.answer_voice(
                 voice=profile_voice,
                 caption="🎵 <b>آهنگ/وویس پروفایل شما</b>",
                 parse_mode=ParseMode.HTML
             )
-        except Exception as e:
-            logger.error(f"Failed to send profile voice: {e}")
-
+            
+    except Exception as e:
+        logger.error(f"Error in view_user_profile: {e}")
+        await message.answer("⚠️ یه مشکلی پیش اومد! لطفاً چند لحظه دیگه دوباره روی دکمه کلیک کن.")
+        
 # ==========================================
 # سیستم سایلنت مود
 # ==========================================
@@ -181,23 +177,41 @@ async def close_menu_handler(call: CallbackQuery):
 async def view_referral_panel(message: Message, db_session: AsyncSession):
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
-
-    if not user:
-        await message.answer("⚠️ کاربری یافت نشد.")
+    
+    # بررسی تکمیل ثبت‌نام کاربر
+    if not user or not user.completed_registration:
+        await message.answer("⚠️ رفیق اول باید ثبت‌نامت رو تکمیل کنی. /start رو بزن تا شروع کنیم.")
         return
 
-    bot_name = str(settings.BOT_USERNAME).replace("@", "")
-    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
-    referral_count = await crud.get_referral_count(db_session, tg_id)
+    # دریافت تعداد زیرمجموعه‌ها و ساخت لینک دعوت با آیدی جدید ربات
+    ref_count = await crud.get_referral_count(db_session, tg_id)
+    invite_link = f"https://t.me/Blinddateirbot?start=ref_{tg_id}"
+    
+    # بررسی وضعیت VIP کاربر
+    from matching_bot_project.bot.handlers.vip import is_vip
+    user_is_vip = await is_vip(db_session, tg_id)
+    vip_status = "فعاله بفرما تو 😎" if user_is_vip else "متاسفانه نداری 💔"
 
-    ref_text = (
-        "🎁 <b>سیستم کسب سهمیه رایگان مچینگ پیشرفته (VIP):</b>\n\n"
-        "دوستان خود را به ربات دعوت کنید و به ازای هر دعوت موفق، سهمیه مچ دریافت کنید!\n\n"
-        f"🔗 <b>لینک اختصاصی دعوت شما:</b>\n<code>{invite_link}</code>\n\n"
-        f"👥 تعداد زیرمجموعه‌های فعال شما: <b>{referral_count} نفر</b>\n"
-        f"🔋 تعداد مچ‌های پیشرفته باقیمانده شما: <b>{user.vip_quota} عدد</b>"
+    # ساخت متن دوستانه با ایموجی‌های پریمیوم و ساختار تمیز
+    text = (
+        "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>بخش خفن زیرمجموعه‌گیری و حساب VIP</b>\n\n"
+        f"<tg-emoji emoji-id=\"5372926953978341366\">👥</tg-emoji> تا الان <b>{ref_count} تا</b> از رفیقات رو با موفقیت دعوت کردی!\n"
+        f"🔗 اینم لینک دعوت اختصاصی خودته، کپیش کن و بفرست واسه بقیه:\n"
+        f"<code>{invite_link}</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<tg-emoji emoji-id=\"5467666648263564704\">💎</tg-emoji> <b>وضعیت اشتراک VIP تو:</b> {vip_status}\n"
+        f"<tg-emoji emoji-id=\"5379600444098093058\">🔋</tg-emoji> <b>مچ‌های پیشرفته‌ت (سهمیه VIP):</b> <b>{user.vip_quota} تا</b> مونده\n\n"
+        "<blockquote><tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>رفیق، با دعوت از دوستات هم سکه می‌گیری هم سهمیه مچ زدن رایگان بهت می‌رسه! اگرم VIP داری که معطل نکن، از دکمه پایین تنظیماتتو شخصی‌سازی کن.</i></blockquote>"
     )
-    await message.answer(text=ref_text, parse_mode=ParseMode.HTML)
+
+    
+    kb = None
+    if user_is_vip:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ ورود به پنل تنظیمات VIP", callback_data="vip_panel")]
+        ])
+
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @router.message(F.text == ReplyBtn.HELP)

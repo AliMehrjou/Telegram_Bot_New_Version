@@ -409,26 +409,36 @@ async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> 
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
     if not user or not user.completed_registration:
-        await message.answer("⚠️ ابتدا باید ثبت‌نام را تکمیل کنید.\nدستور /start را ارسال کنید.")
+        await message.answer("⚠️ رفیق ابتدا باید ثبت‌نامت رو تکمیل کنی.\nدستور /start رو بفرست تا شروع کنیم.")
         return
 
     try:
         active_match = await crud.get_active_match(db_session, tg_id)
     except Exception:
         logger.exception("get_active_match failed for user %d", tg_id)
-        await message.answer("⚠️ خطای سرور. لطفاً مجدداً تلاش کنید.")
+        await message.answer("⚠️ خطای سرور رخ داد. لطفاً چند لحظه دیگه دوباره تلاش کن.")
         return
 
     if active_match:
-        await message.answer("⚠️ شما در حال حاضر در یک دیت فعال هستید!\nلطفاً ابتدا آن را پایان دهید.")
+        await message.answer("⚠️ شما در حال حاضر تو یه دیت فعال هستی!\nلطفاً اول اونو تموم کن بعد بیا سراغ یه دیت جدید.")
         return
 
-    await message.answer(
-        "🎯 <b>نوع مچ‌یابی مورد نظر خود را انتخاب کنید:</b>\n\n"
-        "🎲 <b>مچ تصادفی:</b> جفت‌یابی رایگان در سطح کشوری با جنس مخالف.\n\n"
-        "👑 <b>مچ پیشرفته (VIP):</b> جفت‌یابی فیلتردار هم‌شهری (نیاز به سکه).",
-        reply_markup=get_matching_type_keyboard(),
+    # متن جدید، صمیمی و پریمیوم
+    text = (
+        "<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>آماده‌ای برای یه آشنایی جدید؟</b>\n"
+        "انتخاب کن دوست داری چطوری مچ بشی:\n\n"
+        "<blockquote><tg-emoji emoji-id=\"5469741319330996757\">💫</tg-emoji> <b>مچ تصادفی (رایگان):</b>\n"
+        "یه دیت شانسی و هیجان‌انگیز با یه نفر از هر جای ایران!</blockquote>\n"
+        "<blockquote><tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>مچ پیشرفته (VIP):</b>\n"
+        "دیت با فیلترهای خاص! با هم‌شهری‌ها یا افراد مدنظرت مچ شو (با پرداخت سکه).</blockquote>"
     )
+
+    await message.answer(
+        text=text,
+        reply_markup=get_matching_type_keyboard(),
+        parse_mode="HTML" # حتماً باید باشد تا ایموجی‌ها رندر شوند
+    )
+    
 
 @router.message(F.text == ReplyBtn.NEARBY)
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
@@ -666,78 +676,3 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
-    
-@router.message(F.text == ReplyBtn.MY_PROFILE)
-async def show_my_profile_menu(message: Message, db_session: AsyncSession) -> None:
-    tg_id = message.from_user.id
-    user = await crud.get_user_by_tg_id(db_session, tg_id)
-    if not user or not user.completed_registration:
-        await message.answer("⚠️ ابتدا باید ثبت‌نام خود را تکمیل کنید. /start")
-        return
-
-    from matching_bot_project.bot.handlers.interactions import _build_profile_card
-    profile_card = _build_profile_card(user)
-    
-    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚙️ ویرایش مشخصات پروفایل", callback_data="edit_profile_triggered")]
-    ])
-
-    try:
-        if user.profile_photo_file_id:
-            await bot.send_photo(
-                chat_id=tg_id,
-                photo=user.profile_photo_file_id,
-                caption=profile_card[:1024],
-                parse_mode="HTML",
-                reply_markup=inline_kb,
-            )
-        else:
-            await bot.send_message(
-                chat_id=tg_id,
-                text=profile_card,
-                parse_mode="HTML",
-                reply_markup=inline_kb,
-            )
-            
-        if user.profile_voice_file_id:
-            await bot.send_voice(
-                chat_id=tg_id,
-                voice=user.profile_voice_file_id,
-                caption="🎵 <b>آهنگ/وویس پروفایل شما</b>",
-                parse_mode="HTML"
-            )
-    except Exception as e:
-        logger.error(f"Failed to show own profile: {e}")
-
-
-@router.message(F.text == ReplyBtn.REFERRAL_VIP)
-async def show_referral_and_vip_zone(message: Message, db_session: AsyncSession) -> None:
-    tg_id = message.from_user.id
-    user = await crud.get_user_by_tg_id(db_session, tg_id)
-    if not user or not user.completed_registration:
-        await message.answer("⚠️ ابتدا ثبت‌نام خود را تکمیل کنید. /start")
-        return
-
-    ref_count = await crud.get_referral_count(db_session, tg_id)
-    bot_name = str(settings.BOT_USERNAME).replace("@", "")
-    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
-    
-    from matching_bot_project.bot.handlers.vip import is_vip
-    user_is_vip = await is_vip(db_session, tg_id)
-    vip_status = "💎 فعال" if user_is_vip else "❌ غیرفعال"
-
-    text = (
-        "👑 <b>بخش ویژه زیرمجموعه‌گیری و حساب ویژه (VIP)</b>\n\n"
-        f"👥 تعداد دعوت‌های موفق شما: <b>{ref_count} نفر</b>\n"
-        f"🔗 لینک دعوت اختصاصی شما:\n<code>{invite_link}</code>\n\n"
-        f"💎 وضعیت اشتراک VIP شما: {vip_status}\n\n"
-        "💡 <i>با دعوت از دوستان خود سکه رایگان دریافت کنید. در صورت داشتن اشتراک VIP، از دکمه زیر برای مدیریت قابلیت‌های ویژه خود استفاده کنید.</i>"
-    )
-
-    kb = None
-    if user_is_vip:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚙️ ورود به پنل تنظیمات VIP", callback_data="vip_panel")]
-        ])
-
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")

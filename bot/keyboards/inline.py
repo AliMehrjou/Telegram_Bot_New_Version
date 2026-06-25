@@ -27,22 +27,25 @@ def get_matching_type_keyboard() -> InlineKeyboardMarkup:
             text=InlineBtn.MATCH_RANDOM,
             callback_data="match_random",
             icon_custom_emoji_id="5469741319330996757", # 💫
-            style="primary"
+            style="Success"
         )],
         [InlineKeyboardButton(
             text=InlineBtn.MATCH_BOY,
             callback_data="match_boy",
-            icon_custom_emoji_id="5429564911048992647" # 🚹
-        )],
-        [InlineKeyboardButton(
+            icon_custom_emoji_id="5429564911048992647",# 🚹
+            style="primary"
+        ),
+        InlineKeyboardButton(
             text=InlineBtn.MATCH_GIRL,
             callback_data="match_girl",
-            icon_custom_emoji_id="5429474729620677471" # 🚺
+            icon_custom_emoji_id="5429474729620677471",# 🚺
+            style="primary"
         )],
         [InlineKeyboardButton(
             text=InlineBtn.MATCH_NEARBY,
             callback_data="match_nearby",
-            icon_custom_emoji_id="5415803062738504079" # 🗺
+            icon_custom_emoji_id="5415803062738504079",# 🗺
+            style="danger"
         )],
     ])
 
@@ -130,19 +133,26 @@ def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
 # --- Main Menu Sub-menus ---
 def get_nearby_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_FEMALE, callback_data="nearby_female", icon_custom_emoji_id="5429474729620677471")], # 🚺
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_MALE, callback_data="nearby_male", icon_custom_emoji_id="5429564911048992647")], # 🚹
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_BOTH, callback_data="nearby_both", icon_custom_emoji_id="5372926953978341366")], # 👥
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_FEMALE, callback_data="nearby_female", icon_custom_emoji_id="5429474729620677471", style="primary")], # 🚺
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_MALE, callback_data="nearby_male", icon_custom_emoji_id="5429564911048992647", style="primary")], # 🚹
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_BOTH, callback_data="nearby_both", icon_custom_emoji_id="5372926953978341366", style="danger")] # 👥
     ])
 
 def get_search_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_MALE, callback_data="search_online_male", icon_custom_emoji_id="5429564911048992647", style="success")],
-        [InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_FEMALE, callback_data="search_online_female", icon_custom_emoji_id="5429474729620677471", style="success")],
-        [InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_PROVINCE, callback_data="search_same_prov", icon_custom_emoji_id="5264733042710181045", style="primary")], # 🏢
-        [InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_CITY, callback_data="search_same_city", icon_custom_emoji_id="5465226866321268133", style="primary")], # 🏠
-        [InlineKeyboardButton(text=InlineBtn.SEARCH_NO_CHAT, callback_data="search_no_chat", icon_custom_emoji_id="5465300082628763143")], # 💬
+        [
+            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_MALE, callback_data="search_online_male", icon_custom_emoji_id="5429564911048992647", style="success"),
+            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_FEMALE, callback_data="search_online_female", icon_custom_emoji_id="5429474729620677471", style="success")
+        ],
+        [
+            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_PROVINCE, callback_data="search_same_prov", icon_custom_emoji_id="5264733042710181045", style="primary"), # 🏢
+            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_CITY, callback_data="search_same_city", icon_custom_emoji_id="5465226866321268133", style="primary") # 🏠
+        ],
+        [
+            InlineKeyboardButton(text=InlineBtn.SEARCH_NO_CHAT, callback_data="search_no_chat", icon_custom_emoji_id="5465300082628763143") # 💬
+        ],
     ])
+
 
 def get_coins_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[

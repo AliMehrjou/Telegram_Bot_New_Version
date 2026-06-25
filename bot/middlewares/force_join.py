@@ -19,9 +19,7 @@ def _to_str(val) -> str:
 class ForceJoinMiddleware(BaseMiddleware):
     """
     Enforces subscription to mandatory Telegram channels.
-    Caches successful checks in Redis to reduce Telegram API calls.
-    Cache key includes sponsors_version — invalidated automatically
-    whenever admin adds/removes a sponsor channel.
+    Caches successful checks and broken channels in Redis to reduce Telegram API calls.
     """
     async def __call__(
         self,
@@ -74,7 +72,6 @@ class ForceJoinMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # 4. دریافت version اسپانسرها برای cache key
-        # هر بار ادمین اسپانسر اضافه/حذف کنه، version عوض میشه → کش همه invalid میشه
         try:
             sponsors_version = await redis_client.get("bot:sponsors_version") or "0"
             sponsors_version = _to_str(sponsors_version)
@@ -83,7 +80,7 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         cache_key = f"user:force_join:{user_id}:v{sponsors_version}"
 
-        # 5. چک کش Redis
+        # 5. چک کش Redis برای عضویت‌های موفق
         try:
             cached_joined = await redis_client.get(cache_key)
             if cached_joined is not None and _to_str(cached_joined) == "1":
@@ -91,9 +88,7 @@ class ForceJoinMiddleware(BaseMiddleware):
         except Exception as e:
             logger.warning("Redis GET failed for user %s: %s", user_id, e)
 
-        # 6. چک Telegram API برای هر کانال
-        # نکته مهم: خطای هر کانال باید مجزا handle شه، وگرنه یک کانال خراب
-        # (مثلاً ربات از ادمینی خارج شده یا آیدی نامعتبره) کل ربات رو برای همه قفل می‌کنه.
+        # 6. چک Telegram API برای هر کانال + حفاظت در برابر FloodWait
         missing_sponsors: dict[str, str] = {}
         broken_channels: list[str] = []
         for channel_id, invite_link in sponsors.items():
@@ -102,18 +97,26 @@ class ForceJoinMiddleware(BaseMiddleware):
             except ValueError:
                 cid = channel_id
 
+            bad_channel_key = f"bot:bad_sponsor:{cid}"
+            
+            # اگر این کانال در 15 دقیقه گذشته خطا داده، به تلگرام ریکوئست نده
+            if await redis_client.exists(bad_channel_key):
+                broken_channels.append(channel_id)
+                continue
+
             try:
                 member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
             except TelegramAPIError as e:
                 logger.error("ForceJoin lookup failed for channel %s (user %s): %s", channel_id, user_id, e)
                 broken_channels.append(channel_id)
+                # کش کردن وضعیت خرابی کانال به مدت 15 دقیقه (900 ثانیه)
+                await redis_client.setex(bad_channel_key, 900, "1")
                 continue
 
             if member.status not in _ALLOWED_STATUSES:
                 missing_sponsors[channel_id] = invite_link
 
-        # اگه همه‌ی کانال‌ها خراب بودن (هیچ کدوم قابل چک نبودن)، کاربر رو بلاک نکن —
-        # فقط به کاربر اطلاع بده و اجازه بده از ربات استفاده کنه تا ادمین مشکل رو حل کنه.
+        # اگه همه‌ی کانال‌ها خراب بودن، به کاربر اجازه عبور بده تا ربات قفل نشه
         if broken_channels and len(broken_channels) == len(sponsors):
             logger.error("All sponsor channels unreachable, bypassing force-join check.")
             return await handler(event, data)

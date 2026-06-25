@@ -184,11 +184,12 @@ async def cmd_addcoinsall(message: Message, db_session: AsyncSession):
     except ValueError:
         return await message.answer("Invalid amount.")
 
-    users = await db_session.execute(select(User))
-    all_users = users.scalars().all()
     user_ids = []
-
-    for user in all_users:
+    
+    # استفاده از stream_scalars و yield_per برای خواندن رکوردها به صورت پارت‌پارت (500تایی)
+    stream_result = await db_session.stream_scalars(select(User).execution_options(yield_per=500))
+    
+    async for user in stream_result:
         await process_coin_transaction(db_session, user, amount, "Global admin reward", ignore_multiplier=True)
         user_ids.append(user.tg_id)
 
@@ -211,11 +212,13 @@ async def cmd_addcoinsvip(message: Message, db_session: AsyncSession):
     except ValueError:
         return await message.answer("Invalid amount.")
 
-    users = await db_session.execute(select(User).where(User.is_vip == True))
-    vip_users = users.scalars().all()
     user_ids = []
+    
+    stream_result = await db_session.stream_scalars(
+        select(User).where(User.is_vip == True).execution_options(yield_per=500)
+    )
 
-    for user in vip_users:
+    async for user in stream_result:
         await process_coin_transaction(db_session, user, amount, "VIP admin reward")
         user_ids.append(user.tg_id)
 
@@ -415,26 +418,30 @@ async def cq_stats(call: CallbackQuery, db_session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin_ban_"))
 async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
+    from matching_bot_project.bot.core.config import settings
+    
     try:
         target_tg_id = int(call.data.split("_")[2])
     except (IndexError, ValueError):
         return await call.answer("⚠️ دیتای کالبک دکمه نامعتبر است!", show_alert=True)
     
-    
     if target_tg_id == call.from_user.id:
         return await call.answer("⚠️ شما نمی‌توانید خودتان را مسدود کنید!", show_alert=True)
 
-    user = await get_user_by_tg_id(db_session, target_tg_id)
+    # 🔴 اضافه شدن کنترل امنیتی: جلوگیری از بن شدن سایر ادمین‌ها توسط دکمه شیشه‌ای
+    if target_tg_id in settings.parsed_admin_ids:
+        return await call.answer("⚠️ شما نمی‌توانید یک ادمین دیگر را مسدود کنید!", show_alert=True)
+
+    user = await crud.get_user_by_tg_id(db_session, target_tg_id)
     if not user:
         return await call.answer("⚠️ این کاربر یافت نشد!", show_alert=True)
 
-    # ۱. متوقف کردن فوری لودینگ تلگرام
     await call.answer("کاربر مسدود شد.")
 
     user.is_banned = True
     await db_session.commit()
     
-    # ارسال پیام به کاربر
+    # ادامه کدهای ارسال پیام به کاربر و آپدیت دکمه‌ها ...
     user_notification = "❌ <b>حساب کاربری شما به دلیل نقض قوانین مسدود (Ban) شد.</b>"
     try:
         await bot.send_message(chat_id=target_tg_id, text=user_notification, parse_mode="HTML")
@@ -650,18 +657,21 @@ async def cancel_broadcast(call: CallbackQuery, state: FSMContext):
 async def process_broadcast_message(message: Message, state: FSMContext, db_session: AsyncSession):
     """دریافت محتوا (متن، عکس، ویدیو و...) از ادمین و آغاز ارسال در پس‌زمینه"""
     
-    # کوئری برای دریافت لیست آیدی کاربران
-    result = await db_session.execute(select(User.tg_id))
-    user_ids = result.scalars().all()
+    user_ids = []
+    
+    # فقط آیدی‌ها رو بخون، نه کل آبجکت رو (با yield_per برای جلوگیری از OOM)
+    stream_result = await db_session.stream_scalars(select(User.tg_id).execution_options(yield_per=1000))
+    async for tg_id in stream_result:
+        user_ids.append(tg_id)
 
     if not user_ids:
         await state.clear()
         return await message.answer("هیچ کاربری در دیتابیس یافت نشد.")
 
-    # استفاده از ورکر برای کپی کردن دقیق همین پیام (هر نوعی که باشه)
+    # استفاده از ورکر برای کپی کردن دقیق همین پیام
     worker = BroadcastWorker(bot=bot)
     worker.start_background_broadcast(
-        user_ids=list(user_ids), 
+        user_ids=user_ids, 
         from_chat_id=message.chat.id,    # آیدی چت ادمین
         message_id=message.message_id,   # آیدی پیامی که ادمین فرستاده
         delay_ms=40  
@@ -674,6 +684,7 @@ async def process_broadcast_message(message: Message, state: FSMContext, db_sess
         f"تعداد مخاطبین هدف: <b>{len(user_ids)}</b> کاربر.",
         parse_mode="HTML"
     )
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -781,6 +792,7 @@ async def event_get_multiplier(message: Message, state: FSMContext) -> None:
  
 @router.callback_query(EventStates.confirming, F.data == "event_confirm")
 async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
+    import json
     await call.answer()
     data = await state.get_data()
     await state.clear()
@@ -788,8 +800,19 @@ async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: Asyn
     duration_minutes = data["event_duration_minutes"]
     duration_seconds = duration_minutes * 60
     multiplier = data["event_multiplier"]
+    
+    ends_at = (datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)).isoformat()
+    
+    # پکیج کردن دیتای رویداد برای ذخیره در ردیس
+    event_data = {
+        "name": data['event_name'],
+        "description": data['event_description'],
+        "multiplier": multiplier,
+        "ends_at": ends_at
+    }
  
-    # ذخیره ضریب در ردیس با زمان انقضای خودکار (TTL)
+    # ذخیره ضریب و متادیتا در ردیس با زمان انقضای خودکار (TTL)
+    await redis_client.setex("bot:active_event_data", duration_seconds, json.dumps(event_data))
     await redis_client.setex("bot:active_event_multiplier", duration_seconds, str(multiplier))
  
     await call.message.edit_text(
@@ -801,9 +824,11 @@ async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: Asyn
         parse_mode="HTML",
     )
  
-    # اطلاع‌رسانی به همه یوزرها (کدهای قبلی خودت)
-    result = await db_session.execute(select(User.tg_id))
-    user_ids = result.scalars().all()
+    # بهینه‌سازی استخراج آیدی یوزرها برای نوتیفیکیشن ایونت
+    user_ids = []
+    stream_result = await db_session.stream_scalars(select(User.tg_id).execution_options(yield_per=1000))
+    async for tg_id in stream_result:
+        user_ids.append(tg_id)
  
     notification_text = (
         f"🎉 <b>رویداد ویژه شروع شد!</b>\n\n"
@@ -814,7 +839,7 @@ async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: Asyn
     )
  
     worker = BroadcastWorker(bot=bot)
-    worker.start_background_broadcast(user_ids=list(user_ids), text=notification_text, delay_ms=40)
+    worker.start_background_broadcast(user_ids=user_ids, text=notification_text, delay_ms=40)
 
  
 @router.callback_query(F.data == "cancel_event")
@@ -826,24 +851,38 @@ async def event_cancel(call: CallbackQuery, state: FSMContext) -> None:
  
 @router.message(Command("event_list"))
 async def cmd_event_list(message: Message) -> None:
-    actives = EventStore.all_active()
-    if not actives:
-        return await message.answer("هیچ رویداد فعالی وجود ندارد.")
+    import json
+    event_data_str = await redis_client.get("bot:active_event_data")
+    
+    if not event_data_str:
+        return await message.answer("هیچ رویداد فعالی در سیستم وجود ندارد.")
  
-    text = "📅 <b>رویدادهای فعال:</b>\n\n" + "\n\n".join(e.to_text() for e in actives)
+    event_data = json.loads(event_data_str)
+    ends_at = datetime.fromisoformat(event_data["ends_at"])
+    remaining_minutes = max(0, int((ends_at - datetime.now(timezone.utc)).total_seconds() // 60))
+    
+    text = (
+        "📅 <b>رویداد فعال فعلی:</b>\n\n"
+        f"🎉 <b>{event_data['name']}</b> [🟢 فعال]\n"
+        f"📝 {event_data['description']}\n"
+        f"💰 ضریب سکه: <b>×{event_data['multiplier']}</b>\n"
+        f"⏳ زمان باقی‌مانده: <b>{remaining_minutes} دقیقه</b>\n"
+    )
+    
     await message.answer(text, parse_mode="HTML")
- 
+
  
 @router.message(Command("event_end"))
 async def cmd_event_end(message: Message) -> None:
-    # پاک کردن کلید ضریب از ردیس
-    deleted = await redis_client.delete("bot:active_event_multiplier")
+    # پاک کردن کلید ضریب و دیتای متادیتا از ردیس
+    deleted_mult = await redis_client.delete("bot:active_event_multiplier")
+    await redis_client.delete("bot:active_event_data")
     
-    if deleted:
+    if deleted_mult:
         await message.answer("✅ رویداد فعال با موفقیت پایان یافت و ضریب سکه‌ها به حالت عادی (×1.0) برگشت.")
     else:
         await message.answer("⚠️ در حال حاضر هیچ رویداد فعالی در سیستم وجود ندارد.")
- 
+        
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 — Personalized Broadcast
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1007,27 +1046,47 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
     template: str  = data.get("pb_template", "")
     await state.clear()
  
-    users = await _fetch_filtered_users(db_session, filters)
-    if not users:
+    conditions = []
+    if "gender" in filters:
+        conditions.append(User.gender == filters["gender"])
+    if "city" in filters:
+        conditions.append(User.city == filters["city"])
+    if "age_min" in filters:
+        conditions.append(User.age >= filters["age_min"])
+        conditions.append(User.age <= filters["age_max"])
+    if filters.get("vip"):
+        conditions.append(User.is_vip == True)
+ 
+    stmt = select(User)
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
+ 
+    # در حین استریم، پیام شخص‌سازی شده رو می‌سازیم و فقط یک Tuple سبک رو ذخیره می‌کنیم
+    messages_to_send = []
+    stream_result = await db_session.stream_scalars(stmt.execution_options(yield_per=500))
+    
+    async for user in stream_result:
+        personalized_text = _personalize(template, user)
+        messages_to_send.append((user.tg_id, personalized_text))
+ 
+    if not messages_to_send:
         return await call.message.edit_text("⚠️ هیچ کاربری با این فیلتر یافت نشد.")
  
     await call.message.edit_text(
-        f"⏳ در حال ارسال به <b>{len(users)}</b> کاربر...",
+        f"⏳ در حال ارسال به <b>{len(messages_to_send)}</b> کاربر...",
         parse_mode="HTML",
     )
  
-    # ارسال شخصی‌سازی‌شده در background
-    async def _send_personalized() -> None:
+    # تسک اختصاصی برای برودکست پیام‌های شخصی‌سازی شده
+    async def _send_personalized(msgs: list[tuple[int, str]]) -> None:
         sent = failed = 0
-        for user in users:
-            text = _personalize(template, user)
+        for tg_id, text in msgs:
             try:
-                await bot.send_message(chat_id=user.tg_id, text=text, parse_mode="HTML")
+                await bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
                 sent += 1
-            except (TelegramForbiddenError, TelegramAPIError) as exc:
-                logger.debug("pbroadcast skip user %d: %s", user.tg_id, exc)
+            except Exception:
                 failed += 1
-            await asyncio.sleep(0.04)  # 40ms = ~25 msg/s (زیر لیمیت تلگرام)
+            await asyncio.sleep(0.04)  # 40ms = ~25 msg/s
  
         try:
             await call.message.answer(
@@ -1038,23 +1097,14 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
         except Exception:
             pass
  
-    asyncio.create_task(_send_personalized())
-    logger.info("Personalized broadcast started for %d users with filters %s.", len(users), filters)
- 
- 
-@router.callback_query(F.data == "cancel_pbroadcast")
-async def pbroadcast_cancel(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer("لغو شد.")
-    await state.clear()
-    await call.message.edit_text("❌ ارسال لغو شد.")
- 
+    asyncio.create_task(_send_personalized(messages_to_send))
+    logger.info("Personalized broadcast started for %d users.", len(messages_to_send))
+
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — Daily Report
 # ─────────────────────────────────────────────────────────────────────────────
  
-# لیست ادمین‌هایی که گزارش روزانه میگیرن
-# در پروداکشن از config یا DB بخون
 _AUTO_REPORT_ADMIN_IDS: set[int] = set()
  
  

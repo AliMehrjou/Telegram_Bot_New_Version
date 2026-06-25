@@ -1,52 +1,32 @@
 {
   "pages": [
     [
-      "👑 <b>پنل پیشرفته مدیریت ربات | بخش ۱: مالی و کاربران</b>",
-      "━━━━━━━━━━━━━━━━━━━",
-      "⚙️ <b>مدیریت سکه:</b>",
-      "🔹 <code>/addcoins [id] [amount]</code> ▫️ <i>شارژ حساب</i>",
-      "🔹 <code>/removecoins [id] [amount]</code> ▫️ <i>کسر سکه</i>",
-      "🔹 <code>/addcoinsall [amount]</code> ▫️ <i>هدیه همگانی</i>",
-      "🔹 <code>/addcoinsvip [amount]</code> ▫️ <i>هدیه ویژه VIP</i>",
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | مالی و کاربران</b>",
       "",
-      "👤 <b>کنترل کاربران:</b>",
-      "🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت و مشخصات</i>",
-      "🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری</i>",
-      "🔸 <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت</i>",
-      "🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای اشتراک VIP</i>",
-      "🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی پروفایل</i>"
+      "<tg-emoji emoji-id=\"5379600444098093058\">⚙️</tg-emoji> <b>مدیریت سکه:</b>",
+      "<blockquote>🔹 <code>/addcoins [id] [amount]</code> ▫️ <i>شارژ حساب</i>\n🔹 <code>/removecoins [id] [amount]</code> ▫️ <i>کسر سکه</i>\n🔹 <code>/addcoinsall [amount]</code> ▫️ <i>هدیه همگانی</i>\n🔹 <code>/addcoinsvip [amount]</code> ▫️ <i>هدیه ویژه VIP</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>کنترل کاربران:</b>",
+      "<blockquote>🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت</i>\n🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری</i>\n🔸 <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت</i>\n🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای VIP</i>\n🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی پروفایل</i></blockquote>"
     ],
     [
-      "👑 <b>پنل پیشرفته مدیریت ربات | بخش ۲: رویدادها و پیام‌ها</b>",
-      "━━━━━━━━━━━━━━━━━━━",
-      "🎉 <b>سیستم رویدادها (Events):</b>",
-      "🔹 <code>/event_create</code> ▫️ <i>ساخت رویداد جدید (با ضریب سکه)</i>",
-      "🔹 <code>/event_list</code> ▫️ <i>مشاهده رویدادهای فعال</i>",
-      "🔹 <code>/event_end [id]</code> ▫️ <i>پایان دادن دستی به یک رویداد</i>",
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | رویدادها و پیام‌ها</b>",
       "",
-      "📢 <b>اطلاع‌رسانی و پیام‌ها:</b>",
-      "🔸 <code>/broadcast</code> ▫️ <i>ارسال پیام همگانی به کل ربات</i>",
-      "🔸 <code>/pbroadcast</code> ▫️ <i>ارسال پیام شخصی‌سازی‌شده با فیلتر (سن، شهر، جنسیت، VIP)</i>",
-      "💬 <b>پشتیبانی:</b> ▫️ <i>پاسخ به تیکت‌ها از طریق دکمه شیشه‌ای پیام کاربر انجام می‌شود.</i>"
+      "<tg-emoji emoji-id=\"5469741319330996757\">🎉</tg-emoji> <b>سیستم رویدادها (Events):</b>",
+      "<blockquote>🔹 <code>/event_create</code> ▫️ <i>ساخت رویداد جدید</i>\n🔹 <code>/event_list</code> ▫️ <i>مشاهده رویدادها</i>\n🔹 <code>/event_end [id]</code> ▫️ <i>پایان دستی رویداد</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5465300082628763143\">📢</tg-emoji> <b>اطلاع‌رسانی و پیام‌ها:</b>",
+      "<blockquote>🔸 <code>/broadcast</code> ▫️ <i>ارسال پیام همگانی</i>\n🔸 <code>/pbroadcast</code> ▫️ <i>ارسال پیام شخصی‌سازی‌شده</i></blockquote>",
+      "<tg-emoji emoji-id=\"5467539229468793355\">💬</tg-emoji> <b>پشتیبانی:</b> ▫️ <i>پاسخ به تیکت‌ها از طریق دکمه شیشه‌ای پیام کاربر انجام می‌شود.</i>"
     ],
     [
-      "👑 <b>پنل پیشرفته مدیریت ربات | بخش ۳: آمار و گزارشات</b>",
-      "━━━━━━━━━━━━━━━━━━━",
-      "📊 <b>تحلیل و مانیتورینگ:</b>",
-      "📈 <code>/adminstats</code>",
-      "▫️ <i>داشبورد زنده (ثبت‌نام‌ها، استان‌ها، نرخ تبدیل چت)</i>",
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | آمار و اسپانسرها</b>",
       "",
-      "📋 <code>/report</code>",
-      "▫️ <i>دریافت فوری گزارش جامع امروز (کاربران، مچ‌ها، رشد)</i>",
+      "<tg-emoji emoji-id=\"5188217332748527444\">📊</tg-emoji> <b>تحلیل و مانیتورینگ:</b>",
+      "<blockquote>📈 <code>/adminstats</code>\n▫️ <i>داشبورد زنده (ثبت‌نام‌ها، استان‌ها، چت)</i>\n📋 <code>/report</code>\n▫️ <i>گزارش جامع امروز</i>\n🔔 <code>/report_auto</code>\n▫️ <i>دریافت خودکار گزارش روزانه</i></blockquote>",
       "",
-      "🔔 <code>/report_auto</code>",
-      "▫️ <i>روشن/خاموش کردن ارسال خودکار گزارش روزانه (هر شب ساعت ۲۳:۵۹ UTC)</i>",
-      "",
-      "💡 <i>نکته: برای کپی کردن دستورات، کافیست روی آن‌ها ضربه بزنید.</i>",
-      "📢 <b>مدیریت اسپانسرها (جوینت اجباری):</b>",
-      "🔹 <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال جدید</i>",
-      "🔹 <code>/removesponsor [id]</code> ▫️ <i>حذف یک کانال</i>",
-      "🔹 <code>/sponsors</code> ▫️ <i>لیست کانال‌های اسپانسر فعال</i>"
+      "<tg-emoji emoji-id=\"5415803062738504079\">📢</tg-emoji> <b>مدیریت اسپانسرها:</b>",
+      "<blockquote>🔹 <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال</i>\n🔹 <code>/removesponsor [id]</code> ▫️ <i>حذف کانال</i>\n🔹 <code>/sponsors</code> ▫️ <i>لیست اسپانسرها</i></blockquote>"
     ]
   ]
 }

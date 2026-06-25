@@ -147,105 +147,83 @@ class MatchingEngine:
     ) -> Optional[int]:
         """
         Attempts to match an active user with an opposing queue participant atomically.
-        If no match is found, adds the user to the queue to wait.
         """
         await self.connect()
         
         user_state_key = f"user:state:{tg_id}"
         target_queue_key = self._get_target_queue_key(gender, target_gender, province)
 
-        # Use passed parameters for VIP matching
         caller_interests = set(caller_interests_str.split(",")) if caller_interests_str else set()
-
         caller_age = int(caller_age or 0)
         caller_min_age = int(caller_min_age or 0)
         caller_max_age = int(caller_max_age or 99)
 
-        max_attempts = 50
-        attempts = 0
+        # استخراج سریع ۱۵ کاندیدای قدیمی‌تر از انتهای صف با یک درخواست (O(1))
+        candidates_batch = await self.redis.lrange(target_queue_key, -15, -1)
+        
+        if not candidates_batch:
+            # صف خالی است، کاربر مستقیم وارد صف انتظار می‌شود
+            await self.add_to_queue(
+                tg_id, gender, target_gender, province,
+                interests=caller_interests_str, age=caller_age,
+                min_age_filter=caller_min_age, max_age_filter=caller_max_age
+            )
+            return None
 
-        while attempts < max_attempts:
-            attempts += 1
-            
-            # We peek at the queue to find a match that satisfies bilateral age filters and shared interests for VIPs
-            candidate_id_str = None
-            queue_length = await self.redis.llen(target_queue_key)
+        # مرتب‌سازی برای بررسی از قدیمی‌ترین به جدیدترین
+        candidates_batch.reverse()
 
-            # Check up to 15 candidates in the queue to find a valid match
-            for i in range(min(15, queue_length)):
-                # LINDEX counts from head (left). We want to check from the tail (right) which is next to pop.
-                idx = -(i + 1)
-                peeked_id_str = await self.redis.lindex(target_queue_key, idx)
-                if not peeked_id_str:
-                    continue
-
-                peeked_state_key = f"user:state:{peeked_id_str}"
-                peeked_state = await self.redis.hgetall(peeked_state_key)
-                if not peeked_state:
-                    continue
-
-                candidate_age = int(peeked_state.get("age", 0))
-                candidate_min_age = int(peeked_state.get("min_age_filter", 0))
-                candidate_max_age = int(peeked_state.get("max_age_filter", 99))
-
-                # Check bilateral age constraints
-                if not (caller_min_age <= candidate_age <= caller_max_age):
-                    continue
-                if not (candidate_min_age <= caller_age <= candidate_max_age):
-                    continue
-
-                # If VIP, try to match interests if both have them
-                if is_vip and caller_interests:
-                    peeked_interests_str = peeked_state.get("interests", "")
-                    peeked_interests = set(peeked_interests_str.split(",")) if peeked_interests_str else set()
-
-                    if not caller_interests.intersection(peeked_interests):
-                        # Skip if no shared interests for VIP
-                        continue
-
-                # Found a valid candidate, pull them out of the list
-                await self.redis.lrem(target_queue_key, 1, peeked_id_str)
-                candidate_id_str = peeked_id_str
-                break
-
-            # If no candidate found after peeking constraints, break
-            if not candidate_id_str:
-                break
-
+        for candidate_id_str in candidates_batch:
             candidate_id = int(candidate_id_str)
-
-            # Prevent self-matching
+            
             if candidate_id == tg_id:
                 continue
 
-            # Check if users blocked each other BEFORE pipeline
-            # SISMEMBER user:{id}:blocks {target_id}
+            candidate_state_key = f"user:state:{candidate_id}"
+            peeked_state = await self.redis.hgetall(candidate_state_key)
+            
+            # اگر وضعیت کاندیدا تغییر کرده یا لغو کرده، رد می‌شویم
+            if not peeked_state or peeked_state.get("status") != "queuing":
+                continue
+
+            candidate_age = int(peeked_state.get("age", 0))
+            candidate_min_age = int(peeked_state.get("min_age_filter", 0))
+            candidate_max_age = int(peeked_state.get("max_age_filter", 99))
+
+            # بررسی فیلترهای سنی دو طرفه
+            if not (caller_min_age <= candidate_age <= caller_max_age):
+                continue
+            if not (candidate_min_age <= caller_age <= candidate_max_age):
+                continue
+
+            # بررسی علایق مشترک برای VIP
+            if is_vip and caller_interests:
+                peeked_interests_str = peeked_state.get("interests", "")
+                peeked_interests = set(peeked_interests_str.split(",")) if peeked_interests_str else set()
+                if not caller_interests.intersection(peeked_interests):
+                    continue
+
+            # بررسی بلاک بودن قبل از باز کردن تراکنش
             is_candidate_blocked_by_user = await self.redis.sismember(f"user:{tg_id}:blocks", str(candidate_id))
             is_user_blocked_by_candidate = await self.redis.sismember(f"user:{candidate_id}:blocks", str(tg_id))
 
             if is_candidate_blocked_by_user or is_user_blocked_by_candidate:
-                logger.debug(f"Block collision detected between {tg_id} and {candidate_id}. Discarding match.")
-                # RPUSH candidate back to queue to prevent data loss
-                await self.redis.rpush(target_queue_key, candidate_id_str)
                 continue
 
-            candidate_state_key = f"user:state:{candidate_id}"
-
+            # 🔴 آغاز تراکنش اتمیک ایمن
             try:
                 async with self.redis.pipeline() as pipe:
-                    # WATCH the candidate's state to prevent race conditions
+                    # قفل کردن وضعیت کاندیدا (جلوگیری از تغییر توسط پروسه دیگر)
                     await pipe.watch(candidate_state_key)
                     candidate_status = await pipe.hget(candidate_state_key, "status")
 
-                    # If candidate cancelled or was already matched, abort and retry
                     if candidate_status != "queuing":
                         await pipe.reset()
                         continue
 
-                    # Begin atomic transaction
                     pipe.multi()
 
-                    # 1. Initialize the FULL state for the current caller as "matched"
+                    # آپدیت وضعیت کاربر درخواست‌دهنده
                     caller_queue_key = self._get_queue_key(gender, target_gender, province)
                     pipe.hset(user_state_key, mapping={
                         "gender": gender,
@@ -257,38 +235,33 @@ class MatchingEngine:
                     })
                     pipe.expire(user_state_key, _USER_STATE_TTL_SECONDS)
 
-                    # 2. Update the candidate's state as "matched"
+                    # آپدیت وضعیت کاندیدا
                     pipe.hset(candidate_state_key, mapping={
                         "status": "matched",
                         "matched_with": str(tg_id)
                     })
                     pipe.expire(candidate_state_key, _USER_STATE_TTL_SECONDS)
 
-                    # Execute transaction
+                    # 🔴 حذف ایمن از صف: اگر تراکنش फेल شود، کاندیدا در صف باقی می‌ماند
+                    pipe.lrem(target_queue_key, 1, candidate_id_str)
+
+                    # اجرای تراکنش
                     await pipe.execute()
 
                 logger.info("Redis Matchmaking succeeded: %s <-> %s", tg_id, candidate_id)
                 return candidate_id
 
             except WatchError:
-                # Candidate's state was modified by another process.
-                # Safe to retry picking another candidate.
+                # تداخل رخ داد: شخص دیگری همزمان این کاندیدا را مچ کرد.
+                # مشکلی نیست، کاندیدای بعدی در لیست را چک می‌کنیم.
                 logger.debug("WatchError on candidate %s during match attempt, skipping.", candidate_id)
-                # RPUSH candidate back to queue to prevent data loss
-                await self.redis.rpush(target_queue_key, candidate_id_str)
                 continue
 
-        # No valid candidate found after all attempts; add self to queue.
-        # Ensure we fetch existing state data to preserve them when adding to queue
+        # اگر هیچ کاندیدای مناسبی پیدا نشد، وارد صف می‌شویم
         await self.add_to_queue(
-            tg_id,
-            gender,
-            target_gender,
-            province,
-            interests=caller_interests_str,
-            age=caller_age,
-            min_age_filter=caller_min_age,
-            max_age_filter=caller_max_age
+            tg_id, gender, target_gender, province,
+            interests=caller_interests_str, age=caller_age,
+            min_age_filter=caller_min_age, max_age_filter=caller_max_age
         )
         return None
 

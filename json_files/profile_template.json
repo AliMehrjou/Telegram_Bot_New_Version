@@ -1,21 +1,20 @@
 {
   "profile_text": [
-    "💠 <b>پروفایل {profile_title}</b> 💠",
+    "<tg-emoji emoji-id=\"5368324170673084105\">💠</tg-emoji> <b>پروفایل {profile_title}</b> <tg-emoji emoji-id=\"5368324170673084105\">💠</tg-emoji>",
     "━━━━━━━━━━━━━━━━━━━━",
     "🔖 <b>شناسه:</b> <code>{public_id}</code>",
-    "",
-    "👤 <b>نام:</b> <b>{first_name}</b>",
-    "⚧ <b>جنسیت:</b> {gender}",
-    "🎂 <b>سن:</b> {age} سال",
-    "📍 <b>مکان:</b> {province}، {city}",
+    "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>نام:</b> {first_name}",
+    "<tg-emoji emoji-id=\"5429564911048992647\">⚧</tg-emoji> <b>جنسیت:</b> {gender}",
+    "<tg-emoji emoji-id=\"5465226866321268133\">🎂</tg-emoji> <b>سن:</b> {age} سال",
+    "<tg-emoji emoji-id=\"5415803062738504079\">📍</tg-emoji> <b>مکان:</b> {province}، {city}",
     "━━━━━━━━━━━━━━━━━━━━",
-    "📝 <b>بیوگرافی:</b>",
+    "<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <b>بیوگرافی:</b>",
     "<i>{bio}</i>",
     "",
-    "🎯 <b>علایق:</b>",
+    "<tg-emoji emoji-id=\"5350460637182993292\">🎯</tg-emoji> <b>علایق:</b>",
     "<i>{interests}</i>",
     "━━━━━━━━━━━━━━━━━━━━",
-    "👑 <b>اشتراک:</b> {vip_status}",
-    "❤️ <b>لایک‌ها:</b> {likes_count}{compatibility_text}{private_info}"
+    "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>اشتراک:</b> {vip_status}",
+    "<tg-emoji emoji-id=\"5449505950283078474\">❤️</tg-emoji> <b>لایک‌ها:</b> {likes_count}{compatibility_text}{private_info}"
   ]
 }
