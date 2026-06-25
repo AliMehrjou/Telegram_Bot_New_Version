@@ -5,6 +5,7 @@ from typing import Optional, List
 from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from matching_bot_project.database.session import Base
+from sqlalchemy import Float
 
 def generate_random_public_id(length=6):
     characters = string.ascii_letters + string.digits
@@ -79,7 +80,10 @@ class User(Base):
     pref_min_age: Mapped[Optional[int]] = mapped_column(Integer, default=18, nullable=True)
     pref_max_age: Mapped[Optional[int]] = mapped_column(Integer, default=99, nullable=True)
     pref_province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
+    
+    marital_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # "single" | "married"
+    location_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    location_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     
 class CoinTransaction(Base):
     """
@@ -128,7 +132,7 @@ class Question(Base):
     option_a: Mapped[str] = mapped_column(String(200), nullable=False)
     option_b: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(50), default="General", nullable=False)
-
+    short_label: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
 class MatchHistory(Base):
     __tablename__ = "match_histories"

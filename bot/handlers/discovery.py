@@ -79,7 +79,7 @@ def get_discovery_keyboard(target_id: int) -> InlineKeyboardMarkup:
 
 
 async def send_next_candidate(message_or_call, db_session: AsyncSession, state: FSMContext, user_tg_id: int):
-    """Fetches and sends the next discovery candidate, or a fallback message if none found."""
+    """Fetches and sends the next discovery candidate with distance calculation."""
     user = await get_user_by_tg_id(db_session, user_tg_id)
     if not user or not user.gender:
         text = "⚠️ لطفاً ابتدا ثبت‌نام خود را از طریق منوی اصلی کامل کنید."
@@ -100,7 +100,18 @@ async def send_next_candidate(message_or_call, db_session: AsyncSession, state: 
             await message_or_call.answer(text)
         return
 
-    profile_card = _build_profile_card(candidate)
+    # --- محاسبه فاصله (فیچر ۶) ---
+    distance_km = None
+    if user.location_lat is not None and user.location_lng is not None and \
+       candidate.location_lat is not None and candidate.location_lng is not None:
+        from matching_bot_project.database.queries.crud import calculate_distance_km
+        distance_km = calculate_distance_km(
+            user.location_lat, user.location_lng, 
+            candidate.location_lat, candidate.location_lng
+        )
+
+    # ارسال distance_km به تابع فرمت‌دهی (نسخه آپدیت شده در formatters.py)
+    profile_card = build_unified_profile_card(candidate, distance_km=distance_km)
     keyboard = get_discovery_keyboard(candidate.tg_id)
 
     await state.set_state(DiscoveryStates.navigating)

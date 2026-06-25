@@ -102,15 +102,21 @@ async def cancel_profile_editing(message: Message, state: FSMContext):
 async def show_edit_menu(call: CallbackQuery, state: FSMContext):
     await state.clear() 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
-        [InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests"),
-        InlineKeyboardButton(text="📸 تغییر عکس پروفایل", callback_data="change_photo")],
-        [InlineKeyboardButton(text="🎵 تغییر آهنگ پروفایل", callback_data="change_voice")],
-        [
-            InlineKeyboardButton(text="📍 تغییر محل سکونت", callback_data="change_location"),
-            InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")
-        ]
-    ])
+            [InlineKeyboardButton(text="✍️ ویرایش بیوگرافی", callback_data="change_bio")],
+            [
+                InlineKeyboardButton(text="🎮 تغییر علایق", callback_data="change_interests"),
+                InlineKeyboardButton(text="📸 تغییر عکس", callback_data="change_photo")
+            ],
+            [
+                InlineKeyboardButton(text="💍 تغییر وضعیت تأهل", callback_data="change_marital"), # جدید
+                InlineKeyboardButton(text="🎵 تغییر آهنگ", callback_data="change_voice")
+            ],
+            [
+                InlineKeyboardButton(text="📍 استان/شهر", callback_data="change_location"),
+                InlineKeyboardButton(text="🌍 ثبت لوکیشن دقیق", callback_data="change_gps") # جدید
+            ],
+            [InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")]
+        ])
     
     text_content = "⚙️ <b>کدام بخش از پروفایل خود را می‌خواهید ویرایش کنید؟</b>"
     
@@ -322,3 +328,51 @@ async def process_voice_invalid(message: Message):
     if message.text == ReplyBtn.BACK_TO_MENU:
         return 
     await message.answer("⚠️ لطفاً فقط یک فایل صوتی (Voice) یا آهنگ (Audio) ارسال کن!")
+
+# ================== کدهای افزودنی ==================
+# ---- وضعیت تأهل ----
+@router.callback_query(F.data == "change_marital")
+async def start_marital_edit(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="مجرد 🙋", callback_data="set_marital_single"),
+            InlineKeyboardButton(text="متأهل 💍", callback_data="set_marital_married")
+        ]
+    ])
+    await call.message.edit_text("💍 لطفاً وضعیت تأهل خود را انتخاب کنید:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("set_marital_"))
+async def process_marital_edit(call: CallbackQuery, db_session: AsyncSession):
+    status = call.data.split("_")[2]
+    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
+    if user:
+        user.marital_status = status
+        await db_session.commit()
+        await call.answer("✅ وضعیت تأهل شما بروزرسانی شد.", show_alert=True)
+        await call.message.delete()
+        await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
+
+# ---- لوکیشن GPS ----
+@router.callback_query(F.data == "change_gps")
+async def start_gps_edit(call: CallbackQuery, state: FSMContext):
+    await state.set_state(ProfileEditStates.updating_province) # موقتا از همان استیت استفاده می‌کنیم یا جدید بساز
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="📍 ارسال لوکیشن من", request_location=True)],
+        [KeyboardButton(text="🔙 برگشت به منوی اصلی")]
+    ], resize_keyboard=True, one_time_keyboard=True)
+    
+    await call.message.delete()
+    await call.message.answer("🌍 برای اینکه بتونیم فاصله شما رو با بقیه محاسبه کنیم، لطفاً دکمه زیر را لمس کرده و لوکیشن خود را بفرستید.\n\n⚠️ حریم خصوصی: لوکیشن دقیق شما به هیچکس نمایش داده نخواهد شد.", reply_markup=kb)
+
+@router.message(F.location)
+async def process_gps_location(message: Message, state: FSMContext, db_session: AsyncSession):
+    lat = message.location.latitude
+    lng = message.location.longitude
+    
+    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
+    if user:
+        user.location_lat = lat
+        user.location_lng = lng
+        await db_session.commit()
+        await message.answer("✅ لوکیشن شما با موفقیت روی نقشه ثبت شد.", reply_markup=get_main_menu_keyboard())
+    await state.clear()

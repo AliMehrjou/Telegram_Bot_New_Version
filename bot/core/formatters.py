@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-def build_unified_profile_card(user, is_own_profile: bool = False, compatibility: Optional[int] = None) -> str:
+def build_unified_profile_card(user, is_own_profile: bool = False, compatibility: Optional[int] = None, distance_km: Optional[float] = None) -> str:
     """
     تابع یکپارچه برای ساخت کارت پروفایل از روی قالب JSON.
     """
@@ -32,15 +32,19 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
     
     first_name = html.escape(str(user.first_name or "کاربر"))
     
-    gender_raw = str(user.gender or "").lower()
+    gender_raw = str(getattr(user, 'gender', '') or "").lower()
     gender_txt = "آقا 🙋‍♂️" if gender_raw == "male" else "خانم 🙋‍♀️" if gender_raw == "female" else "نامشخص ❓"
     
-    age = html.escape(str(user.age or "نامشخص"))
-    province = html.escape(str(user.province or "نامشخص").replace("_", " "))
-    city = html.escape(str(user.city or "نامشخص").replace("_", " "))
+    # اضافه شدن وضعیت تأهل (فیچر ۶)
+    marital_raw = getattr(user, 'marital_status', None)
+    marital_status = "مجرد 🙋" if marital_raw == "single" else "متأهل 💍" if marital_raw == "married" else "تنظیم نشده"
     
-    bio = html.escape(str(user.bio or "تنظیم نشده"))
-    interests = html.escape(str(user.interests or "تنظیم نشده"))
+    age = html.escape(str(getattr(user, 'age', 'نامشخص') or "نامشخص"))
+    province = html.escape(str(getattr(user, 'province', 'نامشخص') or "نامشخص").replace("_", " "))
+    city = html.escape(str(getattr(user, 'city', 'نامشخص') or "نامشخص").replace("_", " "))
+    
+    bio = html.escape(str(getattr(user, 'bio', 'تنظیم نشده') or "تنظیم نشده"))
+    interests = html.escape(str(getattr(user, 'interests', 'تنظیم نشده') or "تنظیم نشده"))
     
     is_vip = getattr(user, 'is_vip', False)
     vip_status = "👑 عضو VIP" if is_vip else "🏷️ عضو عادی"
@@ -48,6 +52,10 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
     likes_count = getattr(user, 'likes_count', 0)
     
     compatibility_text = f"\n💞 <b>میزان تفاهم:</b> {compatibility}%" if compatibility is not None else ""
+    
+    # اضافه شدن فاصله به آخر کارت در صورت وجود (فیچر ۶)
+    if distance_km is not None and not is_own_profile:
+        compatibility_text += f"\n📏 <b>فاصله از شما:</b> {distance_km} کیلومتر"
     
     private_info = ""
     if is_own_profile:
@@ -60,7 +68,7 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
             f"<tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
         )
 
-    # محاسبه زمان آخرین بازدید (فیچر ۲)
+    # محاسبه زمان آخرین بازدید برای کاربران دیگر (فیچر ۲)
     last_seen_text = ""
     if not is_own_profile and hasattr(user, 'last_active') and user.last_active:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -77,12 +85,13 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
             last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {days} روز پیش"
             
     try:
-        # last_seen_text به انتهای کارت چسبانده می‌شود
-        return template_str.format(
+        # فرمت کردن متغیرها درون تمپلیت
+        formatted_card = template_str.format(
             profile_title=profile_title,
             public_id=public_id,
             first_name=first_name,
             gender=gender_txt,
+            marital_status=marital_status,
             age=age,
             province=province,
             city=city,
@@ -92,7 +101,9 @@ def build_unified_profile_card(user, is_own_profile: bool = False, compatibility
             likes_count=likes_count,
             compatibility_text=compatibility_text,
             private_info=private_info
-        ) + last_seen_text
+        )
+        # چسباندن آخرین بازدید به انتهای پیام
+        return formatted_card + last_seen_text
     except Exception as e:
         logger.error(f"Error formatting profile string: {e}")
         return "⚠️ خطا در اعمال مقادیر پروفایل."

@@ -13,6 +13,7 @@ from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
     CoinTransaction, FriendList, BlockList, UserLike, UserReport
 )
+import math
 from matching_bot_project.database.models.models import CoinPackage, CoinPurchaseOrder
 
 logger = logging.getLogger(__name__)
@@ -756,3 +757,12 @@ async def create_purchase_order(
     
 async def get_purchase_order(session: AsyncSession, order_id: int) -> Optional[CoinPurchaseOrder]:
     return await session.get(CoinPurchaseOrder, order_id)
+
+def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """محاسبه فاصله جغرافیایی بین دو نقطه بر حسب کیلومتر (فرمول Haversine)"""
+    R = 6371.0 # شعاع زمین
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(R * c, 1)

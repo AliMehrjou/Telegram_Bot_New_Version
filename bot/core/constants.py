@@ -4,7 +4,13 @@ bot/core/constants.py
 Single source of truth for key UI strings, reply keyboard labels, 
 inline keyboard labels, and system messages.
 """
-
+# ================== کدهای افزودنی ==================
+class CompatibilityMsg:
+    TIER_LOW = "متن مربوط به زیر ۳۰٪ (دقیقاً کپی از پیام کارفرما)"
+    TIER_MID_LOW = "متن مربوط به ۳۰ تا ۵۰٪ (دقیقاً کپی از پیام کارفرما)"
+    TIER_MID_HIGH = "متن مربوط به ۵۰ تا ۷۰٪ (دقیقاً کپی از پیام کارفرما)"
+    TIER_HIGH = "متن مربوط به ۷۰ تا ۱۰۰٪ (دقیقاً کپی از پیام کارفرما)"
+    
 class ReplyBtn:
     # --- Main Menu Options ---
     START_DATE = "شروع دیت ناشناس"
