@@ -113,7 +113,15 @@ async def receive_receipt_photo(message: Message, state: FSMContext, db_session:
     await state.clear()
     await message.answer("✅ فیش واریزی شما با موفقیت ثبت شد و پس از بررسی توسط پشتیبانی، سکه‌ها به حساب شما منظور خواهد شد.")
 
-# 5. مسیر درگاه پرداخت (Feature Flagged Placeholder)
+@router.message(PaymentStates.waiting_for_receipt_photo)
+async def fallback_receipt_input(message: Message):
+    await message.answer(
+        "⚠️ <b>لطفاً عکس فیش واریزی را ارسال کنید.</b>\n"
+        "متن یا فایل پی‌دی‌اف قابل قبول نیست.\n"
+        "اگر منصرف شده‌اید، روی دکمه «❌ انصراف» کلیک کنید.",
+        parse_mode="HTML"
+    )
+    
 @router.callback_query(PaymentStates.choosing_method, F.data == "pay_method_gateway")
 async def process_gateway_payment(call: CallbackQuery, state: FSMContext):
     if not settings.PAYMENT_GATEWAY_ENABLED:
@@ -152,13 +160,14 @@ async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):
         order.resolved_at = datetime.now(timezone.utc)
         await db_session.commit()
         
-        # آپدیت پیام ادمین
         try:
-            await call.message.edit_caption(caption=call.message.caption + "\n\n✅ <b>تأیید شد.</b>", reply_markup=None, parse_mode="HTML")
-        except Exception:
-            pass
             
-        # اطلاع به کاربر
+            new_caption = call.message.html_text + "\n\n✅ <b>تأیید شد.</b>"
+            await call.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Edit caption error: {e}")
+            
+        
         try:
             await bot.send_message(
                 chat_id=target_user.tg_id, 
@@ -182,10 +191,11 @@ async def admin_reject_receipt(call: CallbackQuery, db_session: AsyncSession):
     order.resolved_at = datetime.now(timezone.utc)
     await db_session.commit()
     
-    try:
-        await call.message.edit_caption(caption=call.message.caption + "\n\n❌ <b>رد شد.</b>", reply_markup=None, parse_mode="HTML")
-    except Exception:
-        pass
+        try:
+            new_caption = call.message.html_text + "\n\n❌ <b>رد شد.</b>"
+            await call.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Edit caption error: {e}")
         
     try:
         await bot.send_message(

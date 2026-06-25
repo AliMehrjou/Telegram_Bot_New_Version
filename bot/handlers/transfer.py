@@ -151,14 +151,24 @@ async def receive_transfer_amount(
 async def confirm_transfer(
     call: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ) -> None:
-    suffix = call.data.removeprefix("transfer_confirm_")
-    parts  = suffix.rsplit("_", 1)          # target_id may have underscores — unlikely but safe
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-        return
+    # ۱. خواندن مقادیر از حافظه امن سرور (FSM) به جای دکمه تلگرام
+    data = await state.get_data()
+    target_id = data.get("target_id")
+    amount = data.get("amount")
 
-    target_id, amount = int(parts[0]), int(parts[1])
-    success, msg      = await transfer_coins(db_session, call.from_user.id, target_id, amount)
+    if not target_id or not amount:
+        return await call.answer("⚠️ نشست شما منقضی شده یا نامعتبر است.", show_alert=True)
+
+    # ۲. جلوگیری از دابل کلیک: فوراً استیت را پاک کنید و دکمه را حذف کنید 
+    # تا حتی اگر ریکوئست دومی همزمان رسید، در شرط if بالا متوقف شود.
+    await state.clear()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # ۳. انجام عملیات دیتابیس با خیال راحت
+    success, msg = await transfer_coins(db_session, call.from_user.id, target_id, amount)
 
     if success:
         await db_session.commit()
@@ -171,14 +181,9 @@ async def confirm_transfer(
         except Exception:
             pass
 
-    await state.clear()
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
     await call.answer(msg, show_alert=True)
     await call.message.answer(msg, reply_markup=get_main_menu_keyboard())
-
+    
 
 # ── Cancel at any point ────────────────────────────────────────────────────
 

@@ -20,6 +20,7 @@ from matching_bot_project.bot.core.constants import ReplyBtn
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
 from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
 from matching_bot_project.database.models.models import BlockList
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,13 @@ def generate_public_id(length=6):
 
 @router.message(F.text == ReplyBtn.MY_PROFILE)
 async def view_user_profile(message: Message, db_session: AsyncSession, state: FSMContext):
-    # ۱. خروج از هر استیتی که ممکنه ربات توش گیر کرده باشه تا دکمه حتما کار کنه
-    await state.clear()
     
+    current_state = await state.get_state()
+    if current_state and ("chat" in current_state.lower() or "matching" in current_state.lower() or "questionnaire" in current_state.lower()):
+        return await message.answer("⚠️ شما در حال حاضر در یک فرآیند فعال (چت یا مچینگ) هستید. لطفاً اول آن را پایان دهید.")
+        
+    await state.clear()
+
     try:
         tg_id = message.from_user.id
         user = await crud.get_user_by_tg_id(db_session, tg_id)
@@ -60,12 +65,22 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
         ])
 
         if user.profile_photo_file_id:
-            await message.answer_photo(
-                photo=user.profile_photo_file_id,
-                caption=profile_card[:1024],
-                parse_mode=ParseMode.HTML,
-                reply_markup=inline_kb
-            )
+            if len(profile_card) > 1024:
+                
+                await message.answer_photo(photo=user.profile_photo_file_id)
+                await message.answer(
+                    text=profile_card, 
+                    parse_mode=ParseMode.HTML, 
+                    reply_markup=inline_kb
+                )
+            else:
+                
+                await message.answer_photo(
+                    photo=user.profile_photo_file_id,
+                    caption=profile_card,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=inline_kb
+                )
         else:
             await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 

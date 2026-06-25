@@ -436,9 +436,9 @@ async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> 
     await message.answer(
         text=text,
         reply_markup=get_matching_type_keyboard(),
-        parse_mode="HTML" # حتماً باید باشد تا ایموجی‌ها رندر شوند
+        parse_mode="HTML" 
     )
-    
+
 
 @router.message(F.text == ReplyBtn.NEARBY)
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
@@ -536,7 +536,7 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         logger.info("get_coins_menu_keyboard not available; sending without extra markup.")
         markup = None
 
-    await message.answer(wallet_text, reply_markup=markup)
+    await message.answer(wallet_text, reply_markup=markup, parse_mode="HTML")
 
 @router.message(F.text == ReplyBtn.RULES)
 async def show_rules(message: Message):
@@ -562,13 +562,15 @@ async def show_rules(message: Message):
 
 @router.message(F.text == ReplyBtn.SUPPORT)
 async def start_support_chat(message: Message, state: FSMContext) -> None:
-    await message.answer(
+await message.answer(
         "📞 <b>ارتباط با تیم پشتیبانی:</b>\n\n"
         "پیام خود را تایپ کنید. پیام شما به صورت <b>کاملاً ناشناس</b> "
         "برای تیم پشتیبانی ارسال می‌شود.\n\n"
         "برای لغو از دکمه «❌ انصراف» استفاده کنید 👇",
         reply_markup=get_cancel_keyboard(),
+        parse_mode="HTML"  
     )
+
     await state.set_state(SupportStates.waiting_for_support_message)
 
 @router.message(SupportStates.waiting_for_support_message)

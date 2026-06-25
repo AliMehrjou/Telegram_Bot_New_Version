@@ -1,32 +1,38 @@
 {
   "pages": [
     [
-      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | مالی و کاربران</b>",
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | کنترل کاربران</b>",
       "",
-      "<tg-emoji emoji-id=\"5379600444098093058\">⚙️</tg-emoji> <b>مدیریت سکه:</b>",
-      "<blockquote>🔹 <code>/addcoins [id] [amount]</code> ▫️ <i>شارژ حساب</i>\n🔹 <code>/removecoins [id] [amount]</code> ▫️ <i>کسر سکه</i>\n🔹 <code>/addcoinsall [amount]</code> ▫️ <i>هدیه همگانی</i>\n🔹 <code>/addcoinsvip [amount]</code> ▫️ <i>هدیه ویژه VIP</i></blockquote>",
+      "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>کنترل و وضعیت کاربران:</b>",
+      "<blockquote>🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت کامل کاربر</i>\n🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری کاربر متخلف</i>\n🔸 <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت کاربر</i>\n🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای اشتراک ویژه VIP</i>\n🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی و ریست پروفایل کاربر</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | بخش مالی و بسته‌ها</b>",
       "",
-      "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>کنترل کاربران:</b>",
-      "<blockquote>🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت</i>\n🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری</i>\n🔸 <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت</i>\n🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای VIP</i>\n🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی پروفایل</i></blockquote>"
+      "<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> <b>مدیریت مستقیم سکه:</b>",
+      "<blockquote>🔹 <code>/addcoins [id] [amount]</code> ▫️ <i>شارژ حساب کاربر</i>\n🔹 <code>/removecoins [id] [amount]</code> ▫️ <i>کسر سکه از کاربر</i>\n🔹 <code>/addcoinsall [amount]</code> ▫️ <i>هدیه عمومی به همه کاربران</i>\n🔹 <code>/addcoinsvip [amount]</code> ▫️ <i>هدیه ویژه به کاربران VIP</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5431499171045581032\">🛒</tg-emoji> <b>مدیریت بسته‌های فروشگاهی:</b>",
+      "<blockquote>🔸 <code>/addpackage [سکه] [قیمت]</code> ▫️ <i>ساخت بسته جدید</i>\n🔸 <code>/packages</code> ▫️ <i>لیست تمام بسته‌های تعریف شده</i>\n🔸 <code>/editpackage [id] [قیمت]</code> ▫️ <i>ویرایش قیمت یک بسته</i>\n🔸 <code>/togglepackage [id]</code> ▫️ <i>فعال/غیرفعال‌سازی وضعیت بسته</i></blockquote>"
     ],
     [
       "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | رویدادها و پیام‌ها</b>",
       "",
       "<tg-emoji emoji-id=\"5469741319330996757\">🎉</tg-emoji> <b>سیستم رویدادها (Events):</b>",
-      "<blockquote>🔹 <code>/event_create</code> ▫️ <i>ساخت رویداد جدید</i>\n🔹 <code>/event_list</code> ▫️ <i>مشاهده رویدادها</i>\n🔹 <code>/event_end [id]</code> ▫️ <i>پایان دستی رویداد</i></blockquote>",
+      "<blockquote>🔹 <code>/event_create</code> ▫️ <i>ساخت رویداد جدید با ضریب سکه</i>\n🔹 <code>/event_list</code> ▫️ <i>مشاهده رویداد فعال فعلی</i>\n🔹 <code>/event_end</code> ▫️ <i>پایان دادن فوری به رویداد فعال</i></blockquote>",
       "",
-      "<tg-emoji emoji-id=\"5465300082628763143\">📢</tg-emoji> <b>اطلاع‌رسانی و پیام‌ها:</b>",
-      "<blockquote>🔸 <code>/broadcast</code> ▫️ <i>ارسال پیام همگانی</i>\n🔸 <code>/pbroadcast</code> ▫️ <i>ارسال پیام شخصی‌سازی‌شده</i></blockquote>",
-      "<tg-emoji emoji-id=\"5467539229468793355\">💬</tg-emoji> <b>پشتیبانی:</b> ▫️ <i>پاسخ به تیکت‌ها از طریق دکمه شیشه‌ای پیام کاربر انجام می‌شود.</i>"
+      "<tg-emoji emoji-id=\"5469903029144657419\">📣</tg-emoji> <b>اطلاع‌رسانی و پیام‌ها:</b>",
+      "<blockquote>🔸 <code>/broadcast</code> ▫️ <i>ارسال پیام همگانی به همه</i>\n🔸 <code>/pbroadcast</code> ▫️ <i>ارسال پیام شخصی‌سازی‌شده (فیلتردار)</i></blockquote>",
+      "<tg-emoji emoji-id=\"5465300082628763143\">💬</tg-emoji> <b>پشتیبانی:</b> ▫️ <i>پاسخ به تیکت‌ها از طریق دکمه شیشه‌ای پیام کاربر انجام می‌شود.</i>"
     ],
     [
       "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | آمار و اسپانسرها</b>",
       "",
-      "<tg-emoji emoji-id=\"5188217332748527444\">📊</tg-emoji> <b>تحلیل و مانیتورینگ:</b>",
-      "<blockquote>📈 <code>/adminstats</code>\n▫️ <i>داشبورد زنده (ثبت‌نام‌ها، استان‌ها، چت)</i>\n📋 <code>/report</code>\n▫️ <i>گزارش جامع امروز</i>\n🔔 <code>/report_auto</code>\n▫️ <i>دریافت خودکار گزارش روزانه</i></blockquote>",
+      "<tg-emoji emoji-id=\"5431577498364158238\">📊</tg-emoji> <b>تحلیل و مانیتورینگ:</b>",
+      "<blockquote>📈 <code>/adminstats</code>\n▫️ <i>داشبورد زنده (ثبت‌نام‌ها، استان‌ها، چت)</i>\n📋 <code>/report</code>\n▫️ <i>گزارش جامع امروز سیستم</i>\n🔔 <code>/report_auto</code>\n▫️ <i>دریافت خودکار گزارش روزانه راس ساعت مشخص</i></blockquote>",
       "",
-      "<tg-emoji emoji-id=\"5415803062738504079\">📢</tg-emoji> <b>مدیریت اسپانسرها:</b>",
-      "<blockquote>🔹 <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال</i>\n🔹 <code>/removesponsor [id]</code> ▫️ <i>حذف کانال</i>\n🔹 <code>/sponsors</code> ▫️ <i>لیست اسپانسرها</i></blockquote>"
+      "<tg-emoji emoji-id=\"5415803062738504079\">📢</tg-emoji> <b>مدیریت اسپانسرها (Force Join):</b>",
+      "<blockquote>🔹 <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال اسپانسر جدید</i>\n🔹 <code>/removesponsor [id]</code> ▫️ <i>حذف کانال از لیست جوین اجباری</i>\n🔹 <code>/sponsors</code> ▫️ <i>مشاهده لیست کانال‌های اسپانسر فعال</i></blockquote>"
     ]
   ]
 }

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     BOT_TOKEN: str
-    BOT_USERNAME: str = "Blind_Date_bot_test_bot"
+    BOT_USERNAME: str = "Blinddateirbot"
     REQUIRED_CHANNEL_ID: int
     CHANNEL_INVITE_LINK: str = "https://t.me/your_dating_channel"
 

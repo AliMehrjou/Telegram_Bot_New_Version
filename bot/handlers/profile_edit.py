@@ -324,11 +324,13 @@ async def process_new_voice(message: Message, state: FSMContext, db_session: Asy
     await state.clear()
 
 @router.message(ProfileEditStates.waiting_for_voice)
-async def process_voice_invalid(message: Message):
+async def process_voice_invalid(message: Message, state: FSMContext):
     if message.text == ReplyBtn.BACK_TO_MENU:
-        return 
+        await state.clear()
+        return await message.answer("❌ عملیات تغییر آهنگ لغو شد.", reply_markup=get_main_menu_keyboard())
+        
     await message.answer("⚠️ لطفاً فقط یک فایل صوتی (Voice) یا آهنگ (Audio) ارسال کن!")
-
+    
 # ================== کدهای افزودنی ==================
 # ---- وضعیت تأهل ----
 @router.callback_query(F.data == "change_marital")

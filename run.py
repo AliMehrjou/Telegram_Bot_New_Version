@@ -112,8 +112,6 @@ async def main():
     else:
         # Development mode
         logger.info("Running under DEVELOPMENT configuration with concurrent Polling & Web Server.")
-        # 🛠️ اصلاح بسیار مهم: در ویندوز/لوکال uvicorn.serve یک لوپ بلاک‌کننده دارد.
-        # برای اینکه وب‌سرور تسکِ پولینگ بات را خفه نکند، uvicorn را در یک تسک مجزا استارت می‌زنیم.
         fastapi_task = asyncio.create_task(run_fastapi_server())
         bot_task = asyncio.create_task(run_bot_polling())
         

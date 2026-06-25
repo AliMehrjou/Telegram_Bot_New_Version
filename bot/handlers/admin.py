@@ -28,9 +28,10 @@ from matching_bot_project.database.models.models import MatchHistory, User
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
-# ================== کدهای افزودنی (زیر دستورات ادمین موجود) ==================
+from matching_bot_project.database.queries import crud
+
 from aiogram.filters import Command
-from matching_bot_project.bot.filters.custom import IsAdminFilter # مطمئن شو این فیلتر موجود و ایمپورت شده باشد
+from matching_bot_project.bot.filters.custom import IsAdminFilter
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -42,7 +43,7 @@ router.callback_query.filter(IsAdminFilter())
 async def cmd_add_package(message: Message, db_session: AsyncSession):
     args = message.text.split()
     if len(args) != 3:
-        return await message.answer("❌ راهنما: `/addpackage <تعداد سکه> <قیمت به تومان>`\nمثال: `/addpackage 50 20000`", parse_mode="Markdown")
+        return await message.answer("❌ راهنما:\n<code>/addpackage [تعداد سکه] [قیمت به تومان]</code>\nمثال:\n<code>/addpackage 50 20000</code>", parse_mode="HTML")
     
     try:
         coin_amount = int(args[1])
@@ -65,14 +66,16 @@ async def cmd_list_packages(message: Message, db_session: AsyncSession):
         status = "✅ فعال" if p.is_active else "❌ غیرفعال"
         text += f"▪️ شناسه: <code>{p.id}</code> | {p.coin_amount} سکه | {p.price_toman:,} تومان | {status}\n"
         
-    text += "\n💡 برای ویرایش قیمت: `/editpackage <id> <new_price>`\n💡 برای فعال/غیرفعال کردن: `/togglepackage <id>`"
+    
+    text += "\n💡 برای ویرایش قیمت: <code>/editpackage [id] [new_price]</code>\n💡 برای فعال/غیرفعال کردن: <code>/togglepackage [id]</code>"
+    
     await message.answer(text, parse_mode="HTML")
 
 @router.message(Command("editpackage"), IsAdminFilter())
 async def cmd_edit_package(message: Message, db_session: AsyncSession):
     args = message.text.split()
     if len(args) != 3:
-        return await message.answer("❌ راهنما: `/editpackage <شناسه بسته> <قیمت جدید>`")
+        return await message.answer("❌ راهنما:\n<code>/editpackage [id] [new_price]</code>", parse_mode="HTML")
     try:
         pkg_id = int(args[1])
         new_price = int(args[2])
@@ -82,7 +85,7 @@ async def cmd_edit_package(message: Message, db_session: AsyncSession):
     success = await crud.update_coin_package_price(db_session, pkg_id, new_price)
     if success:
         await db_session.commit()
-        await message.answer(f"✅ قیمت بسته {pkg_id} به {new_price:,} تومان تغییر کرد.")
+        await message.answer(f"✅ قیمت بسته <code>{pkg_id}</code> به <b>{new_price:,}</b> تومان تغییر کرد.", parse_mode="HTML")
     else:
         await message.answer("❌ بسته‌ای با این شناسه یافت نشد.")
 
@@ -90,7 +93,8 @@ async def cmd_edit_package(message: Message, db_session: AsyncSession):
 async def cmd_toggle_package(message: Message, db_session: AsyncSession):
     args = message.text.split()
     if len(args) != 2:
-        return await message.answer("❌ راهنما: `/togglepackage <شناسه بسته>`")
+        # اصلاح: استفاده از تگ code و براکت به جای علامت‌های کوچکتر/بزرگتر
+        return await message.answer("❌ راهنما:\n<code>/togglepackage [id]</code>", parse_mode="HTML")
     try:
         pkg_id = int(args[1])
     except ValueError:
@@ -100,7 +104,7 @@ async def cmd_toggle_package(message: Message, db_session: AsyncSession):
     if new_status is not None:
         await db_session.commit()
         stat_str = "فعال ✅" if new_status else "غیرفعال ❌"
-        await message.answer(f"وضعیت بسته {pkg_id} به {stat_str} تغییر یافت.")
+        await message.answer(f"وضعیت بسته <code>{pkg_id}</code> به <b>{stat_str}</b> تغییر یافت.", parse_mode="HTML")
     else:
         await message.answer("❌ بسته‌ای با این شناسه یافت نشد.")
 
@@ -302,7 +306,7 @@ async def cmd_addcoinsvip(message: Message, db_session: AsyncSession):
 
 @router.message(Command("banuser"))
 async def cmd_banuser(message: Message, db_session: AsyncSession):
-    from matching_bot_project.bot.core.config import settings  # اگر بالای فایل نیست
+    
     args = message.text.split()
     if len(args) != 2:
         return await message.answer("Usage: /banuser <tg_id>")
@@ -324,25 +328,40 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
     await db_session.commit()
     await message.answer(f"User {tg_id} has been banned.")
 
-@router.message(Command("unbanuser"))
+@router.message(Command("unbanuser"), IsAdminFilter())
 async def cmd_unbanuser(message: Message, db_session: AsyncSession):
     args = message.text.split()
     if len(args) != 2:
-        return await message.answer("Usage: /unbanuser <tg_id>")
+        return await message.answer("❌ راهنما:\n<code>/unbanuser [tg_id]</code>", parse_mode="HTML")
 
     try:
         tg_id = int(args[1])
     except ValueError:
-        return await message.answer("Invalid tg_id.")
+        return await message.answer("⚠️ شناسه کاربری (tg_id) نامعتبر است.")
 
-    user = await get_user_by_tg_id(db_session, tg_id)
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
     if not user:
-        return await message.answer("User not found.")
+        return await message.answer("⚠️ کاربری با این شناسه در دیتابیس یافت نشد.")
 
     user.is_banned = False
     await db_session.commit()
 
-    await message.answer(f"User {tg_id} has been unbanned.")
+    
+    try:
+        await bot.send_message(
+            chat_id=tg_id, 
+            text="🟢 <b>حساب کاربری شما رفع مسدودیت (Unban) شد و می‌توانید مجدداً از ربات استفاده کنید.</b>", 
+            parse_mode="HTML"
+        )
+        notify_status = "و پیام اطلاع‌رسانی به او تحویل داده شد."
+    except Exception:
+        notify_status = "اما کاربر ربات را بلاک کرده و پیام اطلاع‌رسانی به او نرسید."
+
+    
+    await message.answer(
+        f"✅ کاربر <code>{tg_id}</code> با موفقیت رفع مسدودیت شد.\nℹ️ <i>{notify_status}</i>", 
+        parse_mode="HTML"
+    )
 
 @router.message(Command("userinfo"))
 async def cmd_userinfo(message: Message, db_session: AsyncSession):
@@ -488,7 +507,7 @@ async def cq_stats(call: CallbackQuery, db_session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin_ban_"))
 async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
-    from matching_bot_project.bot.core.config import settings
+    
     
     try:
         target_tg_id = int(call.data.split("_")[2])
@@ -687,10 +706,13 @@ async def cq_help_admin_pagination(call: CallbackQuery):
     
     try:
         await call.message.edit_text(text=help_text, reply_markup=keyboard, parse_mode="HTML")
+        await call.answer() 
     except Exception as e:
-        logger.debug(f"Pagination edit error: {e}")
+        logger.error(f"Pagination edit error: {e}") 
         
-    await call.answer()
+        
+        error_msg = str(e)[:150] 
+        await call.answer(f"⚠️ ارور فرمت تلگرام در این صفحه:\n{error_msg}", show_alert=True)
 
 @router.callback_query(F.data == "ignore_pagination")
 async def ignore_pagination_click(call: CallbackQuery):
@@ -862,7 +884,7 @@ async def event_get_multiplier(message: Message, state: FSMContext) -> None:
  
 @router.callback_query(EventStates.confirming, F.data == "event_confirm")
 async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
-    import json
+    
     await call.answer()
     data = await state.get_data()
     await state.clear()
@@ -921,7 +943,7 @@ async def event_cancel(call: CallbackQuery, state: FSMContext) -> None:
  
 @router.message(Command("event_list"))
 async def cmd_event_list(message: Message) -> None:
-    import json
+    
     event_data_str = await redis_client.get("bot:active_event_data")
     
     if not event_data_str:
@@ -1131,44 +1153,38 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
     if conditions:
         stmt = stmt.where(and_(*conditions))
  
-    # در حین استریم، پیام شخص‌سازی شده رو می‌سازیم و فقط یک Tuple سبک رو ذخیره می‌کنیم
-    messages_to_send = []
-    stream_result = await db_session.stream_scalars(stmt.execution_options(yield_per=500))
+    await call.message.edit_text(
+        "⏳ <b>در حال ارسال پیام‌ها...</b>\n\n"
+        "پیام‌ها در حال شخصی‌سازی و ارسال زنده هستند. لطفاً تا پایان عملیات منتظر بمانید.",
+        parse_mode="HTML",
+    )
+    
+    sent = 0
+    failed = 0
+
+    
+    stream_result = await db_session.stream_scalars(stmt.execution_options(yield_per=200))
     
     async for user in stream_result:
         personalized_text = _personalize(template, user)
-        messages_to_send.append((user.tg_id, personalized_text))
- 
-    if not messages_to_send:
-        return await call.message.edit_text("⚠️ هیچ کاربری با این فیلتر یافت نشد.")
- 
-    await call.message.edit_text(
-        f"⏳ در حال ارسال به <b>{len(messages_to_send)}</b> کاربر...",
-        parse_mode="HTML",
-    )
- 
-    # تسک اختصاصی برای برودکست پیام‌های شخصی‌سازی شده
-    async def _send_personalized(msgs: list[tuple[int, str]]) -> None:
-        sent = failed = 0
-        for tg_id, text in msgs:
-            try:
-                await bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
-                sent += 1
-            except Exception:
-                failed += 1
-            await asyncio.sleep(0.04)  # 40ms = ~25 msg/s
- 
         try:
-            await call.message.answer(
-                f"✅ <b>ارسال تمام شد</b>\n\n"
-                f"موفق: <b>{sent}</b> | ناموفق: <b>{failed}</b>",
-                parse_mode="HTML",
-            )
+            await bot.send_message(chat_id=user.tg_id, text=personalized_text, parse_mode="HTML")
+            sent += 1
         except Exception:
-            pass
+            failed += 1
+            
+        await asyncio.sleep(0.04)  # رعایت محدودیت 40 میلی‌ثانیه‌ای تلگرام (حدود 25 پیام در ثانیه)
  
-    asyncio.create_task(_send_personalized(messages_to_send))
-    logger.info("Personalized broadcast started for %d users.", len(messages_to_send))
+    
+    if sent == 0 and failed == 0:
+        await call.message.answer("⚠️ عملیات پایان یافت اما هیچ کاربری با این فیلترها در دیتابیس یافت نشد.")
+    else:
+        await call.message.answer(
+            f"✅ <b>عملیات ارسال پیام شخصی‌سازی‌شده (PBroadcast) تمام شد!</b>\n\n"
+            f"📩 تعداد ارسال موفق: <b>{sent}</b>\n"
+            f"🚫 تعداد ناموفق (بلاک/خطا): <b>{failed}</b>",
+            parse_mode="HTML",
+        )
 
  
 # ─────────────────────────────────────────────────────────────────────────────
