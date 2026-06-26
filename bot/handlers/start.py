@@ -132,7 +132,7 @@ async def handle_start_command(
             if ref_id_candidate != tg_id:
                 referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                 if referrer:
-                    referrer_id = referrer.tg_id  # FIX: Storing Telegram ID instead of DB Primary Key
+                    referrer_id = referrer.id # FIX: Storing Telegram ID instead of DB Primary Key
         except Exception:
             pass
 
@@ -144,7 +144,7 @@ async def handle_start_command(
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                        referrer_id = referrer.tg_id  # FIX: Storing Telegram ID instead of DB Primary Key
+                         referrer_id = referrer.id  # FIX: Storing Telegram ID instead of DB Primary Key
             except Exception:
                 pass
             await redis_client.delete(f"pending_ref:{tg_id}")

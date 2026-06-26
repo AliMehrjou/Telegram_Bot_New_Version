@@ -23,7 +23,19 @@ logger = logging.getLogger(__name__)
 async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]:
     stmt = select(User).where(User.tg_id == tg_id)
     result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    
+    if user and user.is_vip and user.vip_expires_at:
+        from datetime import datetime, timezone
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        
+        if now_utc > user.vip_expires_at:
+            user.is_vip = False
+            user.vip_expires_at = None
+            session.add(user)
+            
+    return user
 
 async def get_user_by_public_id(session: AsyncSession, public_id: str) -> Optional[User]:
     stmt = select(User).where(User.public_id == public_id)
@@ -38,42 +50,29 @@ async def process_coin_transaction(
     description: str,
     ignore_multiplier: bool = False
 ) -> bool:
-    """Safely processes coin addition/deduction and logs the transaction.
-    Automatically applies active event multipliers for positive amounts unless ignored."""
+    """Safely processes coin addition/deduction and logs the transaction."""
     final_amount = amount
 
     if amount < 0:
         deduction = abs(amount)
-        # Atomic update to prevent race conditions on spend/transfer
-        stmt = (
-            update(User)
-            .where(and_(User.tg_id == user.tg_id, User.coin_balance >= deduction))
-            .values(
-                coin_balance=User.coin_balance - deduction,
-                total_spent_coins=User.total_spent_coins + deduction
-            )
-        )
-        result = await session.execute(stmt)
         
-        if result.rowcount == 0:
-            return False # Insufficient funds or user not found
+        # --- فیکس باگ دوم: مدیریت صحیح حافظه و دیتابیس بدون کوئری موازی ---
+        if user.coin_balance < deduction:
+            return False 
             
-        # Update in-memory object so it reflects reality for the rest of the current request
         user.coin_balance -= deduction
-        user.total_spent_coins += deduction
+        
+        # فقط در صورتی که تراکنش توسط ادمین کسر نشده باشد، آن را پای خرید کاربر می‌نویسیم
+        if "Admin" not in description and "مدیریت" not in description:
+            user.total_spent_coins += deduction
 
     else:
-        # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
         if not ignore_multiplier:
             try:
-                # خواندن ضریب ایونت فعال از ردیس
                 active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
                 if active_multiplier_str:
                     multiplier = float(active_multiplier_str)
-                    # ضرب کردن و رند کردن به عدد صحیح
                     final_amount = int(final_amount * multiplier)
-                    
-                    # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
                     if multiplier > 1.0:
                         description += f" (ضریب رویداد ×{multiplier})"
             except Exception as e:

@@ -139,21 +139,25 @@ class ForceJoinMiddleware(BaseMiddleware):
             InlineKeyboardButton(text="✅ بررسی عضویت مجدد", callback_data="check_membership")
         ])
 
+        # --- فیکس باگ: تغییر به HTML و جلوگیری از کرش سیستم ---
         alert_text = (
-            "⚠️ *جهت استفاده از ربات، ابتدا باید عضو کانال‌های حامی ما شوید!*\n\n"
+            "⚠️ <b>جهت استفاده از ربات، ابتدا باید عضو کانال‌های حامی ما شوید!</b>\n\n"
             "پس از عضویت در تمامی کانال‌ها از دکمه زیر جهت بررسی مجدد استفاده کنید."
         )
 
-        if isinstance(event, Message):
-            await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-        elif isinstance(event, CallbackQuery):
-            if event.message:
-                try:
-                    await event.message.edit_text(text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-                except TelegramAPIError:
-                    pass
-            else:
-                await bot.send_message(chat_id=user_id, text=alert_text, reply_markup=keyboard, parse_mode="Markdown")
-            await event.answer("نیاز به تایید عضویت!", show_alert=True)
+        try:
+            if isinstance(event, Message):
+                await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="HTML")
+            elif isinstance(event, CallbackQuery):
+                if event.message:
+                    try:
+                        await event.message.edit_text(text=alert_text, reply_markup=keyboard, parse_mode="HTML")
+                    except TelegramAPIError:
+                        pass
+                else:
+                    await bot.send_message(chat_id=user_id, text=alert_text, reply_markup=keyboard, parse_mode="HTML")
+                await event.answer("نیاز به تایید عضویت!", show_alert=True)
+        except TelegramAPIError as e:
+            logger.error(f"Failed to send force-join message to {user_id}: {e}")
 
         return None

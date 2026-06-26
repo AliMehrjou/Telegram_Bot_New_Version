@@ -329,18 +329,40 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
     except ValueError:
         return await message.answer("Invalid tg_id.")
 
-    # ── چک ادمین بودن قبل از بن کردن ──
     if tg_id in settings.parsed_admin_ids:
         return await message.answer("⚠️ شما نمی‌توانید یک ادمین را مسدود کنید!")
 
-    user = await get_user_by_tg_id(db_session, tg_id)
+    user = await crud.get_user_by_tg_id(db_session, tg_id)
     if not user:
         return await message.answer("User not found.")
 
     user.is_banned = True
+
+    # --- فیکس باگ پنهان: قطع کردن ارتباط کاربری که در وسط دیت است ---
+    active_match = await crud.get_active_match(db_session, tg_id)
+    if active_match:
+        active_match.is_active = False
+        active_match.ended_at = datetime.now(timezone.utc)
+        
+        partner_id = active_match.user_one_id if active_match.user_two_id == tg_id else active_match.user_two_id
+        try:
+            from aiogram.fsm.context import FSMContext
+            from aiogram.fsm.storage.base import StorageKey
+            from matching_bot_project.bot.core.loader import dp, bot
+            
+            partner_ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id))
+            await partner_ctx.set_state(None)
+            
+            await bot.send_message(
+                chat_id=partner_id,
+                text="⚠️ <b>دیت ناشناس متوقف شد!</b>\nحساب کاربری پارتنر شما توسط سیستم مسدود گردید.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify partner {partner_id} about ban: {e}")
+
     await db_session.commit()
 
-    # ۱. اطلاع‌رسانی به کاربر متخلف
     notify_status = ""
     try:
         await bot.send_message(
@@ -352,7 +374,6 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
     except Exception:
         notify_status = "⚠️ کاربر ربات را بلاک کرده است."
 
-    # ۲. پاکسازی کامل State کاربر و خروج از صف (برای جلوگیری از فعالیت با وجود بن بودن)
     try:
         from aiogram.fsm.context import FSMContext
         from aiogram.fsm.storage.base import StorageKey
@@ -367,9 +388,10 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
         logger.warning(f"Could not clear FSM session for banned user {tg_id}: {e}")
 
     await message.answer(
-        f"✅ کاربر <code>{tg_id}</code> با موفقیت مسدود شد.\nℹ️ <i>{notify_status}</i>", 
+        f"✅ کاربر <code>{tg_id}</code> با موفقیت مسدود و ارتباطات وی قطع شد.\nℹ️ <i>{notify_status}</i>", 
         parse_mode="HTML"
     )
+
 
 
 
@@ -517,6 +539,7 @@ async def cq_stats(call: CallbackQuery, db_session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin_ban_"))
 async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
+    # ۱. دریافت و اعتبارسنجی آیدی کاربر
     try:
         target_tg_id = int(call.data.removeprefix("admin_ban_"))
     except ValueError:
@@ -530,20 +553,64 @@ async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
 
     user = await crud.get_user_by_tg_id(db_session, target_tg_id)
     if not user:
-        return await call.answer("⚠️ این کاربر یافت نشد!", show_alert=True)
+        return await call.answer("⚠️ این کاربر در دیتابیس یافت نشد!", show_alert=True)
 
-    await call.answer("کاربر مسدود شد.")
+    await call.answer("عملیات مسدودسازی در حال انجام است...")
 
+    # ۲. تغییر وضعیت کاربر به مسدود
     user.is_banned = True
-    await db_session.commit()
     
+    # ۳. فیکس باگ امنیتی: قطع ارتباط در صورت وجود دیت فعال
+    from datetime import datetime, timezone
+    active_match = await crud.get_active_match(db_session, target_tg_id)
+    if active_match:
+        active_match.is_active = False
+        active_match.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        partner_id = active_match.user_one_id if active_match.user_two_id == target_tg_id else active_match.user_two_id
+        try:
+            from aiogram.fsm.context import FSMContext
+            from aiogram.fsm.storage.base import StorageKey
+            from matching_bot_project.bot.core.loader import dp, bot
+            
+            # پاک کردن نشست پارتنر
+            partner_ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id))
+            await partner_ctx.set_state(None)
+            
+            # اطلاع‌رسانی به پارتنر
+            await bot.send_message(
+                chat_id=partner_id,
+                text="⚠️ <b>دیت ناشناس متوقف شد!</b>\nحساب کاربری پارتنر شما توسط سیستم مسدود گردید.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify partner {partner_id} about ban: {e}")
+
+    # ۴. ذخیره تغییرات در دیتابیس
+    await db_session.commit()
+
+    # ۵. پاکسازی کامل نشست (FSM) و خروج از صف مچ‌یابی کاربر بن‌شده
+    try:
+        from aiogram.fsm.context import FSMContext
+        from aiogram.fsm.storage.base import StorageKey
+        from matching_bot_project.bot.core.loader import dp, bot, matching_engine
+        
+        ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=target_tg_id, user_id=target_tg_id))
+        await ctx.set_state(None)
+        await ctx.clear()
+        await matching_engine.remove_from_queue(target_tg_id)
+    except Exception as e:
+        logger.warning(f"Could not clear FSM session for banned user {target_tg_id}: {e}")
+        
+    # ۶. ارسال پیام اخطار به کاربر متخلف
     user_notification = "❌ <b>حساب کاربری شما به دلیل نقض قوانین مسدود (Ban) شد.</b>"
     try:
         await bot.send_message(chat_id=target_tg_id, text=user_notification, parse_mode="HTML")
         ban_msg_status = "✅ پیام اخطار به کاربر تحویل داده شد."
     except Exception:
-        ban_msg_status = "⚠️ کاربر ربات را بلاک کرده است."
+        ban_msg_status = "⚠️ کاربر ربات را بلاک کرده است (پیام تحویل نشد)."
 
+    # ۷. آپدیت پیام شیشه‌ای ادمین برای نمایش وضعیت جدید
     unban_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟢 رفع مسدودیت (Unban)", callback_data=f"admin_unban_{target_tg_id}")]
     ])
@@ -553,7 +620,7 @@ async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
             "📩 <b>وضعیت پیام پشتیبانی تغییر یافت:</b>\n\n"
             f"👤 شناسه کاربر متخلف: <code>{target_tg_id}</code>\n"
             "──────────────────────────────\n"
-            "⛔️ <b>وضعیت: این کاربر مسدود شد.</b>\n"
+            "⛔️ <b>وضعیت: این کاربر با موفقیت مسدود شد و ارتباطات وی قطع گردید.</b>\n"
             f"ℹ️ <i>{ban_msg_status}</i>"
         ),
         parse_mode="HTML",
@@ -1145,18 +1212,32 @@ async def pbroadcast_get_message(message: Message, state: FSMContext, db_session
     )
  
 
-async def _background_pbroadcast(users_data: list[tuple[int, str]]):
+async def _background_pbroadcast(users_raw_data: list, template: str):
+    # --- فیکس باگ: ساخت یک کلاس سبک برای جایگزینی متغیرها به صورت درجا ---
+    class _TempUser:
+        def __init__(self, fname, city, coins, age):
+            self.first_name = fname
+            self.city = city
+            self.coin_balance = coins
+            self.age = age
+
     sent = 0
     failed = 0
-    for tg_id, text in users_data:
+    
+    for tg_id, fname, city, coins, age in users_raw_data:
+        mock_user = _TempUser(fname, city, coins, age)
+        text = _personalize(template, mock_user)
         try:
             await bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
             sent += 1
         except Exception:
             failed += 1
-        await asyncio.sleep(0.04)
+        
+        await asyncio.sleep(0.04) 
         
     logger.info(f"PBroadcast completed. Sent: {sent}, Failed: {failed}")
+
+
 
 
 @router.callback_query(PBroadcastStates.confirming, F.data == "pbroadcast_confirm")
@@ -1178,35 +1259,33 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
     if filters.get("vip"):
         conditions.append(User.is_vip == True)
  
-    stmt = select(User)
+    stmt = select(User.tg_id, User.first_name, User.city, User.coin_balance, User.age)
     if conditions:
         stmt = stmt.where(and_(*conditions))
  
     await call.message.edit_text(
-        "⏳ <b>در حال ارسال پیام‌ها در پس‌زمینه...</b>\n\n"
-        "پیام‌ها در حال شخصی‌سازی و ارسال هستند. شما می‌توانید به کار خود ادامه دهید.",
+        "⏳ <b>در حال استخراج مخاطبین و ارسال در پس‌زمینه...</b>\n\n"
+        "این فرآیند به صورت بهینه مدیریت می‌شود و شما می‌توانید به کار خود ادامه دهید.",
         parse_mode="HTML",
     )
     
-    users_data = []
-    stream_result = await db_session.stream_scalars(stmt.execution_options(yield_per=200))
-    async for user in stream_result:
-        personalized_text = _personalize(template, user)
-        users_data.append((user.tg_id, personalized_text))
+    users_raw_data = []
+    stream_result = await db_session.stream_tuples(stmt.execution_options(yield_per=1000))
+    async for row in stream_result:
+        users_raw_data.append(row)
         
-    if not users_data:
+    if not users_raw_data:
         await call.message.answer("⚠️ عملیات پایان یافت اما هیچ کاربری با این فیلترها در دیتابیس یافت نشد.")
         return
         
-    asyncio.create_task(_background_pbroadcast(users_data))
+    
+    asyncio.create_task(_background_pbroadcast(users_raw_data, template))
 
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — Daily Report
 # ─────────────────────────────────────────────────────────────────────────────
- 
-_AUTO_REPORT_ADMIN_IDS: set[int] = set()
- 
+
  
 async def build_daily_report(db_session: AsyncSession) -> str:
 
@@ -1293,36 +1372,30 @@ async def cmd_report(message: Message, db_session: AsyncSession) -> None:
  
 @router.message(Command("report_auto"))
 async def cmd_report_auto(message: Message) -> None:
-    """فعال/غیرفعال کردن گزارش خودکار برای این ادمین."""
+    """فعال/غیرفعال کردن گزارش خودکار برای این ادمین (ذخیره در ردیس)"""
     admin_id = message.from_user.id
+    
+    
+    is_active = await redis_client.sismember("bot:auto_report_admins", str(admin_id))
  
-    if admin_id in _AUTO_REPORT_ADMIN_IDS:
-        _AUTO_REPORT_ADMIN_IDS.discard(admin_id)
+    if is_active:
+        await redis_client.srem("bot:auto_report_admins", str(admin_id))
         await message.answer("🔕 گزارش خودکار روزانه <b>غیرفعال</b> شد.", parse_mode="HTML")
     else:
-        _AUTO_REPORT_ADMIN_IDS.add(admin_id)
+        await redis_client.sadd("bot:auto_report_admins", str(admin_id))
         await message.answer(
             "🔔 گزارش خودکار روزانه <b>فعال</b> شد.\n"
             "هر شب ساعت ۲۳:۵۹ UTC گزارش برات ارسال میشه.",
             parse_mode="HTML",
         )
+
  
  
 async def send_daily_reports(db_session: AsyncSession) -> None:
-    """
-    این تابع رو از scheduler صدا بزن — هر شب یه بار.
- 
-    مثال با APScheduler:
-        scheduler.add_job(
-            send_daily_reports,
-            trigger=CronTrigger(hour=23, minute=59),
-            args=[db_session_factory()],
-        )
- 
-    یا با aiogram-الهام‌گرفته asyncio loop:
-        asyncio.create_task(_daily_report_loop(session_factory))
-    """
-    if not _AUTO_REPORT_ADMIN_IDS:
+    """ارسال گزارش به لیست ادمین‌های ذخیره‌شده در ردیس"""
+    admin_ids_bytes = await redis_client.smembers("bot:auto_report_admins")
+    
+    if not admin_ids_bytes:
         return
  
     try:
@@ -1331,12 +1404,12 @@ async def send_daily_reports(db_session: AsyncSession) -> None:
         logger.error("Failed to build daily report: %s", exc)
         return
  
-    for admin_id in list(_AUTO_REPORT_ADMIN_IDS):
+    for b_id in admin_ids_bytes:
+        admin_id = int(b_id.decode('utf-8'))
         try:
             await bot.send_message(chat_id=admin_id, text=report_text, parse_mode="HTML")
         except Exception as exc:
             logger.warning("Could not send daily report to admin %d: %s", admin_id, exc)
- 
  
 async def _daily_report_loop(session_factory) -> None:
     """
@@ -1363,19 +1436,22 @@ async def _daily_report_loop(session_factory) -> None:
 
 @router.message(Command("addsponsor"))
 async def cmd_addsponsor(message: Message):
-    """افزودن کانال اسپانسر جدید با اعتبارسنجی حضور ربات"""
+    """افزودن کانال اسپانسر جدید با اعتبارسنجی لینک و حضور ربات"""
     args = message.text.split()
     if len(args) != 3:
         return await message.answer(
             "⚠️ <b>راهنمای استفاده:</b>\n"
             "<code>/addsponsor [channel_id_or_username] [invite_link]</code>\n\n"
-            "<i>مثال:</i>\n<code>/addsponsor -10012345678 https://t.me/joinchat/...</code>\n"
-            "یا\n<code>/addsponsor @MyChannel https://t.me/MyChannel</code>",
+            "<i>مثال:</i>\n<code>/addsponsor -10012345678 https://t.me/joinchat/...</code>\n",
             parse_mode="HTML"
         )
     
     channel_id = args[1]
     invite_link = args[2]
+
+    # --- فیکس باگ اول: اعتبارسنجی ساختار لینک ---
+    if not invite_link.startswith(("http://", "https://")):
+        return await message.answer("⚠️ <b>خطا:</b> لینک دعوت باید حتماً با http یا https شروع شود!", parse_mode="HTML")
 
     try:
         target_chat = int(channel_id)
@@ -1397,15 +1473,14 @@ async def cmd_addsponsor(message: Message):
         )
 
     await redis_client.hset("bot:sponsors", channel_id, invite_link)
-
     await redis_client.incr("bot:sponsors_version")
-    # ──────────────────────────────────────────────────────────────────────
 
     await message.answer(
         f"✅ کانال <code>{channel_id}</code> با موفقیت تایید و به لیست اسپانسرها اضافه شد.\n"
         f"⚡️ کش عضویت تمام کاربران پاکسازی شد — دفعه بعد از ورود چک مجدد انجام میشه.",
         parse_mode="HTML"
     )
+
 
 @router.message(Command("removesponsor"))
 async def cmd_removesponsor(message: Message):
