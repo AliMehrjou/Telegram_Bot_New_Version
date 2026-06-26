@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
-
+from typing import Callable, Awaitable
 logger = logging.getLogger(__name__)
 
 
@@ -21,10 +21,11 @@ class BroadcastWorker:
         text: Optional[str] = None, 
         from_chat_id: Optional[int] = None, 
         message_id: Optional[int] = None, 
-        delay_ms: int = 50
+        delay_ms: int = 50,
+        on_blocked: Optional[Callable[[int], Awaitable[None]]] = None
     ) -> dict:
         """
-        Sends an asynchronous broadcast message.
+        Sends an asynchronous broadcast message concurrently using bounded workers.
         """
         sent_count = 0
         blocked_count = 0
@@ -36,31 +37,48 @@ class BroadcastWorker:
 
         logger.info("Starting async broadcast to %d users.", len(user_ids))
 
-        for index, tg_id in enumerate(user_ids):
-            try:
-                # اگر پیام شامل آیدی چت و آیدی پیام بود (برای انواع مدیا)
-                if from_chat_id and message_id:
-                    await self.bot.copy_message(
-                        chat_id=tg_id,
-                        from_chat_id=from_chat_id,
-                        message_id=message_id
-                    )
-                # در غیر این صورت فقط متن ارسال می‌شود (برای پیام‌های سیستمی و ایونت‌ها)
-                elif text:
-                    await self.bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
-                
-                sent_count += 1
-            except TelegramForbiddenError:
-                logger.warning("Broadcast blocked by user %s", tg_id)
-                blocked_count += 1
-            except TelegramAPIError as e:
-                logger.error("Telegram API error sending to %s: %s", tg_id, e)
-                error_count += 1
-            except Exception as e:
-                logger.error("Unexpected error sending to %s: %s", tg_id, e)
-                error_count += 1
+        # Bounded concurrency: allow up to 20 concurrent requests
+        # This keeps us well within Telegram's global ~30 messages/sec limit
+        semaphore = asyncio.Semaphore(20)
 
-            await asyncio.sleep(delay_ms / 1000.0)
+        async def _send_to_user(tg_id: int):
+            nonlocal sent_count, blocked_count, error_count
+            async with semaphore:
+                try:
+                    if from_chat_id and message_id:
+                        await self.bot.copy_message(
+                            chat_id=tg_id,
+                            from_chat_id=from_chat_id,
+                            message_id=message_id
+                        )
+                    elif text:
+                        await self.bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
+                    
+                    sent_count += 1
+                except TelegramForbiddenError:
+                    logger.warning("Broadcast blocked by user %s", tg_id)
+                    blocked_count += 1
+                    # Await the external callback to update the database
+                    if on_blocked:
+                        try:
+                            await on_blocked(tg_id)
+                        except Exception as cb_err:
+                            logger.error("Error in on_blocked callback for user %s: %s", tg_id, cb_err)
+                except TelegramAPIError as e:
+                    logger.error("Telegram API error sending to %s: %s", tg_id, e)
+                    error_count += 1
+                except Exception as e:
+                    logger.error("Unexpected error sending to %s: %s", tg_id, e)
+                    error_count += 1
+                finally:
+                    # Pacing mechanism: brief sleep inside the worker before releasing the semaphore
+                    if delay_ms > 0:
+                        await asyncio.sleep(delay_ms / 1000.0)
+
+        # Launch all tasks concurrently, throttled automatically by the semaphore
+        tasks = [_send_to_user(tg_id) for tg_id in user_ids]
+        if tasks:
+            await asyncio.gather(*tasks)
 
         logger.info(
             "Broadcast completed. Success: %d, Blocked: %d, Failed: %d",
@@ -72,6 +90,7 @@ class BroadcastWorker:
             "failed": error_count,
             "total_scope": len(user_ids)
         }
+    
 
     def start_background_broadcast(
         self, 
@@ -79,11 +98,27 @@ class BroadcastWorker:
         text: Optional[str] = None, 
         from_chat_id: Optional[int] = None, 
         message_id: Optional[int] = None, 
-        delay_ms: int = 50
+        delay_ms: int = 50,
+        on_blocked: Optional[Callable[[int], Awaitable[None]]] = None
     ) -> asyncio.Task:
         loop = asyncio.get_running_loop()
         task = loop.create_task(
-            self.broadcast_message(user_ids, text, from_chat_id, message_id, delay_ms),
+            self.broadcast_message(user_ids, text, from_chat_id, message_id, delay_ms, on_blocked),
             name=f"broadcast_to_{len(user_ids)}_users"
         )
+
+        def _done_callback(t: asyncio.Task):
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(
+                    "Background broadcast task '%s' failed unexpectedly: %s", 
+                    t.get_name(), e, exc_info=True
+                )
+
+        task.add_done_callback(_done_callback)
         return task
+    
+    

@@ -188,17 +188,17 @@ async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):
             
     await call.answer("✅ فیش تأیید و سکه‌ها واریز شد.")
 
-    
-@router.callback_query(F.data.startswith("reject_receipt_"))
+
+@router.callback_query(IsAdminFilter(), F.data.startswith("reject_receipt_"))
 async def admin_reject_receipt(call: CallbackQuery, db_session: AsyncSession):
-    order_id = int(call.data.split("_")[2])
+    order_id = int(call.data.removeprefix("reject_receipt_"))
     order = await crud.get_purchase_order(db_session, order_id)
     
     if not order or order.status != "pending":
         return await call.answer("⚠️ این سفارش قبلاً پردازش شده یا وجود ندارد.", show_alert=True)
         
     order.status = "rejected"
-    order.resolved_at = datetime.now(timezone.utc)
+    order.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db_session.commit()
     
     try:
@@ -217,3 +217,4 @@ async def admin_reject_receipt(call: CallbackQuery, db_session: AsyncSession):
         pass
         
     await call.answer("❌ فیش رد شد.")
+    

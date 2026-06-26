@@ -15,7 +15,8 @@ engine = create_async_engine(
     pool_size=10,
     max_overflow=20,
     pool_recycle=3600,
-    pool_pre_ping=False
+    # باگ برطرف شده: True شدن این مقدار از خطای "MySQL server has gone away" جلوگیری می‌کند
+    pool_pre_ping=True
 )
 
 # Async sessionmaker factory

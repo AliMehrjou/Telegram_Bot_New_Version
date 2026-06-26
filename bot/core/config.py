@@ -13,7 +13,8 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore"
     )
-
+    WEBHOOK_SECRET_TOKEN: str
+    ENVIRONMENT: str = "development"
     BOT_TOKEN: str
     BOT_USERNAME: str = "Blinddateirbot"
     REQUIRED_CHANNEL_ID: int

@@ -1,27 +1,23 @@
 import logging
 import string
 import random
+import math
 from typing import Optional, List
 from datetime import datetime
-from sqlalchemy import select, and_, or_, func, update
+
+from sqlalchemy import select, and_, or_, func, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.mysql import insert
-from matching_bot_project.database.models.models import User
-from sqlalchemy import select
+
 from matching_bot_project.bot.core.loader import redis_client
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
-    CoinTransaction, FriendList, BlockList, UserLike, UserReport
+    CoinTransaction, FriendList, BlockList, UserLike, UserReport,
+    CoinPackage, CoinPurchaseOrder
 )
-import math
-from matching_bot_project.database.models.models import CoinPackage, CoinPurchaseOrder
-
-from typing import Optional
-from sqlalchemy import select, case, func, and_, exists
-from sqlalchemy.ext.asyncio import AsyncSession
-from matching_bot_project.database.models.models import User, UserLike, BlockList
 
 logger = logging.getLogger(__name__)
+
 
 
 async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]:
@@ -44,32 +40,47 @@ async def process_coin_transaction(
 ) -> bool:
     """Safely processes coin addition/deduction and logs the transaction.
     Automatically applies active event multipliers for positive amounts unless ignored."""
-    if amount < 0 and user.coin_balance < abs(amount):
-        return False # Insufficient funds
-        
     final_amount = amount
 
-    # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
-    if final_amount > 0 and not ignore_multiplier:
-        try:
-            # خواندن ضریب ایونت فعال از ردیس
-            active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
-            if active_multiplier_str:
-                multiplier = float(active_multiplier_str)
-                # ضرب کردن و رند کردن به عدد صحیح
-                final_amount = int(final_amount * multiplier)
-                
-                # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
-                if multiplier > 1.0:
-                    description += f" (ضریب رویداد ×{multiplier})"
-        except Exception as e:
-            logger.error(f"Error fetching event multiplier from Redis: {e}")
+    if amount < 0:
+        deduction = abs(amount)
+        # Atomic update to prevent race conditions on spend/transfer
+        stmt = (
+            update(User)
+            .where(and_(User.tg_id == user.tg_id, User.coin_balance >= deduction))
+            .values(
+                coin_balance=User.coin_balance - deduction,
+                total_spent_coins=User.total_spent_coins + deduction
+            )
+        )
+        result = await session.execute(stmt)
+        
+        if result.rowcount == 0:
+            return False # Insufficient funds or user not found
             
-    user.coin_balance += final_amount
-    if final_amount > 0:
-        user.total_earned_coins += final_amount
+        # Update in-memory object so it reflects reality for the rest of the current request
+        user.coin_balance -= deduction
+        user.total_spent_coins += deduction
+
     else:
-        user.total_spent_coins += abs(final_amount)
+        # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
+        if not ignore_multiplier:
+            try:
+                # خواندن ضریب ایونت فعال از ردیس
+                active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
+                if active_multiplier_str:
+                    multiplier = float(active_multiplier_str)
+                    # ضرب کردن و رند کردن به عدد صحیح
+                    final_amount = int(final_amount * multiplier)
+                    
+                    # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
+                    if multiplier > 1.0:
+                        description += f" (ضریب رویداد ×{multiplier})"
+            except Exception as e:
+                logger.error(f"Error fetching event multiplier from Redis: {e}")
+                
+        user.coin_balance += final_amount
+        user.total_earned_coins += final_amount
         
     transaction = CoinTransaction(
         user_id=user.tg_id,
@@ -78,6 +89,7 @@ async def process_coin_transaction(
     )
     session.add(transaction)
     return True
+
 
 
 async def create_user(
@@ -270,12 +282,6 @@ async def create_user_report(
 async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:
     """Saves a like or pass interaction into the database and updates likes_count."""
     
-    check_stmt = select(UserLike.is_pass).where(
-        and_(UserLike.liker_id == liker_id, UserLike.liked_id == liked_id)
-    )
-    existing_record = await session.execute(check_stmt)
-    existing_is_pass = existing_record.scalar_one_or_none()
-    
     stmt = insert(UserLike).values(
         liker_id=liker_id, 
         liked_id=liked_id, 
@@ -283,9 +289,12 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     ).on_duplicate_key_update(
         is_pass=is_pass
     )
-    await session.execute(stmt)
+    result = await session.execute(stmt)
     
-    if not is_pass and (existing_is_pass is None or existing_is_pass is True):
+    # MySQL rowcount: 1 (new insert), 2 (updated existing row), 0 (no change/duplicate data)
+    # This helps avoid double-counting likes for rapid duplicate requests.
+    # Limitation: This relies on MySQL's default rowcount behavior and doesn't handle Like -> Pass decrements.
+    if not is_pass and result.rowcount in (1, 2):
         await session.execute(
             update(User)
             .where(User.tg_id == liked_id)
@@ -439,7 +448,7 @@ async def check_question_status(
     return list(res.scalars().all())
 
 
-async def seed_sixty_question_bank_if_empty(session: AsyncSession):
+async def seed_question_bank_if_empty(session: AsyncSession):
     stmt = select(Question).limit(1)
     res = await session.execute(stmt)
     if res.scalar_one_or_none():
@@ -470,7 +479,7 @@ async def seed_sixty_question_bank_if_empty(session: AsyncSession):
         q = Question(question_text=q_text, option_a=opt_a, option_b=opt_b, category=cat)
         session.add(q)
         
-    await session.commit()
+    await session.flush()
     logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")
 
 

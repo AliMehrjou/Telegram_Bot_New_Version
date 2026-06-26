@@ -96,7 +96,8 @@ async def start_coin_transfer(
 async def receive_transfer_amount(
     message: Message, state: FSMContext, db_session: AsyncSession
 ) -> None:
-    if message.text in (ReplyBtn.CANCEL_SHORT, ReplyBtn.CANCEL):
+    # BUG 14 FIX: Removed ReplyBtn.CANCEL_SHORT to prevent AttributeError
+    if message.text == ReplyBtn.CANCEL:
         await state.clear()
         await message.answer("لغو شد.", reply_markup=get_main_menu_keyboard())
         return
@@ -180,10 +181,12 @@ async def confirm_transfer(
             )
         except Exception:
             pass
+    else:
+        await db_session.rollback()
 
     await call.answer(msg, show_alert=True)
     await call.message.answer(msg, reply_markup=get_main_menu_keyboard())
-    
+
 
 # ── Cancel at any point ────────────────────────────────────────────────────
 
@@ -195,3 +198,8 @@ async def cancel_transfer(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+
+@router.message(CoinTransferStates.confirming, F.text == ReplyBtn.CANCEL)
+async def cancel_transfer_message(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("❌ انتقال لغو شد.", reply_markup=get_main_menu_keyboard())

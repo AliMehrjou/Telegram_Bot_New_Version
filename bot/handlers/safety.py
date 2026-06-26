@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from matching_bot_project.bot.handlers.interactions import execute_chat_termination_no_commit, execute_user_blocking_no_commit
 
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import bot
@@ -127,19 +128,29 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     forward_message_id = data.get("forward_message_id")
     reporter_id = call.from_user.id
 
-    parts = call.data.removeprefix("safety_reason_").split("_")
-    if len(parts) != 3:
+    # ─────────────────────────────────────────────────────────────────────────
+    # BUG 9 FIX: Safe callback data parsing
+    # ─────────────────────────────────────────────────────────────────────────
+    remainder = call.data.removeprefix("safety_reason_")
+    try:
+        first_sep = remainder.index("_")
+        second_sep = remainder.index("_", first_sep + 1)
+        
+        reported_id_str = remainder[:first_sep]
+        match_id_str = remainder[first_sep+1:second_sep]
+        reason = remainder[second_sep+1:]
+        
+        match_id = int(match_id_str)
+    except (ValueError, IndexError):
         await call.answer("خطا در پردازش اطلاعات.", show_alert=True)
         return
-        
-    match_id = int(parts[1])
-    reason = parts[2]
 
     reason_map = {
         "inappropriate": "محتوای نامناسب",
         "spam": "اسپم",
         "harassment": "آزار و اذیت و فحاشی",
-        "fake": "ربات/فیک"
+        "fake": "ربات/فیک",
+        "bot_fake": "ربات/فیک" # Added to support extended reason codes
     }
     persian_reason = reason_map.get(reason, "نامشخص")
 
@@ -152,9 +163,11 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
         match_history_id=match_id
     )
 
-    # اتمام چت فعال و بلاک کردن کاربر خاطی به صورت دوطرفه
-    await execute_chat_termination(db_session, match_id, reporter_id)
-    await execute_user_blocking(db_session, reporter_id, reported_id)
+    # ─────────────────────────────────────────────────────────────────────────
+    # BUG 10 FIX: Single commit point for transactional safety
+    # ─────────────────────────────────────────────────────────────────────────
+    await execute_chat_termination_no_commit(db_session, match_id, reporter_id)
+    await execute_user_blocking_no_commit(db_session, reporter_id, reported_id)
     await db_session.commit()
 
     admin_alert_text = (
@@ -166,22 +179,24 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
         f"👆 مدرک فوروارد شده بالا ضمیمه این گزارش است."
     )
 
-    # فوروارد مدارک مالتی‌مدیا به ادمین‌ها
+    # ─────────────────────────────────────────────────────────────────────────
+    # BUG 11 FIX: Bypass forward privacy restrictions
+    # ─────────────────────────────────────────────────────────────────────────
     if forward_chat_id and forward_message_id:
         for admin_id in settings.parsed_admin_ids:
             try:
-                await bot.forward_message(
+                await bot.copy_message(
                     chat_id=admin_id,
                     from_chat_id=forward_chat_id,
                     message_id=forward_message_id
                 )
             except Exception as e:
-                logger.error(f"Failed to forward evidence to admin {admin_id}: {e}")
+                logger.error(f"Failed to copy evidence to admin {admin_id}: {e}")
 
-    # ارسال هشدار متنی به ادمین‌ها
     worker = BroadcastWorker(bot=bot)
     worker.start_background_broadcast(user_ids=settings.parsed_admin_ids, text=admin_alert_text, delay_ms=40)
 
     await state.clear()
     await call.message.edit_text("✅ گزارش شما با موفقیت ثبت شد. گفتگو پایان یافت و کاربر خاطی برای همیشه مسدود شد.")
     await call.answer()
+

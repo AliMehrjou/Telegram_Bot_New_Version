@@ -39,6 +39,8 @@ class DatingScheduler:
         self.session_factory = session_factory
         self.timeout_seconds = timeout_seconds
         self._running_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task] = set()
+
 
     async def register_match_timeout(
         self,
@@ -72,7 +74,7 @@ class DatingScheduler:
         """
         while True:
             try:
-                # اصلاح: استفاده از scan_iter که به صورت خودکار و امن cursor را هندل می‌کند
+                # استفاده از scan_iter که به صورت خودکار و امن cursor را هندل می‌کند
                 # این کار مانع از بلاک شدن Event Loop و باگ‌های مدیریت Cursor می‌شود
                 async for key in self.redis.scan_iter(match="date:timeout:*", count=100):
                     try:
@@ -94,10 +96,14 @@ class DatingScheduler:
                         now_epoch = datetime.now(timezone.utc).timestamp()
 
                         if (now_epoch - last_activity) > self.timeout_seconds:
-                            # برای جلوگیری از تداخل فرآیندها، تسک‌ها را کانسورنت استارت می‌زنیم
-                            asyncio.create_task(
+                            # Create the task and assign it to a variable
+                            task = asyncio.create_task(
                                 self.close_inactive_date(match_history_id, key_str, data)
                             )
+                            # Add a strong reference
+                            self._background_tasks.add(task)
+                            # Ensure it gets removed from the set once fully completed
+                            task.add_done_callback(self._background_tasks.discard)
 
                     except Exception as e:
                         logger.error(f"Error checking timeout key {key}: {e}")
@@ -106,6 +112,7 @@ class DatingScheduler:
                 logger.error(f"Global exception in scheduling check loop: {e}")
 
             await asyncio.sleep(15)
+
 
     async def close_inactive_date(self, match_id: int, redis_key: str, data: Dict[str, str]):
         user_one_str = data.get("user_one_id")
@@ -124,6 +131,8 @@ class DatingScheduler:
                 if match_row:
                     match_row.is_active = False
                     await session.commit()
+                else:
+                    logger.warning(f"No MatchHistory row found for match_id: {match_id}. Could not deactivate in DB.")
         except Exception as e:
             logger.error(f"Failed to deactivate match {match_id} in DB: {e}")
 
@@ -150,8 +159,8 @@ class DatingScheduler:
                     parse_mode="Markdown",
                     reply_markup=get_main_menu_keyboard(),
                 )
-            except Exception:
-                pass  
+            except Exception as e:
+                logger.warning(f"Failed to send match timeout notification to user {user_id}: {e}")
 
         await self.redis.delete(redis_key)
         await self.redis.delete(f"match:questions:{match_id}")
@@ -159,6 +168,7 @@ class DatingScheduler:
 
         logger.info(f"Dating scheduler ended inactive match ID: {match_id}")
 
+        
     def start_polling(self):
         if not self._running_task or self._running_task.done():
             self._running_task = asyncio.create_task(self.verify_timeout_loops())

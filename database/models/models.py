@@ -6,6 +6,7 @@ from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKe
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from matching_bot_project.database.session import Base
 from sqlalchemy import Float
+from sqlalchemy import Index
 
 def generate_random_public_id(length=6):
     characters = string.ascii_letters + string.digits
@@ -17,6 +18,11 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     
+    __table_args__ = (
+        Index("ix_user_online_last_active", "is_online", "last_active"),
+        Index("ix_user_vip_expires_at", "vip_expires_at"),
+    )
+
     # آیدی منحصربه‌فرد برای نمایش به بقیه (اضافه شده)
     public_id: Mapped[str] = mapped_column(String(20), unique=True, index=True, default=generate_random_public_id, nullable=False)
     
@@ -65,14 +71,15 @@ class User(Base):
     
     # Activity & Status
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    last_active: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    last_active: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
+    
     
     # Referral system
     referrer_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
     # Relationships
     referred_users = relationship("User", backref="referrer", remote_side=[id])
@@ -95,7 +102,7 @@ class CoinTransaction(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     amount: Mapped[int] = mapped_column(Integer, nullable=False) # Positive (earned) or Negative (spent)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class FriendList(Base):
@@ -108,7 +115,7 @@ class FriendList(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     friend_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class BlockList(Base):
@@ -121,7 +128,7 @@ class BlockList(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     blocker_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     blocked_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class Question(Base):
@@ -149,7 +156,7 @@ class MatchHistory(Base):
     user_two_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     chat_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
@@ -165,7 +172,7 @@ class UserAnswer(Base):
     match_history_id: Mapped[int] = mapped_column(Integer, ForeignKey("match_histories.id", ondelete="CASCADE"), nullable=False)
     
     selected_option: Mapped[str] = mapped_column(String(5), nullable=False)
-    answered_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    answered_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class UserLike(Base):
@@ -178,7 +185,7 @@ class UserLike(Base):
     liker_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     liked_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     is_pass: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class UserReport(Base):
@@ -189,7 +196,7 @@ class UserReport(Base):
     reported_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     reason: Mapped[str] = mapped_column(String(50), nullable=False)
     match_history_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("match_histories.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 # ================== کدهای افزودنی ==================
@@ -200,7 +207,7 @@ class CoinPackage(Base):
     coin_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     price_toman: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class CoinPurchaseOrder(Base):
@@ -213,6 +220,5 @@ class CoinPurchaseOrder(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # pending | approved | rejected
     receipt_photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gateway_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    

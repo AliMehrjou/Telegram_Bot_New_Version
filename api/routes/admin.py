@@ -4,7 +4,8 @@ from sqlalchemy import select, func, and_
 from typing import Dict, List, Optional
 from datetime import datetime
 import logging
-
+import secrets
+from datetime import timezone
 from matching_bot_project.database.session import get_db_session
 from matching_bot_project.database.models.models import User, MatchHistory, Question
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin Control Panel"])
 
 def verify_api_key(x_api_key: str = Header(...)):
-    if x_api_key != settings.ADMIN_SECRET_TOKEN:
+    if not secrets.compare_digest(x_api_key, settings.ADMIN_SECRET_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return x_api_key
 
@@ -52,12 +53,12 @@ async def trigger_admin_broadcast(
 ) -> Dict:
     """Dispatches a global notification message without blocking main thread flow."""
     try:
-        # Pull all target TG User IDs
-        result = await db.execute(select(User.tg_id))
+        # Pull all target TG User IDs, explicitly excluding banned users
+        result = await db.execute(select(User.tg_id).where(User.is_banned == False))
         user_ids = [row[0] for row in result.all()]
         
         if not user_ids:
-            return {"status": "skipped", "message": "No users found in database."}
+            return {"status": "skipped", "message": "No active users found in database."}
             
         worker = BroadcastWorker(bot=bot)
         # Dispatch asynchronously
@@ -71,7 +72,7 @@ async def trigger_admin_broadcast(
     except Exception as e:
         logger.error(f"Broadcast process trigger failure: {str(e)}")
         raise HTTPException(status_code=500, detail="Unable to initiate global broadcaster pool")
-
+    
 @router.post("/coins/add", dependencies=[Depends(verify_api_key)])
 async def api_add_coins(
     tg_id: int,
@@ -82,10 +83,14 @@ async def api_add_coins(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    await process_coin_transaction(db, user, amount, "API Admin added coins")
+    success = await process_coin_transaction(db, user, amount, "API Admin added coins")
+    if not success:
+        raise HTTPException(status_code=400, detail="Insufficient balance for this deduction")
+
     await db.commit()
 
     return {"status": "success", "tg_id": tg_id, "new_balance": user.coin_balance}
+
 
 @router.post("/ban", dependencies=[Depends(verify_api_key)])
 async def api_ban_user(
@@ -134,7 +139,8 @@ async def api_get_user(
 
 @router.get("/stats/advanced", dependencies=[Depends(verify_api_key)])
 async def api_get_advanced_stats(db: AsyncSession = Depends(get_db_session)) -> Dict:
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Use timezone-aware generation, then strip it for naive UTC consistency
+    today = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
     today_reg = await db.scalar(select(func.count(User.id)).where(User.created_at >= today))
 
     result = await db.execute(
@@ -155,3 +161,4 @@ async def api_get_advanced_stats(db: AsyncSession = Depends(get_db_session)) -> 
         "top_provinces": top_provinces,
         "chat_conversion_rate_percent": round(conv_rate, 2)
     }
+

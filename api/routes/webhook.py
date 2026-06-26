@@ -4,7 +4,7 @@ from aiogram.types import Update
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import dp, bot
 from fastapi import APIRouter, Request, status, HTTPException, Header
-
+import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["Telegram Webhook Feed"])
 
@@ -19,12 +19,14 @@ async def telegram_webhook_endpoint(
     Feeds the events recursively to aiogram dispatcher.
     """
     # Validate the secure header sent by Telegram
-    if x_telegram_bot_api_secret_token != settings.ADMIN_SECRET_TOKEN:
+    # ---> FIX: Verify against the dedicated webhook token <---
+    if x_telegram_bot_api_secret_token != settings.WEBHOOK_SECRET_TOKEN:
         logger.error("Security alert! Ingestion attempted with invalid Telegram Secret Token.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Forbidden security token mismatch."
         )
+    
 
     try:
         update_dict = await request.json()

@@ -69,14 +69,21 @@ async def run_bot_polling():
     """Fall-back long polling listener when webhook is disabled or not configured."""
     logger.info("Launching aiogram in long updates polling mode...")
     
-    # Await background connections (DB/Redis lifespan) to be fully ready
-    # 🛠️ اصلاح فنی: اضافه کردن یک لایه برای جلوگیری از قفل شدن لوپ در صورت عدم وجود آبجکت ردیس
-    try:
-        while not hasattr(matching_engine, 'redis') or not matching_engine.redis:
-            await asyncio.sleep(0.2)
-    except Exception as e:
-        logger.warning(f"Waiting for matching_engine.redis generated an alert: {e}")
-        await asyncio.sleep(1)
+    # Await background connections (DB/Redis lifespan) to be fully ready with a timeout
+    timeout_seconds = 30
+    poll_interval = 0.5
+    max_attempts = int(timeout_seconds / poll_interval)
+    
+    redis_ready = False
+    for _ in range(max_attempts):
+        if hasattr(matching_engine, 'redis') and matching_engine.redis:
+            redis_ready = True
+            break
+        await asyncio.sleep(poll_interval)
+        
+    if not redis_ready:
+        logger.critical(f"Fatal error: matching_engine.redis did not become available after {timeout_seconds} seconds. Aborting polling startup.")
+        raise RuntimeError("Redis connection timeout during bot polling startup.")
         
     try:
         await bot.delete_webhook(
@@ -102,10 +109,10 @@ async def main():
     """Root async entrypoint coordinating both services."""
     register_bot_middlewares_and_routers()
 
-    # بررسی وضعیت محیط ریلیز یا دِو لوکال
-    is_production_domain = settings.BASE_URL and any(ext in settings.BASE_URL for ext in [".com", ".ir", ".net", ".org"])
+    # بررسی وضعیت محیط ریلیز یا دِو لوکال بر اساس متغیر محیطی صریح
+    is_production = getattr(settings, "ENVIRONMENT", "development").lower() == "production"
 
-    if is_production_domain and "yourdomain.com" not in settings.BASE_URL:
+    if is_production:
         # Production Webhook-only mode
         logger.info("Running in PRODUCTION configuration with Webhook routing enabled.")
         await run_fastapi_server()
@@ -116,7 +123,7 @@ async def main():
         bot_task = asyncio.create_task(run_bot_polling())
         
         await asyncio.gather(fastapi_task, bot_task)
-
+        
 
 if __name__ == "__main__":
     try:

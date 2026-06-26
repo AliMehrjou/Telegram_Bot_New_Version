@@ -98,11 +98,16 @@ class MatchingEngine:
         user_state_key = f"user:state:{tg_id}"
         queue_key = self._get_queue_key(gender, target_gender, province)
 
+        # BUG 3 FIX: Normalize target_gender and province to strictly match 
+        # the format used in _get_queue_key and _get_target_queue_key.
+        norm_target = target_gender.strip().lower() if target_gender else ""
+        norm_province = province.strip().lower().replace(" ", "_") if province else ""
+
         async with self.redis.pipeline(transaction=True) as pipe:
             pipe.hset(user_state_key, mapping={
                 "gender": gender,
-                "target_gender": target_gender or "",
-                "province": province or "",
+                "target_gender": norm_target,
+                "province": norm_province,
                 "interests": interests or "",
                 "age": age or 0,
                 "min_age_filter": min_age_filter or 0,
@@ -203,7 +208,7 @@ class MatchingEngine:
                 if not caller_interests.intersection(peeked_interests):
                     continue
 
-            # بررسی بلاک بودن قبل از باز کردن تراکنش
+            # بررسی اولیه بلاک بودن قبل از باز کردن تراکنش جهت جلوگیری از سربار قفل
             is_candidate_blocked_by_user = await self.redis.sismember(f"user:{tg_id}:blocks", str(candidate_id))
             is_user_blocked_by_candidate = await self.redis.sismember(f"user:{candidate_id}:blocks", str(tg_id))
 
@@ -212,12 +217,23 @@ class MatchingEngine:
 
             # 🔴 آغاز تراکنش اتمیک ایمن
             try:
-                async with self.redis.pipeline() as pipe:
+                # BUG 1 FIX: Added transaction=True so that watch(), multi(), and execute() behave reliably.
+                async with self.redis.pipeline(transaction=True) as pipe:
                     # قفل کردن وضعیت کاندیدا (جلوگیری از تغییر توسط پروسه دیگر)
                     await pipe.watch(candidate_state_key)
                     candidate_status = await pipe.hget(candidate_state_key, "status")
 
                     if candidate_status != "queuing":
+                        await pipe.reset()
+                        continue
+
+                    # BUG 2 MITIGATION: Re-verify blocklist right after WATCHing and before MULTI.
+                    # We avoid WATCHing the blocklists themselves (which would cause massive abort rates 
+                    # if a user blocks/unblocks anyone), but checking here mitigates the tiny race condition.
+                    is_candidate_blocked_recheck = await pipe.sismember(f"user:{tg_id}:blocks", str(candidate_id))
+                    is_user_blocked_recheck = await pipe.sismember(f"user:{candidate_id}:blocks", str(tg_id))
+                    
+                    if is_candidate_blocked_recheck or is_user_blocked_recheck:
                         await pipe.reset()
                         continue
 
@@ -252,18 +268,17 @@ class MatchingEngine:
                 return candidate_id
 
             except WatchError:
-                # تداخل رخ داد: شخص دیگری همزمان این کاندیدا را مچ کرد.
-                # مشکلی نیست، کاندیدای بعدی در لیست را چک می‌کنیم.
                 logger.debug("WatchError on candidate %s during match attempt, skipping.", candidate_id)
                 continue
 
-        # اگر هیچ کاندیدای مناسبی پیدا نشد، وارد صف می‌شویم
+        
         await self.add_to_queue(
             tg_id, gender, target_gender, province,
             interests=caller_interests_str, age=caller_age,
             min_age_filter=caller_min_age, max_age_filter=caller_max_age
         )
         return None
+    
 
     async def get_user_match_partner(self, tg_id: int) -> Optional[int]:
         """Utility to retrieve the active partner ID of a matched user."""
