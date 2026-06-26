@@ -22,9 +22,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.database.models.models import BlockList, User
 from matching_bot_project.database.queries import crud
-from sqlalchemy import select, func
+
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from matching_bot_project.database.models.models import BlockList, User
+from matching_bot_project.database.queries import crud
+
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 router = Router(name="explore_handler")
@@ -163,18 +169,19 @@ async def _query_user(
         .where(
             User.tg_id != caller_tg_id,
             User.completed_registration.is_(True),
-            User.invisible_mode.is_(False), # FIXED: Properly generates SQL WHERE clause
+            User.invisible_mode.is_(False), 
             User.tg_id.not_in(blocked_by_caller_sq),
             User.tg_id.not_in(blockers_of_caller_sq),
         )
     )
 
     if filters.gender:
-        # FIXED: Using func.lower() for case-insensitive gender comparison
         stmt = stmt.where(func.lower(User.gender) == filters.gender.lower())
 
     if filters.online_only:
-        stmt = stmt.where(User.is_online.is_(True))
+        # فیلتر داینامیک: کاربرانی که در 10 دقیقه گذشته در ربات فعالیتی داشته‌اند
+        active_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+        stmt = stmt.where(User.last_active >= active_threshold)
 
     if filters.same_province:
         stmt = stmt.where(User.province == caller.province)

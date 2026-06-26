@@ -50,8 +50,12 @@ async def choose_payment_method(call: CallbackQuery, state: FSMContext, db_sessi
         f"💳 <b>مبلغ قابل پرداخت:</b> {package.price_toman:,} تومان\n\n"
         f"لطفاً روش پرداخت را انتخاب کنید:"
     )
-    await call.message.edit_text(text, reply_markup=get_payment_method_keyboard(settings.PAYMENT_GATEW))
-                                                                                
+    
+    await call.message.edit_text(
+        text, 
+        reply_markup=get_payment_method_keyboard(settings.PAYMENT_GATEWAY_ENABLED)
+    )
+
 
 # 3. مسیر کارت به کارت
 @router.callback_query(PaymentStates.choosing_method, F.data == "pay_method_card")

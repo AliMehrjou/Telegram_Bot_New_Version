@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
-
+from aiogram.exceptions import TelegramBadRequest
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -76,6 +76,19 @@ def get_discovery_keyboard(target_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+@router.callback_query(F.data == "disc_cancel")
+async def cancel_discovery_wizard(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer("جستجو لغو شد.")
+    await state.clear()
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        
+    await call.message.answer("❌ جستجوی کاربران لغو شد. به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
 
 
 async def send_next_candidate(message_or_call, db_session: AsyncSession, state: FSMContext, user_tg_id: int):
@@ -277,7 +290,6 @@ async def start_wizard(message: Message, state: FSMContext) -> None:
 async def receive_province(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
 
-    # اصلاح شد: استفاده از متغیر constants
     if text == ReplyBtn.BACK_TO_MENU:
         await state.clear()
         await message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
@@ -294,15 +306,37 @@ async def receive_province(message: Message, state: FSMContext) -> None:
     await state.update_data(province=province, selected_interests=[])
     await state.set_state(DiscoveryStates.choosing_interests)
     
-    # FIX: Remove ReplyKeyboard before sending the InlineKeyboard
     msg = await message.answer("✅ استان ثبت شد. در حال بارگذاری مرحله بعد...", reply_markup=ReplyKeyboardRemove())
-    await msg.delete() # Optional: delete the temporary message so the chat stays clean
+    try:
+        await msg.delete() 
+    except Exception:
+        pass
+
+    markup = get_discovery_interests_keyboard([])
+    inline_kb = list(markup.inline_keyboard)
+    inline_kb.append([InlineKeyboardButton(text="❌ انصراف", callback_data="disc_cancel")])
 
     await message.answer(
         "🔍 <b>مرحله ۲/۳ — علایق</b>\n\n"
         "علایق مورد نظر خود را انتخاب کنید (می‌توانید چند مورد انتخاب کنید).\n"
         "برای رد کردن این مرحله مستقیماً «تأیید و جستجو» را بزنید.",
-        reply_markup=get_discovery_interests_keyboard([]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb),
+        parse_mode="HTML",
+    )
+
+@router.callback_query(DiscoveryStates.choosing_interests, F.data == "disc_int_confirm")
+async def confirm_interests(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.set_state(DiscoveryStates.choosing_age_range)
+    
+    
+    markup = get_discovery_age_keyboard()
+    inline_kb = list(markup.inline_keyboard)
+    inline_kb.append([InlineKeyboardButton(text="❌ انصراف", callback_data="disc_cancel")])
+    
+    await call.message.edit_text(
+        "🔍 <b>مرحله ۳/۳ — بازه سنی</b>\n\nبازه سنی مورد نظر را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb),
         parse_mode="HTML",
     )
 
@@ -319,23 +353,74 @@ async def toggle_discovery_interest(call: CallbackQuery, state: FSMContext) -> N
         selected.append(key)
 
     await state.update_data(selected_interests=selected)
-    await call.message.edit_reply_markup(
-        reply_markup=get_discovery_interests_keyboard(selected)
-    )
-    await call.answer()
-
-
-@router.callback_query(DiscoveryStates.choosing_interests, F.data == "disc_int_confirm")
-async def confirm_interests(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    await state.set_state(DiscoveryStates.choosing_age_range)
+    markup = get_discovery_interests_keyboard(selected)
+    inline_kb = list(markup.inline_keyboard)
+    inline_kb.append([InlineKeyboardButton(text="❌ انصراف", callback_data="disc_cancel")])
     
-    # FIX: Edit the existing message instead of sending a new one to prevent orphaned buttons
-    await call.message.edit_text(
-        "🔍 <b>مرحله ۳/۳ — بازه سنی</b>\n\nبازه سنی مورد نظر را انتخاب کنید:",
-        reply_markup=get_discovery_age_keyboard(),
-        parse_mode="HTML",
+    await call.message.edit_reply_markup(
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb)
     )
+    await call.answer()
+
+
+
+async def show_filtered_candidate(call_or_message, state: FSMContext, db_session: AsyncSession):
+    """تابع اصلی برای کشیدن فقط یک کاربر از دیتابیس و نمایش آن"""
+    data = await state.get_data()
+    province = data.get("province")
+    interests = data.get("selected_interests") or []
+    min_age = data.get("min_age", 0)
+    max_age = data.get("max_age", 99)
+    viewed_ids = data.get("viewed_ids", [])
+
+    # گرفتن یک لیست بزرگتر از دیتابیس تا بتوانیم تکراری‌ها را رد کنیم
+    candidates = await get_filtered_discovery_candidates(
+        session=db_session,
+        caller_tg_id=call_or_message.from_user.id,
+        province=province,
+        interests=interests if interests else None,
+        min_age=min_age,
+        max_age=max_age,
+        limit=30, 
+    )
+
+    # پیدا کردن اولین کاربری که آیدی او در لیست دیده‌شده‌ها (viewed_ids) نیست
+    candidate = next((c for c in candidates if c.tg_id not in viewed_ids), None)
+
+    if not candidate:
+        text = "😔 کاربری با این مشخصات یافت نشد یا تمام نتایج را مشاهده کردید.\nفیلترها را تغییر دهید و دوباره جستجو کنید."
+        kb = _restart_keyboard()
+        await bot.send_message(
+            chat_id=call_or_message.from_user.id,
+            text=text,
+            reply_markup=kb
+        )
+        return
+
+    # ذخیره آیدی کاربر برای اینکه دفعه بعد دوباره نمایش داده نشود
+    viewed_ids.append(candidate.tg_id)
+    await state.update_data(viewed_ids=viewed_ids)
+
+    profile_text = _build_profile_card(candidate)
+    base_kb = get_user_action_keyboard(candidate.tg_id)
+    
+    # 💡 اضافه کردن دکمه کاربر بعدی به پروفایل
+    inline_kb = list(base_kb.inline_keyboard)
+    inline_kb.append([
+        InlineKeyboardButton(text="⏭ کاربر بعدی", callback_data="disc_next_result"),
+        InlineKeyboardButton(text="❌ پایان جستجو", callback_data="disc_cancel")
+    ])
+    action_kb = InlineKeyboardMarkup(inline_keyboard=inline_kb)
+
+    try:
+        await bot.send_message(
+            chat_id=call_or_message.from_user.id,
+            text=profile_text,
+            reply_markup=action_kb,
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.error("Failed to send discovery candidate %s: %s", candidate.tg_id, exc)
 
 
 @router.callback_query(DiscoveryStates.choosing_age_range, F.data.startswith("disc_age_"))
@@ -343,7 +428,6 @@ async def receive_age_range(
     call: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ) -> None:
     age_data = call.data.removeprefix("disc_age_")
-    
     
     if age_data == "all":
         min_age, max_age = 0, 99
@@ -354,56 +438,27 @@ async def receive_age_range(
             return
         min_age, max_age = int(parts[0]), int(parts[1])
 
-    await call.answer()
-
-    data       = await state.get_data()
-    province   = data.get("province")
-    interests  = data.get("selected_interests") or []
-
+    # 💡 ریست کردن لیست کاربران دیده شده برای جلوگیری از نمایش تکراری
+    await state.update_data(min_age=min_age, max_age=max_age, viewed_ids=[])
     await state.set_state(DiscoveryStates.showing_results)
+    
+    await call.answer("⏳ در حال جستجو...")
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+        
+    await show_filtered_candidate(call, state, db_session)
 
-    candidates = await get_filtered_discovery_candidates(
-        session=db_session,
-        caller_tg_id=call.from_user.id,
-        province=province,
-        interests=interests if interests else None,
-        min_age=min_age,
-        max_age=max_age,
-        limit=_MAX_RESULTS,
-    )
-
-    if not candidates:
-        # FIX: Also edit text here to clear the age selection buttons
-        await call.message.edit_text(
-            "😔 متأسفانه کاربری با این مشخصات یافت نشد.\n"
-            "فیلترها را تغییر دهید و دوباره جستجو کنید.",
-            reply_markup=_restart_keyboard(),
-        )
-        return
-
-    # Clear the age selection keyboard gracefully before showing results
-    await call.message.edit_text(
-        f"✅ <b>{len(candidates)} کاربر یافت شد:</b>",
-        parse_mode="HTML",
-    )
-
-    for candidate in candidates:
-        profile_text = _build_profile_card(candidate)
-        action_kb    = get_user_action_keyboard(candidate.tg_id)
-        try:
-            await call.message.answer(
-                profile_text,
-                reply_markup=action_kb,
-                parse_mode="HTML",
-            )
-        except Exception as exc:
-            logger.error("Failed to send discovery candidate %s: %s", candidate.tg_id, exc)
-
-    await call.message.answer(
-        "جستجوی جدید یا بازگشت به منو:",
-        reply_markup=_restart_keyboard(),
-    )
-
+@router.callback_query(DiscoveryStates.showing_results, F.data == "disc_next_result")
+async def disc_next_result(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
+    """هندلر دکمه کاربر بعدی"""
+    await call.answer()
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+    await show_filtered_candidate(call, state, db_session)
 
 @router.callback_query(F.data == "disc_restart")
 async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
@@ -411,13 +466,24 @@ async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(DiscoveryStates.choosing_province)
     
-    # When restarting, ensure we send a fresh message to get the reply keyboard back
-    await call.message.delete()
+    # 💡 اصلاح باگ ۴: مدیریت استثنا برای متد حذف پیام تلگرام
+    # اگر پیام قدیمی‌تر از ۴۸ ساعت باشد، تلگرام اجازه حذف نمی‌دهد و ربات بدون این بلوک کرش می‌کرد
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        logger.warning(
+            "Could not delete discovery message for user %d (message likely older than 48 hours).", 
+            call.from_user.id
+        )
+    except Exception as exc:
+        logger.error("Unexpected error deleting message in disc_restart: %s", exc)
+    
     await call.message.answer(
         "🔍 <b>جستجوی کاربران — مرحله ۱/۳</b>\n\nاستان مورد نظر خود را انتخاب کنید:",
         reply_markup=_province_keyboard(),
         parse_mode="HTML",
     )
+
 
 
 @router.callback_query(F.data == "disc_main_menu")

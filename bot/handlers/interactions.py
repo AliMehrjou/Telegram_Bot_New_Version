@@ -16,8 +16,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-# Project Imports
+from matching_bot_project.bot.handlers.matching import handle_successful_match
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.constants import ReplyBtn, SystemMsg
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
@@ -79,20 +78,33 @@ def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
 async def _send_profile_card(target_chat_id: int, user, action_kb: InlineKeyboardMarkup) -> None:
     """
     Helper function to uniformly send a user's profile card, photo, and voice
-    to a specific chat ID.
+    to a specific chat ID without breaking HTML tags or losing button attachments.
     """
     profile_card = _build_profile_card(user)
+    photo_id = getattr(user, 'profile_photo_file_id', None)
     
     try:
-        if getattr(user, 'profile_photo_file_id', None):
-            await bot.send_photo(
-                chat_id=target_chat_id,
-                photo=user.profile_photo_file_id,
-                caption=profile_card[:1024],
-                parse_mode="HTML",
-                reply_markup=action_kb,
-            )
+        if photo_id:
+            # 💡 اصلاح: اگر طول متن هماهنگ با کپشن تلگرام بود، یکجا ارسال شود
+            if len(profile_card) <= 1024:
+                await bot.send_photo(
+                    chat_id=target_chat_id,
+                    photo=photo_id,
+                    caption=profile_card,
+                    parse_mode="HTML",
+                    reply_markup=action_kb,
+                )
+            else:
+                # 💡 اگر متن طولانی بود، ابتدا عکس ارسال شده و بلافاصله متن کامل همراه با کیبورد فرستاده می‌شود
+                await bot.send_photo(chat_id=target_chat_id, photo=photo_id)
+                await bot.send_message(
+                    chat_id=target_chat_id,
+                    text=profile_card,
+                    parse_mode="HTML",
+                    reply_markup=action_kb,
+                )
         else:
+            # پروفایل‌های بدون عکس
             await bot.send_message(
                 chat_id=target_chat_id,
                 text=profile_card,
@@ -214,6 +226,10 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
         return False
 
     try:
+        # 💡 در صورت وجود متد لغو تسک زمان‌بندی شده در سکولر، آن را اجرا کنید تا جاب بک‌گراند حذف شود
+        if hasattr(dating_scheduler, 'cancel_match_timeout'):
+            await dating_scheduler.cancel_match_timeout(match_id)
+            
         await dating_scheduler.redis.delete(f"date:timeout:{match_id}")
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_one_id}")
         await dating_scheduler.redis.delete(f"user:state:{match_history.user_two_id}")
@@ -223,6 +239,8 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
     for uid in (match_history.user_one_id, match_history.user_two_id):
         ctx = get_user_state(uid)
         try:
+            # 💡 اصلاح اصلی باگ ۴: وضعیت کاربر به طور کامل ریست (None) می‌شود تا قفل منو باز شود
+            await ctx.set_state(None)
             await ctx.clear()
         except Exception as exc:
             logger.warning("Could not clear FSM state for user %s: %s", uid, exc)
@@ -244,6 +262,7 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
             logger.error("Failed to send cancellation notice to user %s: %s", uid, exc)
 
     return True
+
 
 @router.message(F.text == ReplyBtn.END_DATE)
 async def request_end_date_confirm(message: Message, db_session: AsyncSession) -> None:
@@ -627,7 +646,9 @@ async def show_report_reasons(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("report_reason_"))
 async def process_report_reason(call: CallbackQuery, state: FSMContext) -> None:
-    parts = call.data.removeprefix("report_reason_").rsplit("_", 1)
+    # 💡 فیکس باگ دوم: استفاده از متد split از سمت چپ
+    parts = call.data.removeprefix("report_reason_").split("_", 1)
+    
     if len(parts) != 2 or not parts[0].isdigit():
         await call.answer("❌ خطای پردازش.", show_alert=True)
         return
@@ -649,7 +670,7 @@ async def process_report_reason(call: CallbackQuery, state: FSMContext) -> None:
     except TelegramBadRequest:
         pass
 
-    # شخصی‌سازی پیام بر اساس نوع گزارش (حل مشکل لاجیک اکانت فیک)
+
     if reason_code == "bot_fake":
         prompt_text = (
             "🤖 شما این کاربر را به عنوان «ربات یا حساب فیک» گزارش کردید.\n\n"
@@ -665,6 +686,7 @@ async def process_report_reason(call: CallbackQuery, state: FSMContext) -> None:
 
     await call.message.answer(prompt_text, reply_markup=cancel_kb, parse_mode="Markdown")
     await call.answer()
+
 
 # Add new helper function for submitting reports
 async def _submit_report(
@@ -823,15 +845,18 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         
     caller_id = call.from_user.id 
     
+    # 💡 فیکس باگ اول: بررسی موجودی سکه فرستنده قبل از ارسال درخواست
+    caller = await crud.get_user_by_tg_id(db_session, caller_id)
+    if not caller or caller.coin_balance < 1:
+        await call.answer("❌ موجودی سکه شما کافی نیست! برای ارسال درخواست حداقل ۱ سکه نیاز دارید.", show_alert=True)
+        return
     
     target_user = await crud.get_user_by_tg_id(db_session, target_id)
     if not target_user:
         await call.answer("❌ کاربر مورد نظر یافت نشد.", show_alert=True)
         return
 
-    
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    
     
     if target_user.silent_until and target_user.silent_until > now_utc:
         await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت قرار دارد و امکان دریافت درخواست را ندارد.", show_alert=True)
@@ -870,85 +895,70 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
 
 
-@router.callback_query(F.data.startswith("accept_req_date_"))
-async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):
-    caller_id = _parse_int_suffix(call.data, "accept_req_date_")
+@router.callback_query(F.data.startswith("accept_req_date_") | F.data.startswith("accept_req_chat_"))
+async def accept_user_request(call: CallbackQuery, db_session: AsyncSession):
+    # تشخیص نوع درخواست (چت یا دیت) 
+    is_chat = call.data.startswith("accept_req_chat_")
+    prefix = "accept_req_chat_" if is_chat else "accept_req_date_"
+    caller_id = _parse_int_suffix(call.data, prefix)
+    
     if not caller_id:
         return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
 
     target_id = call.from_user.id
+    req_type_str = "چت 💬" if is_chat else "دیت 💘"
     
-    # چک و کسر سکه از کاربری که درخواست را ارسال کرده (caller_id)
+    # چک موجودی سکه فرستنده
     caller = await crud.get_user_by_tg_id(db_session, caller_id)
     if not caller or caller.coin_balance < 1:
-        await call.answer("❌ موجودی سکه فرستنده کافی نیست. دیت برقرار نشد.", show_alert=True)
+        await call.answer("❌ موجودی سکه فرستنده کافی نیست. ارتباط برقرار نشد.", show_alert=True)
+        
+        # 💡 تغییر جدید: ویرایش پیام گیرنده تا دکمه‌ها حذف شوند و وضعیت شفاف باشد
         try:
-            await bot.send_message(caller_id, "❌ درخواست دیت پذیرفته شد، اما به دلیل عدم موجودی کافی شما (۱ سکه)، لغو گردید.")
+            await call.message.edit_text(
+                f"❌ <b>درخواست لغو شد</b>\n"
+                f"شما درخواست {req_type_str} را قبول کردید، اما به دلیل ناکافی بودن موجودی سکه‌ی فرستنده، اتصال برقرار نشد.",
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest:
+            pass
+        except Exception as e:
+            logger.error(f"Unexpected error editing message text for insufficient coins: {e}")
+
+        # اطلاع‌رسانی به فرستنده‌ای که سکه نداشته است
+        try:
+            await bot.send_message(
+                caller_id, 
+                f"❌ درخواست {req_type_str} شما پذیرفته شد، اما به دلیل عدم موجودی کافی شما (حداقل ۱ سکه)، اتصال لغو گردید."
+            )
         except Exception:
             pass
         return
         
-    await crud.process_coin_transaction(db_session, caller, -1, "هزینه درخواست دیت پذیرفته‌شده")
+    # کسر سکه در صورت موفقیت
+    await crud.process_coin_transaction(db_session, caller, -1, f"هزینه درخواست {req_type_str} پذیرفته‌شده")
     await db_session.commit()
 
-    await call.answer("✅ درخواست دیت قبول شد! در حال اتصال...", show_alert=False)
+    await call.answer(f"✅ درخواست {req_type_str} قبول شد! در حال اتصال...", show_alert=False)
 
     try:
-        await call.message.edit_text("✅ شما درخواست دیت این کاربر را قبول کردید. در حال اتصال... 🚀")
+        await call.message.edit_text(f"✅ شما درخواست {req_type_str} این کاربر را قبول کردید. در حال اتصال... 🚀")
     except TelegramBadRequest:
         pass
     except Exception as e:
         logger.error(f"Unexpected error editing message text: {e}")
 
     try:
-        await bot.send_message(caller_id, "🎉 درخواست دیت شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
+        await bot.send_message(caller_id, f"🎉 درخواست {req_type_str} شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
     except Exception:
         pass
 
-    from matching_bot_project.bot.handlers.matching import handle_successful_match
+
     await handle_successful_match(db_session, caller_id, target_id)
 
-@router.callback_query(F.data.startswith("accept_req_date_"))
-async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):
-    caller_id = _parse_int_suffix(call.data, "accept_req_date_")
-    if not caller_id:
-        return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-
-    target_id = call.from_user.id
-    
-    # چک و کسر سکه از کاربری که درخواست را ارسال کرده (caller_id)
-    caller = await crud.get_user_by_tg_id(db_session, caller_id)
-    if not caller or caller.coin_balance < 1:
-        await call.answer("❌ موجودی سکه فرستنده کافی نیست. دیت برقرار نشد.", show_alert=True)
-        try:
-            await bot.send_message(caller_id, "❌ درخواست دیت پذیرفته شد، اما به دلیل عدم موجودی کافی شما (۱ سکه)، لغو گردید.")
-        except Exception:
-            pass
-        return
-        
-    await crud.process_coin_transaction(db_session, caller, -1, "هزینه درخواست دیت پذیرفته‌شده")
-    await db_session.commit()
-
-    await call.answer("✅ درخواست دیت قبول شد! در حال اتصال...", show_alert=False)
-
-    try:
-        await call.message.edit_text("✅ شما درخواست دیت این کاربر را قبول کردید. در حال اتصال... 🚀")
-    except TelegramBadRequest:
-        pass
-    except Exception as e:
-        logger.error(f"Unexpected error editing message text: {e}")
-
-    try:
-        await bot.send_message(caller_id, "🎉 درخواست دیت شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
-    except Exception:
-        pass
-
-    from matching_bot_project.bot.handlers.matching import handle_successful_match
-    await handle_successful_match(db_session, caller_id, target_id)
 
 @router.callback_query(F.data.startswith("reject_req_"))
 async def reject_request(call: CallbackQuery):
-    # تشخیص نوع درخواست برای استخراج درست caller_id
     if call.data.startswith("reject_req_chat_"):
         caller_id = _parse_int_suffix(call.data, "reject_req_chat_")
     elif call.data.startswith("reject_req_date_"):

@@ -312,6 +312,17 @@ async def register_chat_consent(
             await db_session.rollback()
             return
 
+        # 💡 اصلاح باگ ۵: خنثی کردن تایمر پس‌زمینه دیت
+        # با پاک کردن این کلید از ردیس، اگر Scheduler بیدار شود و ببیند کلید نیست، دیت را قطع نمی‌کند
+        try:
+            await redis_client.delete(f"date:timeout:{match_history.id}")
+            # اگر دسترسی مستقیم به آبجکت scheduler در این فایل دارید، می‌توانید تسک را هم صراحتاً کنسل کنید:
+            # from matching_bot_project.bot.core.loader import dating_scheduler
+            # if hasattr(dating_scheduler, 'cancel_match_timeout'):
+            #     await dating_scheduler.cancel_match_timeout(match_history.id)
+        except Exception as exc:
+            logger.error("Failed to disarm timeout timer for match %d: %s", match_history_id, exc)
+
         # Inform external services (e.g. timeout scheduler) that both users
         # have transitioned out of the questionnaire / consent phase.
         try:
@@ -321,6 +332,7 @@ async def register_chat_consent(
             logger.error(
                 "Redis status update failed for match %d: %s", match_history_id, exc
             )
+
 
         activation_text = (
             "🗣️ *اتصال با موفقیت برقرار شد! گفتگو آغاز گردید.*\n\n"
@@ -431,7 +443,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
         try:
             await bot.send_message(
                 chat_id=partner_id,
-                text=f"{filtered_text}",
+                text=filtered_text,
             )
         except TelegramForbiddenError:
             logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
@@ -459,6 +471,9 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
                 "⚠️ کپشن پیام شما حاوی اطلاعات ممنوع بود. "
                 "پس از پاکسازی ارسال شد."
             )
+        
+        # 💡 اصلاح باگ پنهان: اعمال محدودیت 1024 کاراکتری تلگرام برای کپشن‌ها
+        sanitized_caption = sanitized_caption[:1024]
 
     try:
         await bot.copy_message(

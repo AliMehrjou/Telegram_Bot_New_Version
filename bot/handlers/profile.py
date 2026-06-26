@@ -105,7 +105,6 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
                     logger.warning(f"Voice failed for user {tg_id}: {voice_err}")
 
     except Exception as e:
-        
         err_str = str(e)
         if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
             if 'user' in locals():
@@ -117,8 +116,6 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
             logger.error(f"Error in view_user_profile: {e}", exc_info=True)
             await message.answer("⚠️ یه مشکلی پیش اومد! لطفاً دوباره تلاش کنید.")
 
-            await message.answer(error_details, parse_mode=ParseMode.HTML)
-            
 
 # ==========================================
 # سیستم سایلنت مود
@@ -341,12 +338,21 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
     # ارسال مدیا یا متن ساختاریافته‌ی پروفایل
     if target_user.profile_photo_file_id:
         try:
-            await message.answer_photo(
-                photo=target_user.profile_photo_file_id,
-                caption=profile_card[:1024],
-                parse_mode=ParseMode.HTML,
-                reply_markup=markup
-            )
+            # کنترل طول کپشن برای جلوگیری از شکستن تگ‌های HTML
+            if len(profile_card) <= 1024:
+                await message.answer_photo(
+                    photo=target_user.profile_photo_file_id,
+                    caption=profile_card,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup
+                )
+            else:
+                await message.answer_photo(photo=target_user.profile_photo_file_id)
+                await message.answer(
+                    text=profile_card,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup
+                )
         except Exception as e:
             logger.error(f"Failed to send profile photo: {e}")
             await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
@@ -364,3 +370,4 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
             )
         except Exception as e:
             logger.error(f"Failed to send profile voice: {e}")
+            

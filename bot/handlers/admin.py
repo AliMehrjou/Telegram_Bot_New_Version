@@ -233,7 +233,8 @@ async def cmd_removecoins(message: Message, db_session: AsyncSession):
 
     try:
         tg_id = int(args[1])
-        amount = int(args[2])
+        # جلوگیری از باگ وارد کردن عدد منفی (که باعث اضافه شدن سکه می‌شد)
+        amount = abs(int(args[2]))
     except ValueError:
         return await message.answer("Invalid arguments.")
 
@@ -241,11 +242,24 @@ async def cmd_removecoins(message: Message, db_session: AsyncSession):
     if not user:
         return await message.answer("User not found.")
 
+    if user.coin_balance <= 0:
+        return await message.answer("User already has 0 coins.")
+
     actual_amount = min(amount, user.coin_balance)
-    await process_coin_transaction(db_session, user, -actual_amount, "Admin removed coins",ignore_multiplier=True)
+    await process_coin_transaction(db_session, user, -actual_amount, "Admin removed coins", ignore_multiplier=True)
     await db_session.commit()
 
     await message.answer(f"Successfully removed {actual_amount} coins from {tg_id}.")
+
+    try:
+        await bot.send_message(
+            chat_id=tg_id,
+            text=f"⚠️ از حساب شما تعداد <b>{actual_amount}</b> سکه توسط مدیریت کسر گردید.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify user {tg_id} about coin removal: {e}")
+
 
 @router.message(Command("addcoinsall"))
 async def cmd_addcoinsall(message: Message, db_session: AsyncSession):
@@ -306,7 +320,6 @@ async def cmd_addcoinsvip(message: Message, db_session: AsyncSession):
 
 @router.message(Command("banuser"))
 async def cmd_banuser(message: Message, db_session: AsyncSession):
-    
     args = message.text.split()
     if len(args) != 2:
         return await message.answer("Usage: /banuser <tg_id>")
@@ -326,42 +339,39 @@ async def cmd_banuser(message: Message, db_session: AsyncSession):
 
     user.is_banned = True
     await db_session.commit()
-    await message.answer(f"User {tg_id} has been banned.")
 
-@router.message(Command("unbanuser"), IsAdminFilter())
-async def cmd_unbanuser(message: Message, db_session: AsyncSession):
-    args = message.text.split()
-    if len(args) != 2:
-        return await message.answer("❌ راهنما:\n<code>/unbanuser [tg_id]</code>", parse_mode="HTML")
-
-    try:
-        tg_id = int(args[1])
-    except ValueError:
-        return await message.answer("⚠️ شناسه کاربری (tg_id) نامعتبر است.")
-
-    user = await crud.get_user_by_tg_id(db_session, tg_id)
-    if not user:
-        return await message.answer("⚠️ کاربری با این شناسه در دیتابیس یافت نشد.")
-
-    user.is_banned = False
-    await db_session.commit()
-
-    
+    # ۱. اطلاع‌رسانی به کاربر متخلف
+    notify_status = ""
     try:
         await bot.send_message(
-            chat_id=tg_id, 
-            text="🟢 <b>حساب کاربری شما رفع مسدودیت (Unban) شد و می‌توانید مجدداً از ربات استفاده کنید.</b>", 
+            chat_id=tg_id,
+            text="❌ <b>حساب کاربری شما به دلیل نقض قوانین ربات مسدود شد.</b>",
             parse_mode="HTML"
         )
-        notify_status = "و پیام اطلاع‌رسانی به او تحویل داده شد."
+        notify_status = "✅ پیام اخطار به کاربر تحویل داده شد."
     except Exception:
-        notify_status = "اما کاربر ربات را بلاک کرده و پیام اطلاع‌رسانی به او نرسید."
+        notify_status = "⚠️ کاربر ربات را بلاک کرده است."
 
-    
+    # ۲. پاکسازی کامل State کاربر و خروج از صف (برای جلوگیری از فعالیت با وجود بن بودن)
+    try:
+        from aiogram.fsm.context import FSMContext
+        from aiogram.fsm.storage.base import StorageKey
+        from matching_bot_project.bot.core.loader import dp, bot, matching_engine
+        
+        ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=tg_id, user_id=tg_id))
+        await ctx.set_state(None)
+        await ctx.clear()
+        
+        await matching_engine.remove_from_queue(tg_id)
+    except Exception as e:
+        logger.warning(f"Could not clear FSM session for banned user {tg_id}: {e}")
+
     await message.answer(
-        f"✅ کاربر <code>{tg_id}</code> با موفقیت رفع مسدودیت شد.\nℹ️ <i>{notify_status}</i>", 
+        f"✅ کاربر <code>{tg_id}</code> با موفقیت مسدود شد.\nℹ️ <i>{notify_status}</i>", 
         parse_mode="HTML"
     )
+
+
 
 @router.message(Command("userinfo"))
 async def cmd_userinfo(message: Message, db_session: AsyncSession):
@@ -747,6 +757,15 @@ async def cancel_broadcast(call: CallbackQuery, state: FSMContext):
 async def process_broadcast_message(message: Message, state: FSMContext, db_session: AsyncSession):
     """دریافت محتوا (متن، عکس، ویدیو و...) از ادمین و آغاز ارسال در پس‌زمینه"""
     
+    # 💡 اصلاح باگ ۳: گارد امنیتی برای جلوگیری از برودکست اشتباه کامندها (مثل /cancel یا /start)
+    if message.text and message.text.startswith("/"):
+        return await message.answer(
+            "⚠️ <b>خطا:</b> شما در وضعیت ارسال پیام همگانی هستید!\n"
+            "ارسال دستورات سیستمی به عنوان پیام عمومی مجاز نیست.\n"
+            "اگر مایل به لغو هستید، لطفاً روی دکمه شیشه‌ای <b>❌ انصراف</b> کلیک کنید.",
+            parse_mode="HTML"
+        )
+        
     user_ids = []
     
     # فقط آیدی‌ها رو بخون، نه کل آبجکت رو (با yield_per برای جلوگیری از OOM)
@@ -774,8 +793,6 @@ async def process_broadcast_message(message: Message, state: FSMContext, db_sess
         f"تعداد مخاطبین هدف: <b>{len(user_ids)}</b> کاربر.",
         parse_mode="HTML"
     )
-
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 1 — Event System
@@ -1182,7 +1199,7 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
         return
         
     asyncio.create_task(_background_pbroadcast(users_data))
-    
+
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — Daily Report
