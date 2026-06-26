@@ -5,7 +5,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
-
+from matching_bot_project.bot.filters.custom import IsAdminFilter
+from matching_bot_project.database.models.models import CoinPackage
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.loader import bot
 from matching_bot_project.database.queries import crud
@@ -33,11 +34,11 @@ async def show_store(call: CallbackQuery, state: FSMContext, db_session: AsyncSe
 @router.callback_query(PaymentStates.choosing_package, F.data.startswith("buy_package_"))
 async def choose_payment_method(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     try:
-        package_id = int(call.data.split("_")[2])
+        package_id = int(call.data.removeprefix("buy_package_"))
     except ValueError:
         return await call.answer("❌ خطای سیستمی.", show_alert=True)
         
-    package = await db_session.get(crud.CoinPackage, package_id)
+    package = await db_session.get(CoinPackage, package_id)
     if not package or not package.is_active:
         return await call.answer("❌ این بسته دیگر در دسترس نیست.", show_alert=True)
         
@@ -49,14 +50,15 @@ async def choose_payment_method(call: CallbackQuery, state: FSMContext, db_sessi
         f"💳 <b>مبلغ قابل پرداخت:</b> {package.price_toman:,} تومان\n\n"
         f"لطفاً روش پرداخت را انتخاب کنید:"
     )
-    await call.message.edit_text(text, reply_markup=get_payment_method_keyboard(settings.PAYMENT_GATEWAY_ENABLED), parse_mode="HTML")
+    await call.message.edit_text(text, reply_markup=get_payment_method_keyboard(settings.PAYMENT_GATEW
+                                                                                
 
 # 3. مسیر کارت به کارت
 @router.callback_query(PaymentStates.choosing_method, F.data == "pay_method_card")
 async def process_card_payment(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     data = await state.get_data()
     package_id = data.get("selected_package_id")
-    package = await db_session.get(crud.CoinPackage, package_id)
+    package = await db_session.get(CoinPackage, package_id)
     
     text = (
         "💳 <b>پرداخت کارت به کارت</b>\n\n"
@@ -70,12 +72,13 @@ async def process_card_payment(call: CallbackQuery, state: FSMContext, db_sessio
     await state.set_state(PaymentStates.waiting_for_receipt_photo)
     await call.message.edit_text(text, reply_markup=cancel_kb, parse_mode="HTML")
 
+
 # 4. دریافت عکس فیش و ارسال برای ادمین
 @router.message(PaymentStates.waiting_for_receipt_photo, F.photo)
 async def receive_receipt_photo(message: Message, state: FSMContext, db_session: AsyncSession):
     data = await state.get_data()
     package_id = data.get("selected_package_id")
-    package = await db_session.get(crud.CoinPackage, package_id)
+    package = await db_session.get(CoinPackage, package_id)
     
     photo_file_id = message.photo[-1].file_id
     
@@ -98,6 +101,7 @@ async def receive_receipt_photo(message: Message, state: FSMContext, db_session:
         f"🧾 <b>شماره سفارش:</b> {order.id}"
     )
     
+    delivery_success = False
     for admin_id in settings.parsed_admin_ids:
         try:
             await bot.send_photo(
@@ -107,11 +111,17 @@ async def receive_receipt_photo(message: Message, state: FSMContext, db_session:
                 parse_mode="HTML",
                 reply_markup=get_admin_receipt_keyboard(order.id)
             )
+            delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send receipt to admin {admin_id}: {e}")
             
     await state.clear()
-    await message.answer("✅ فیش واریزی شما با موفقیت ثبت شد و پس از بررسی توسط پشتیبانی، سکه‌ها به حساب شما منظور خواهد شد.")
+    
+    if delivery_success:
+        await message.answer("✅ فیش واریزی شما با موفقیت ثبت شد و پس از بررسی توسط پشتیبانی، سکه‌ها به حساب شما منظور خواهد شد.")
+    else:
+        await message.answer("❌ متأسفانه در ارسال فیش برای پشتیبانی مشکلی پیش آمد. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.")
+
 
 @router.message(PaymentStates.waiting_for_receipt_photo)
 async def fallback_receipt_input(message: Message):
@@ -137,15 +147,15 @@ async def cancel_payment_flow(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text("❌ عملیات خرید لغو شد.")
 
 # --- ادمین: تأیید و رد کردن فیش ---
-@router.callback_query(F.data.startswith("verify_receipt_"))
+@router.callback_query(IsAdminFilter(), F.data.startswith("verify_receipt_"))
 async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):
-    order_id = int(call.data.split("_")[2])
+    order_id = int(call.data.removeprefix("verify_receipt_"))
     order = await crud.get_purchase_order(db_session, order_id)
     
     if not order or order.status != "pending":
         return await call.answer("⚠️ این سفارش قبلاً پردازش شده یا وجود ندارد.", show_alert=True)
         
-    package = await db_session.get(crud.CoinPackage, order.package_id)
+    package = await db_session.get(CoinPackage, order.package_id)
     target_user = await crud.get_user_by_tg_id(db_session, order.user_tg_id)
     
     if target_user and package:
@@ -154,20 +164,19 @@ async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):
             session=db_session, 
             user=target_user, 
             amount=package.coin_amount, 
-            description=f"خرید بسته {package.coin_amount} سکه‌ای (سفارش {order.id})"
+            description=f"خرید بسته {package.coin_amount} سکه‌ای (سفارش {order.id})",
+            ignore_multiplier=True
         )
         order.status = "approved"
-        order.resolved_at = datetime.now(timezone.utc)
+        order.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db_session.commit()
         
         try:
-            
             new_caption = call.message.html_text + "\n\n✅ <b>تأیید شد.</b>"
             await call.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Edit caption error: {e}")
             
-        
         try:
             await bot.send_message(
                 chat_id=target_user.tg_id, 
@@ -179,6 +188,7 @@ async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):
             
     await call.answer("✅ فیش تأیید و سکه‌ها واریز شد.")
 
+    
 @router.callback_query(F.data.startswith("reject_receipt_"))
 async def admin_reject_receipt(call: CallbackQuery, db_session: AsyncSession):
     order_id = int(call.data.split("_")[2])

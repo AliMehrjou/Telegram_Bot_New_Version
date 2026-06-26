@@ -160,40 +160,6 @@ async def register_question_response(
     state: FSMContext,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Receive, validate, persist, and synchronise a question answer.
-
-    Section 1 – Receive & lock
-    ───────────────────────────
-    1.  Parse option + question_id from callback_data.
-    2.  Read match_history_id and current_question_index from FSM.
-    3.  IMMEDIATELY lock FSM state to waiting_for_partner_answer before any
-        I/O.  This is the spam-click guard: a duplicate tap from the same user
-        fires AFTER the state flip and is caught by ignore_input_on_wait_state.
-    4.  Edit the question message: append the waiting notice AND set
-        reply_markup=None in a single API call to remove the option buttons.
-    5.  Send a toast acknowledgement via call.answer().
-
-    Section 2 – Persist & sync
-    ───────────────────────────
-    6.  Save the answer to the UserAnswer table via crud.save_user_answer.
-    7.  Atomically increment the Redis sync counter.
-        - count == 1 → first to answer; set safety TTL and return.
-        - count == 2 → both users have answered; drive advancement.
-
-    Section 3 – Advance
-    ────────────────────
-    8.  Compute next_q_index = current_question_index + 1.
-    9.  Fetch the question pool from Redis and the MatchHistory from DB.
-    10. If next_q_index < TOTAL_QUESTIONS → _deliver_next_question().
-        If next_q_index == TOTAL_QUESTIONS → finalize_questionnaire_and_request_approval().
-
-    Error recovery
-    ──────────────
-    DB failure (step 6): state is reverted to answering_questions and a new
-    question message with the inline keyboard is sent so the user can retry.
-    Redis failure (step 7): logged and silently aborted to avoid split-brain.
-    """
     tg_id = call.from_user.id
 
     # ── Section 1.1 – Parse callback payload ─────────────────────────────────
@@ -226,16 +192,9 @@ async def register_question_response(
         return
 
     # ── Section 1.3 – Lock state immediately (spam-click guard) ──────────────
-    # This must happen BEFORE any awaitable I/O so that a rapid second tap
-    # arrives in the waiting_for_partner_answer state and is handled by
-    # ignore_input_on_wait_state rather than creating a duplicate answer.
     await state.set_state(QuestionnaireStates.waiting_for_partner_answer)
 
     # ── Section 1.4 – Edit message: append waiting text + remove keyboard ─────
-    # Combining both edits into a single edit_text call (with reply_markup=None)
-    # is more efficient than calling edit_reply_markup then edit_text separately.
-    # Passing entities=message.entities preserves the bold/italic formatting
-    # of the original question text on the appended-to portion.
     try:
         new_text = (call.message.text or "") + _WAITING_SUFFIX
         await call.message.edit_text(
@@ -249,9 +208,6 @@ async def register_question_response(
             tg_id,
             exc,
         )
-        # Fallback: at minimum remove the keyboard so the user cannot re-tap
-        # an answer button.  If this also fails the message is probably too
-        # old or already edited; we proceed regardless.
         try:
             await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
@@ -285,8 +241,6 @@ async def register_question_response(
         # Revert FSM so the user can try again.
         await state.set_state(QuestionnaireStates.answering_questions)
 
-        # Re-fetch the question to rebuild the keyboard for a retry message.
-        # If this DB call also fails, send a generic error.
         try:
             retry_question: Question | None = await db_session.get(
                 Question, question_id
@@ -311,7 +265,99 @@ async def register_question_response(
                 tg_id,
                 inner_exc,
             )
+        return  # این Return به درستی در داخل بلوک except قرار دارد تا در صورت خطا خارج شود
+
+    # ── Section 2.2 – Redis atomic sync using Set (Anti-Spam & Safe) ───────────
+    # باگ ۹ فیکس شد: این بخش با ۴ فاصله (Indentation سطح متد) هم‌تراز شد
+    sync_key = f"match:{match_history_id}:q:{question_id}:sync"
+
+    try:
+        current_user_id = call.from_user.id
+        added: int = await redis_client.sadd(sync_key, current_user_id)
+
+        if added == 0:
+            await call.answer()
+            return
+
+        sync_count: int = await redis_client.scard(sync_key)
+
+        if sync_count == 1:
+            await redis_client.expire(sync_key, _SYNC_KEY_TTL_SECONDS)
+            return
+
+        if sync_count > 2:
+            logger.warning(
+                "sync_count=%s on key %r; expected 1 or 2. Ignoring.",
+                sync_count,
+                sync_key,
+            )
+            return
+
+    except Exception as exc:
+        logger.error(
+            "Redis error on sync key %r for match %s: %s",
+            sync_key,
+            match_history_id,
+            exc,
+        )
+        await state.set_state(QuestionnaireStates.answering_questions)
+        await call.answer("⚠️ خطای موقت در سرور. لطفا مجدداً گزینه را انتخاب کنید.", show_alert=True)
         return
+
+    # ── Section 3.1 – Compute next question index ─────────────────────────────
+    next_q_index: int = current_q_index + 1
+
+    # ── Section 3.2 – Fetch question pool from Redis ─────────────────────────
+    q_ids: list[int] | None = await _fetch_question_pool(match_history_id)
+    if q_ids is None:
+        logger.error(
+            "Cannot advance match %s past question index %s: "
+            "question pool unavailable from Redis.",
+            match_history_id,
+            current_q_index,
+        )
+        return
+
+    # ── Section 3.3 – Fetch MatchHistory for participant IDs ─────────────────
+    match_history: MatchHistory | None = await db_session.get(
+        MatchHistory, match_history_id
+    )
+    if not match_history:
+        logger.error(
+            "MatchHistory %s not found in DB when advancing to index %s.",
+            match_history_id,
+            next_q_index,
+        )
+        return
+
+    # ── Section 3.4 – Branch: next question or finalise ──────────────────────
+    if next_q_index < TOTAL_QUESTIONS:
+        await _deliver_next_question(
+            match_history_id=match_history_id,
+            next_q_index=next_q_index,
+            q_ids=q_ids,
+            user_one_id=match_history.user_one_id,
+            user_two_id=match_history.user_two_id,
+            db_session=db_session,
+        )
+    else:
+        match_history.questionnaire_completed = True
+        try:
+            await db_session.commit()
+        except Exception as exc:
+            logger.error(
+                "Failed to mark questionnaire_completed=True for match %s: %s",
+                match_history_id,
+                exc,
+            )
+            await db_session.rollback()
+
+        await finalize_questionnaire_and_request_approval(
+            session=db_session,
+            match_id=match_history_id,
+            match_row=match_history,
+        )
+
 
 # ── Section 2.2 – Redis atomic sync using Set (Anti-Spam & Safe) ───────────
     sync_key = f"match:{match_history_id}:q:{question_id}:sync"
@@ -577,7 +623,6 @@ async def finalize_questionnaire_and_request_approval(
         round((identical_count / compared_count) * 100) if compared_count > 0 else 50
     )
 
-    # تعیین پیام تایر بندی شده
     if compatibility_pct < 30:
         tier_msg = CompatibilityMsg.TIER_LOW
     elif 30 <= compatibility_pct < 50:
@@ -599,18 +644,17 @@ async def finalize_questionnaire_and_request_approval(
         except Exception:
             pass
 
-        # ساخت خلاصه پاسخ‌های پارتنر برای این شخص
         partner_summary = await build_partner_answer_summary(session, match_id, partner_uid)
 
         approval_text = (
-            f"❌ درصد شباهت پاسخ‌ها: {compatibility_pct}%\n"
-            f"❌ تعداد پاسخ‌های مشترک: {identical_count} از {compared_count} سؤال\n"
-            f"❌ خلاصه‌ای از دیدگاه فرد مقابل:\n"
+            f"📊 درصد شباهت پاسخ‌ها: {compatibility_pct}%\n"
+            f"🤝 تعداد پاسخ‌های مشترک: {identical_count} از {compared_count} سؤال\n"
+            f"💬 خلاصه‌ای از دیدگاه فرد مقابل:\n"
             f"{partner_summary}\n"
             f"━━━━━━━━━━━━━━\n"
             f"{tier_msg}\n\n"
             "آیا مایل به شروع گفتگوی ناشناس عاطفی با این شخص هستید؟ 👇\n"
-            "_(مکالمه تنها در صورت تایید هر دو طرف باز خواهد شد)_"
+            "<i>(مکالمه تنها در صورت تایید هر دو طرف باز خواهد شد)</i>"
         )
 
         try:
@@ -618,30 +662,35 @@ async def finalize_questionnaire_and_request_approval(
                 chat_id=target_uid,
                 text=approval_text,
                 reply_markup=get_chat_approval_keyboard(),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except Exception as exc:
             logger.error(f"Failed to deliver approval prompt to {target_uid}: {exc}")
-            
+
 # ================== کدهای افزودنی ==================
 async def build_partner_answer_summary(session: AsyncSession, match_id: int, partner_id: int) -> str:
-    """خلاصه‌ای از پاسخ‌های کاربر مقابل را برای نمایش می‌سازد"""
+    """خلاصه‌ای از پاسخ‌های کاربر مقابل را برای نمایش می‌سازد (محدود به ۵ مورد برای جلوگیری از خطای طول پیام)"""
     stmt = select(UserAnswer, Question).join(Question, UserAnswer.question_id == Question.id).where(
         UserAnswer.match_history_id == match_id,
         UserAnswer.user_id == partner_id
     ).order_by(UserAnswer.id)
     
     result = await session.execute(stmt)
+    all_results = result.all()
     
     lines = []
-    for idx, (ans, q) in enumerate(result.all(), 1):
-        # استفاده از short_label یا 30 کاراکتر اول سوال به عنوان جایگزین
+    max_display = 5
+    
+    for idx, (ans, q) in enumerate(all_results[:max_display], 1):
         q_text = getattr(q, 'short_label', None)
         if not q_text:
             q_text = q.question_text[:30] + "..." if len(q.question_text) > 30 else q.question_text
             
         opt_text = q.option_a if ans.selected_option == 'A' else q.option_b
-        # نمایش به فرمت خواسته شده
         lines.append(f"سؤال {idx} (کد {q.id}): {q_text} ⬅️ {opt_text}")
+        
+    remaining = len(all_results) - max_display
+    if remaining > 0:
+        lines.append(f"و {remaining} مورد دیگر...")
         
     return "\n".join(lines)

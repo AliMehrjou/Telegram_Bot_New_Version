@@ -6,7 +6,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-
+from datetime import timezone
 from matching_bot_project.bot.core.loader import redis_client
 from matching_bot_project.database.queries.crud import get_user_by_tg_id
 from matching_bot_project.database.models.models import User
@@ -22,9 +22,13 @@ async def is_vip(db_session: AsyncSession, tg_id: int) -> bool:
         return False
     if user.is_vip:
         return True
-    if user.vip_expires_at and user.vip_expires_at > datetime.utcnow():
+    
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if user.vip_expires_at and user.vip_expires_at > now_utc:
         return True
+        
     return False
+
 
 
 @router.callback_query(F.data == "vip_panel")
@@ -36,11 +40,13 @@ async def open_vip_panel(call: CallbackQuery, db_session: AsyncSession):
 
     user = await get_user_by_tg_id(db_session, tg_id)
 
-    try:
-        await call.message.edit_reply_markup(reply_markup=get_vip_panel_keyboard(user.invisible_mode))
-    except TelegramBadRequest:
-        pass 
+    await call.message.answer(
+        text="💎 <b>پنل مدیریت VIP</b>\n\nاز امکانات زیر برای مدیریت حساب ویژه خود استفاده کنید:",
+        reply_markup=get_vip_panel_keyboard(user.invisible_mode),
+        parse_mode="HTML"
+    )
     await call.answer()
+
 
 
 @router.callback_query(F.data == "vip_viewers")
@@ -109,6 +115,17 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
         await call.answer("دسترسی غیرمجاز.", show_alert=True)
         return
 
+    user = await get_user_by_tg_id(db_session, tg_id)
+
+    # باگ ۱۱ فیکس شد (بخش اول): بررسی موجودی سکه برای Rematch
+    REMATCH_COST = 1
+    if user.coin_balance < REMATCH_COST:
+        await call.answer(
+            f"❌ موجودی سکه شما برای درخواست اتصال مجدد ({REMATCH_COST} سکه) کافی نیست.", 
+            show_alert=True
+        )
+        return
+
     last_partner_id_str = await redis_client.get(f"user:{tg_id}:last_match_partner")
     if not last_partner_id_str:
         await call.answer("هیچ پارتنر قبلی یافت نشد.", show_alert=True)
@@ -134,7 +151,12 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
         return
 
     # Trigger instant match!
-    from matching_bot_project.bot.handlers.matching import handle_successful_match, get_user_state
+    # باگ ۱۱ فیکس شد (بخش دوم): اضافه شدن _settle_coins_after_match به لیست ایمپورت‌های محلی
+    from matching_bot_project.bot.handlers.matching import (
+        handle_successful_match, 
+        get_user_state, 
+        _settle_coins_after_match
+    )
 
     # Remove both from any queue if they are in it
     from matching_bot_project.bot.core.loader import matching_engine
@@ -148,6 +170,11 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
     partner_ctx = get_user_state(partner_id)
     await partner_ctx.clear()
 
-    await call.message.answer("🔁 در حال اتصال مجدد به پارتنر قبلی...")
-    await handle_successful_match(db_session, tg_id, partner_id)
+    await call.message.answer(f"🔁 در حال اتصال مجدد به پارتنر قبلی... (هزینه: {REMATCH_COST} سکه در صورت موفقیت)")
+    
+    match_success = await handle_successful_match(db_session, tg_id, partner_id)
+    if match_success:
+        await _settle_coins_after_match(db_session, user, REMATCH_COST, partner_id)
+        
     await call.answer()
+

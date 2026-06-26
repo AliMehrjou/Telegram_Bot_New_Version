@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -117,20 +116,9 @@ async def _settle_coins_after_match(
         return
 
     try:
-        # کسر هزینه از کاربر شروع کننده مچ
+        # کسر هزینه فقط از کاربر شروع کننده مچ
+        # باگ ۲ فیکس شد: منطق کسر سکه از پارتنر منتظر در صف حذف گردید.
         await crud.process_coin_transaction(db_session, user, -cost, "هزینه مچ موفق")
-
-        partner = await crud.get_user_by_tg_id(db_session, matched_partner_id)
-        if partner and partner.coin_balance >= 1:
-            # کسر هزینه از پارتنر
-            await crud.process_coin_transaction(db_session, partner, -1, "هزینه مشارکت در مچ")
-        elif partner:
-            logger.info(
-                "Partner %s had insufficient coins; match with %s proceeds anyway.",
-                matched_partner_id,
-                user.tg_id,
-            )
-
         await db_session.commit()
     except Exception as exc:
         logger.error(
@@ -208,7 +196,8 @@ async def cancel_queue_operations(message: Message, state: FSMContext) -> None:
     tg_id = message.from_user.id
 
     current_state = await state.get_state()
-    if current_state in (MatchingStates.waiting_in_queue, VIPStates.waiting_for_age_filter):
+    # باگ ۴ فیکس شد: اضافه شدن .state به متغیرهای وضعیت
+    if current_state in (MatchingStates.waiting_in_queue.state, VIPStates.waiting_for_age_filter.state):
         await matching_engine.remove_from_queue(tg_id)
 
     await state.clear()
@@ -216,7 +205,6 @@ async def cancel_queue_operations(message: Message, state: FSMContext) -> None:
         text="🛑 عملیات لغو شد. به منوی اصلی بازگشتید.",
         reply_markup=get_main_menu_keyboard(),
     )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – Match-type selection (callbacks)
@@ -229,32 +217,6 @@ async def enter_match_queue(
     state: FSMContext,
     db_session: AsyncSession,
 ) -> None:
-    """
-    Unified handler for all match-type selection callbacks.
-
-    Supported callback_data values
-    ────────────────────────────────
-    match_random  – free, no gender/province filter
-    match_boy     – 1 coin, targets male   users, nationwide
-    match_girl    – 1 coin, targets female users, nationwide
-    match_nearby  – 1 coin, no gender filter, same province as the caller
-
-    Flow
-    ────
-    1. Guard against duplicate queue entry.
-    2. Guard against block-cooldown.
-    3. Fetch the user record (guard against missing user / missing gender).
-    4. Resolve cost and engine parameters from the match type.
-    5. Verify coin balance; show alert and abort if insufficient.
-    6. VIP users (except "nearby") are redirected to the age-filter step.
-    7. Lock FSM state → MatchingStates.waiting_in_queue.
-    8. Show "search started" UI (best-effort).
-    9. Await matching_engine.find_match(...).
-    10. Handle ghost matches.
-    11. On valid match: clear both users' queue states, settle coins, launch
-        handle_successful_match. If match initialisation fails, both users
-        are returned to the main menu (see handle_successful_match).
-    """
     tg_id = call.from_user.id
     match_type = call.data.removeprefix("match_")
 
@@ -335,7 +297,6 @@ async def enter_match_queue(
         return
 
     # ── 7. Lock state ─────────────────────────────────────────────────────────
-    # State is set BEFORE any further action so a second rapid tap is rejected.
     await state.set_state(MatchingStates.waiting_in_queue)
     await call.answer()
 
@@ -360,9 +321,6 @@ async def enter_match_queue(
         await _handle_ghost_match(call, state, tg_id)
         return
 
-    # If no match was found, the user has been placed in the queue by the
-    # engine and will be matched asynchronously by a future caller. FSM state
-    # remains MatchingStates.waiting_in_queue; no further action here.
     if not matched_partner_id:
         return
 
@@ -371,9 +329,9 @@ async def enter_match_queue(
     await partner_ctx.clear()
     await state.clear()
 
-    await _settle_coins_after_match(db_session, user, cost, matched_partner_id)
-
-    await handle_successful_match(db_session, tg_id, matched_partner_id)
+    match_success = await handle_successful_match(db_session, tg_id, matched_partner_id)
+    if match_success:
+        await _settle_coins_after_match(db_session, user, cost, matched_partner_id)
 
 
 @router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_"))
@@ -384,7 +342,6 @@ async def process_vip_age_filter(
 ) -> None:
     """Processes the VIP age filter selection and delegates to the matching engine."""
     
-    # حذف پیشوند مشترک برای استخراج تمیزتر دیتا (مثلاً خروجی: "18_25_boy" یا "all_girl")
     data_parts = call.data.removeprefix("vip_age_").split("_")
     
     if data_parts[0] == "all":
@@ -455,9 +412,10 @@ async def process_vip_age_filter(
     await partner_ctx.clear()
     await state.clear()
 
-    await _settle_coins_after_match(db_session, user, cost, matched_partner_id)
+    match_success = await handle_successful_match(db_session, tg_id, matched_partner_id)
+    if match_success:
+        await _settle_coins_after_match(db_session, user, cost, matched_partner_id)
 
-    await handle_successful_match(db_session, tg_id, matched_partner_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,7 +444,8 @@ async def _abort_match_initialisation(
         reason,
     )
     match_history.is_active = False
-    match_history.ended_at = datetime.utcnow()
+    # باگ ۱ فیکس شد: استفاده از timezone.utc و حذف tzinfo
+    match_history.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
     try:
         await session.commit()
     except Exception as exc:
@@ -517,28 +476,11 @@ async def handle_successful_match(
     session: AsyncSession,
     user_one_id: int,
     user_two_id: int,
-) -> None:
+) -> bool:
     """
     Employer-mandated match-initialisation workflow.
-
-    Must be called once per successful match, from whichever handler detects it.
-    Both ``user_one_id`` and ``user_two_id`` must already have their FSM queue
-    states cleared before this function is invoked.
-
-    Step-by-step
-    ─────────────
-    1.  Persist a MatchHistory record and commit.
-    2.  Fetch 20 random questions; cache IDs and starting index (0) in Redis.
-    3.  Send the exact employer-mandated notification text to both users.
-        If delivery fails for either user, abort the whole match (both users
-        return to the main menu) rather than proceeding one-sided.
-    4.  Attach get_match_found_keyboard(partner_id, match_id) to that message.
-    5.  Set both users' FSM state → QuestionnaireStates.waiting_for_questions_to_start.
-    6.  Sleep 5 seconds (non-blocking — does not freeze the event loop).
-    7.  Re-fetch match_history; if is_active is False someone clicked "End Date"
-        during the countdown → return silently, no questions sent.
-    8.  Set both users' FSM state → QuestionnaireStates.answering_questions.
-    9.  Send the first question to both via get_question_reply_keyboard(pool[0].id).
+    Returns True if the match was fully initialised and users were notified.
+    Returns False if it aborted (e.g., no questions, delivery failed).
     """
     # ── Step 1: persist match history ────────────────────────────────────────
     match_history = await crud.create_match_history(session, user_one_id, user_two_id)
@@ -581,7 +523,7 @@ async def handle_successful_match(
                 logger.error(
                     "Failed to send no-questions notice to user %s: %s", uid, exc
                 )
-        return
+        return False  # باگ ۳: برگرداندن False برای جلوگیری از کسر سکه
 
     q_ids_str = ",".join(str(q.id) for q in pool)
     await matching_engine.redis.set(
@@ -592,13 +534,10 @@ async def handle_successful_match(
     )
 
     # ── Steps 3, 4: notify + keyboard ────────────────────────────────────────
-    # Each user's keyboard carries the *other* user's ID as the partner reference.
     user_pairs = [
-        (user_one_id, user_two_id),   # (target, partner)
+        (user_one_id, user_two_id),   
         (user_two_id, user_one_id),
     ]
-
-# WHERE: Inside `handle_successful_match()`, down in Steps 3 & 4 (the user_pairs for-loop)
 
     delivery_failed_for = None
     for target_id, partner_id in user_pairs:
@@ -609,7 +548,6 @@ async def handle_successful_match(
                 reply_markup=get_match_found_keyboard(partner_id, match_history.id),
             )
             
-            # Send date-phase reply keyboard
             try:
                 await bot.send_message(
                     chat_id=target_id,
@@ -626,8 +564,6 @@ async def handle_successful_match(
             delivery_failed_for = target_id
             break
 
-    # If delivery failed for either side, abort the whole match — both users
-    # return to the main menu rather than one side proceeding alone.
     if delivery_failed_for is not None:
         await _abort_match_initialisation(
             session,
@@ -636,7 +572,7 @@ async def handle_successful_match(
             user_two_id,
             reason=f"notification delivery failed for user {delivery_failed_for}",
         )
-        return
+        return False  # باگ ۳: برگرداندن False برای جلوگیری از کسر سکه
 
     # ── Step 5: set both users' FSM state ────────────────────────────────────
     for target_id in (user_one_id, user_two_id):
@@ -662,13 +598,13 @@ async def handle_successful_match(
             "Skipping question delivery.",
             match_history.id,
         )
-        return
+        # مچ فعال نیست ولی عملیات اولیه موفق بوده است
+        return True
 
     # ── Steps 8 & 9: transition to answering and deliver first question ───────
     first_question = pool[0]
 
     for target_id, _ in user_pairs:
-        # Step 8 — advance FSM state
         ctx = get_user_state(target_id)
         try:
             await ctx.set_state(QuestionnaireStates.answering_questions)
@@ -680,7 +616,6 @@ async def handle_successful_match(
                 exc,
             )
 
-        # Step 9 — send first question
         try:
             await bot.send_message(
                 chat_id=target_id,
@@ -692,3 +627,5 @@ async def handle_successful_match(
             logger.error(
                 "Could not send first question to user %s: %s", target_id, exc
             )
+            
+    return True 
