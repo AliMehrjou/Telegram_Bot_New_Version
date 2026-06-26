@@ -37,7 +37,8 @@ class ProfileEditStates(StatesGroup):
     updating_age = State()            
     updating_province = State()        
     updating_city = State()
-    waiting_for_voice = State()            
+    waiting_for_voice = State()
+    waiting_for_gps = State()          
 
 class DiscoveryStates(StatesGroup):
     choosing_province  = State()   

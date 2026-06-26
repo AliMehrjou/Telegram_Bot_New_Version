@@ -132,7 +132,7 @@ async def handle_start_command(
             if ref_id_candidate != tg_id:
                 referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                 if referrer:
-                    referrer_id = referrer.id
+                    referrer_id = referrer.tg_id  # FIX: Storing Telegram ID instead of DB Primary Key
         except Exception:
             pass
 
@@ -144,7 +144,7 @@ async def handle_start_command(
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                        referrer_id = referrer.id
+                        referrer_id = referrer.tg_id  # FIX: Storing Telegram ID instead of DB Primary Key
             except Exception:
                 pass
             await redis_client.delete(f"pending_ref:{tg_id}")
@@ -452,17 +452,6 @@ async def show_nearby_people(message: Message, db_session: AsyncSession) -> None
         reply_markup=get_nearby_options_keyboard(),
     )
 
-@router.message(F.text == ReplyBtn.SEARCH_USERS)
-async def show_user_search(message: Message, db_session: AsyncSession) -> None:
-    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
-    if not user or not user.completed_registration:
-        await message.answer("⚠️ ابتدا ثبت‌نام خود را تکمیل کنید. /start")
-        return
-
-    await message.answer(
-        "لطفاً از لیست زیر گزینه مورد نظر خود را انتخاب کنید:",
-        reply_markup=get_search_options_keyboard(),
-    )
 
 @router.message(F.text == ReplyBtn.MY_FRIENDS)
 async def show_friends_list(message: Message, db_session: AsyncSession) -> None:
@@ -536,6 +525,7 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         logger.info("get_coins_menu_keyboard not available; sending without extra markup.")
         markup = None
 
+    
     await message.answer(wallet_text, reply_markup=markup, parse_mode="HTML")
 
 @router.message(F.text == ReplyBtn.RULES)
@@ -562,17 +552,17 @@ async def show_rules(message: Message):
 
 @router.message(F.text == ReplyBtn.SUPPORT)
 async def start_support_chat(message: Message, state: FSMContext) -> None:
-await message.answer(
+    # اعمال تغییر (اضافه شدن parse_mode)
+    await message.answer(
         "📞 <b>ارتباط با تیم پشتیبانی:</b>\n\n"
         "پیام خود را تایپ کنید. پیام شما به صورت <b>کاملاً ناشناس</b> "
         "برای تیم پشتیبانی ارسال می‌شود.\n\n"
         "برای لغو از دکمه «❌ انصراف» استفاده کنید 👇",
         reply_markup=get_cancel_keyboard(),
-        parse_mode="HTML"  
+        parse_mode="HTML"
     )
-
     await state.set_state(SupportStates.waiting_for_support_message)
-
+    
 @router.message(SupportStates.waiting_for_support_message)
 async def receive_support_message(message: Message, state: FSMContext) -> None:
     if message.text == ReplyBtn.CANCEL:
@@ -646,7 +636,7 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                        referrer_id = referrer.id
+                        referrer_id = referrer.tg_id  # FIX: Storing Telegram ID instead of DB Primary Key
             except Exception:
                 pass
             await redis_client.delete(f"pending_ref:{tg_id}")
@@ -678,3 +668,4 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
+    

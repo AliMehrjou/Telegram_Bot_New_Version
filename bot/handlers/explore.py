@@ -22,6 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.database.models.models import BlockList, User
 from matching_bot_project.database.queries import crud
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from matching_bot_project.database.models.models import BlockList, User
 
 logger = logging.getLogger(__name__)
 router = Router(name="explore_handler")
@@ -160,7 +163,7 @@ async def _query_user(
         .where(
             User.tg_id != caller_tg_id,
             User.completed_registration.is_(True),
-            getattr(User, "invisible_mode", False) == False,
+            User.invisible_mode.is_(False), # FIXED: Properly generates SQL WHERE clause
             User.tg_id.not_in(blocked_by_caller_sq),
             User.tg_id.not_in(blockers_of_caller_sq),
         )
@@ -176,14 +179,12 @@ async def _query_user(
     if filters.same_province:
         stmt = stmt.where(User.province == caller.province)
 
-# ================== کدهای جایگزین (انتهای تابع) ==================
     if filters.same_city:
         stmt = stmt.where(
             User.province == caller.province,
             User.city == caller.city,
         )
 
-    # ثابت _RANDOM_FUNC با مرتب‌سازی بر اساس آخرین بازدید جایگزین شد
     stmt = stmt.order_by(User.last_active.desc()).limit(1)
 
     result = await db_session.execute(stmt)

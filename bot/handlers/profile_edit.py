@@ -16,7 +16,7 @@ from matching_bot_project.database.queries.crud import update_user_profile
 from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.queries import crud
 from matching_bot_project.database.models.models import User
-
+from matching_bot_project.bot.core.loader import bot
 from matching_bot_project.bot.core.constants import ReplyBtn
 
 logger = logging.getLogger(__name__)
@@ -141,17 +141,19 @@ async def start_bio_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.editing_bio)
 async def process_bio_input(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     bio_text = message.text or ""
-    if bio_text == ReplyBtn.BACK_TO_MENU: return
+    if bio_text == ReplyBtn.BACK_TO_MENU:
+        await state.clear()
+        await message.answer("❌ عملیات لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
 
     if len(bio_text) > 150:
         await message.answer("⚠️ متن بیوگرافی طولانی است. مجدداً بنویسید:")
         return
 
     safe_bio = html.escape(bio_text.strip())
-    user = await crud.get_user_by_tg_id(db_session, message.from_user.id)
     
     success = await update_user_profile(
-        session=db_session, tg_id=message.from_user.id, bio=safe_bio, interests=user.interests if user else ""
+        session=db_session, tg_id=message.from_user.id, bio=safe_bio
     )
     if success:
         await db_session.commit()
@@ -189,9 +191,8 @@ async def save_profile_changes(call: CallbackQuery, state: FSMContext, db_sessio
     selected_interests = data.get("selected_interests", [])
     interests_str = ",".join(selected_interests) if selected_interests else ""
 
-    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
     success = await update_user_profile(
-        session=db_session, tg_id=call.from_user.id, bio=user.bio if user else "", interests=interests_str
+        session=db_session, tg_id=call.from_user.id, interests=interests_str
     )
     if success:
         await db_session.commit() 
@@ -237,7 +238,10 @@ async def start_age_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.updating_age)
 async def process_new_age(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     age_text = message.text or ""
-    if age_text == ReplyBtn.BACK_TO_MENU: return
+    if age_text == ReplyBtn.BACK_TO_MENU:
+        await state.clear()
+        await message.answer("❌ عملیات لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
 
     if not age_text.isdigit() or not (18 <= int(age_text) <= 99):
         await message.answer("⚠️ لطفاً یک سن معتبر (عددی بین ۱۸ تا ۹۹) وارد کنید:")
@@ -251,6 +255,7 @@ async def process_new_age(message: Message, state: FSMContext, db_session: Async
     
     await state.clear()
 
+
 # ==================== بخش مربوط به ویرایش محل سکونت ====================
 
 @router.callback_query(F.data == "change_location")
@@ -262,7 +267,10 @@ async def start_location_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.updating_province)
 async def process_edit_province(message: Message, state: FSMContext):
     selected_province = message.text or ""
-    if selected_province == ReplyBtn.BACK_TO_MENU: return
+    if selected_province == ReplyBtn.BACK_TO_MENU:
+        await state.clear()
+        await message.answer("❌ عملیات لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
 
     if selected_province not in IRAN_DATA:
         await message.answer("⚠️ لطفاً استان خود را فقط از روی کیبورد زیر انتخاب کنید:")
@@ -273,10 +281,14 @@ async def process_edit_province(message: Message, state: FSMContext):
     await message.answer(f"✅ استان {selected_province} انتخاب شد.\n\nاکنون شهر خود را از کیبورد انتخاب کنید:", reply_markup=get_cities_reply_keyboard(selected_province))
 
 
+
 @router.message(ProfileEditStates.updating_city)
 async def process_edit_city(message: Message, state: FSMContext, db_session: AsyncSession):
     selected_city = message.text or ""
-    if selected_city == ReplyBtn.BACK_TO_MENU: return
+    if selected_city == ReplyBtn.BACK_TO_MENU:
+        await state.clear()
+        await message.answer("❌ عملیات لغو شد.", reply_markup=get_main_menu_keyboard())
+        return
 
     data = await state.get_data()
     new_province = data.get("province")
@@ -289,6 +301,7 @@ async def process_edit_city(message: Message, state: FSMContext, db_session: Asy
         await db_session.commit()
         await message.answer("🎉 محل سکونت شما با موفقیت اصلاح شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
+
 
 # ==================== بخش مربوط به ویرایش وویس ====================
 
@@ -352,21 +365,30 @@ async def process_marital_edit(call: CallbackQuery, db_session: AsyncSession):
         await db_session.commit()
         await call.answer("✅ وضعیت تأهل شما بروزرسانی شد.", show_alert=True)
         await call.message.delete()
-        await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
-
+        await bot.send_message(
+            chat_id=call.from_user.id, 
+            text="به منوی اصلی بازگشتید.", 
+            reply_markup=get_main_menu_keyboard()
+        )
+        
 # ---- لوکیشن GPS ----
 @router.callback_query(F.data == "change_gps")
 async def start_gps_edit(call: CallbackQuery, state: FSMContext):
-    await state.set_state(ProfileEditStates.updating_province) # موقتا از همان استیت استفاده می‌کنیم یا جدید بساز
+    await state.set_state(ProfileEditStates.waiting_for_gps)  # ← state اختصاصی
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📍 ارسال لوکیشن من", request_location=True)],
         [KeyboardButton(text="🔙 برگشت به منوی اصلی")]
     ], resize_keyboard=True, one_time_keyboard=True)
     
     await call.message.delete()
-    await call.message.answer("🌍 برای اینکه بتونیم فاصله شما رو با بقیه محاسبه کنیم، لطفاً دکمه زیر را لمس کرده و لوکیشن خود را بفرستید.\n\n⚠️ حریم خصوصی: لوکیشن دقیق شما به هیچکس نمایش داده نخواهد شد.", reply_markup=kb)
+    await call.message.answer(
+        "🌍 برای اینکه بتونیم فاصله شما رو با بقیه محاسبه کنیم، لطفاً دکمه زیر را لمس کرده و لوکیشن خود را بفرستید.\n\n"
+        "⚠️ حریم خصوصی: لوکیشن دقیق شما به هیچکس نمایش داده نخواهد شد.",
+        reply_markup=kb
+    )
+    await call.answer()
 
-@router.message(F.location)
+@router.message(ProfileEditStates.waiting_for_gps, F.location)  # ← state filter اضافه شد
 async def process_gps_location(message: Message, state: FSMContext, db_session: AsyncSession):
     lat = message.location.latitude
     lng = message.location.longitude
@@ -378,3 +400,10 @@ async def process_gps_location(message: Message, state: FSMContext, db_session: 
         await db_session.commit()
         await message.answer("✅ لوکیشن شما با موفقیت روی نقشه ثبت شد.", reply_markup=get_main_menu_keyboard())
     await state.clear()
+
+@router.message(ProfileEditStates.waiting_for_gps)  # ← گارد برای ورودی غیر لوکیشن
+async def process_gps_invalid(message: Message, state: FSMContext):
+    if message.text == ReplyBtn.BACK_TO_MENU:
+        await state.clear()
+        return await message.answer("❌ عملیات لغو شد.", reply_markup=get_main_menu_keyboard())
+    await message.answer("⚠️ لطفاً فقط از دکمه «ارسال لوکیشن من» استفاده کنید.")

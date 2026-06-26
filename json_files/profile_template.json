@@ -1,12 +1,12 @@
 {
   "profile_text": [
-    "<tg-emoji emoji-id=\"5368324170673084105\">💠</tg-emoji> <b>پروفایل {profile_title}</b> <tg-emoji emoji-id=\"5368324170673084105\">💠</tg-emoji>",
+    "<tg-emoji emoji-id=\"5471952986970267163\">💎</tg-emoji> <b>پروفایل {profile_title}</b> <tg-emoji emoji-id=\"5471952986970267163\">💎</tg-emoji>",
     "━━━━━━━━━━━━━━━━━━━━",
     "🔖 <b>شناسه:</b> <code>{public_id}</code>",
     "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>نام:</b> {first_name}",
-    "<tg-emoji emoji-id=\"5429564911048992647\">⚧</tg-emoji> <b>جنسیت:</b> {gender}",
-    "<tg-emoji emoji-id=\"5465226866321268133\">🎂</tg-emoji> <b>سن:</b> {age} سال",
-    "<tg-emoji emoji-id=\"5415803062738504079\">📍</tg-emoji> <b>مکان:</b> {province}، {city}",
+    "<tg-emoji emoji-id=\"5429564911048992647\">🚹</tg-emoji> <b>جنسیت:</b> {gender}",
+    "<tg-emoji emoji-id=\"5370999492914976897\">🎂</tg-emoji> <b>سن:</b> {age} سال",
+    "<tg-emoji emoji-id=\"5415803062738504079\">🗺</tg-emoji> <b>مکان:</b> {province}، {city}",
     "━━━━━━━━━━━━━━━━━━━━",
     "<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <b>بیوگرافی:</b>",
     "<i>{bio}</i>",

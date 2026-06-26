@@ -10,6 +10,7 @@ from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update
 
@@ -34,11 +35,10 @@ def generate_public_id(length=6):
 
 @router.message(F.text == ReplyBtn.MY_PROFILE)
 async def view_user_profile(message: Message, db_session: AsyncSession, state: FSMContext):
-    
     current_state = await state.get_state()
     if current_state and ("chat" in current_state.lower() or "matching" in current_state.lower() or "questionnaire" in current_state.lower()):
         return await message.answer("⚠️ شما در حال حاضر در یک فرآیند فعال (چت یا مچینگ) هستید. لطفاً اول آن را پایان دهید.")
-        
+
     await state.clear()
 
     try:
@@ -49,54 +49,77 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
             await message.answer("⚠️ رفیق هنوز ثبت‌نامت کامل نشده! /start رو بفرست تا شروع کنیم.")
             return
 
-        # ۲. ساخت شناسه (حذف db_session.refresh برای جلوگیری از کرش مخفی)
+        await db_session.refresh(user)
+
+        # ساخت شناسه در صورت نیاز
         if not getattr(user, 'public_id', None):
             import string, random
-            characters = string.ascii_letters + string.digits
-            user.public_id = f"user_{''.join(random.choice(characters) for _ in range(6))}"
-            await db_session.commit() 
-            
+            chars = string.ascii_letters + string.digits
+            user.public_id = f"user_{''.join(random.choice(chars) for _ in range(6))}"
+            await db_session.commit()
+            await db_session.refresh(user)  
+
         profile_card = build_unified_profile_card(user, is_own_profile=True)
 
-        # ۳. رفع باگ دکمه VIP (قبلا vip_section_triggered بود که اشتباه است)
         inline_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
             [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")]
         ])
 
-        if user.profile_photo_file_id:
-            if len(profile_card) > 1024:
-                
-                await message.answer_photo(photo=user.profile_photo_file_id)
-                await message.answer(
-                    text=profile_card, 
-                    parse_mode=ParseMode.HTML, 
-                    reply_markup=inline_kb
-                )
-            else:
-                
-                await message.answer_photo(
-                    photo=user.profile_photo_file_id,
-                    caption=profile_card,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=inline_kb
-                )
-        else:
+        # ---- ارسال عکس (با سیستم شکارچی ارور) ----
+        photo_id = getattr(user, 'profile_photo_file_id', None)
+        photo_sent = False
+        if photo_id:
+            try:
+                if len(profile_card) > 1024:
+                    await message.answer_photo(photo=photo_id)
+                    await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
+                else:
+                    await message.answer_photo(photo=photo_id, caption=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
+                photo_sent = True
+            except Exception as photo_err:
+                err_str = str(photo_err)
+                if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
+                    logger.warning(f"Invalid Photo ID for user {tg_id}. Clearing from DB.")
+                    user.profile_photo_file_id = None
+                    await db_session.commit()
+                else:
+                    logger.warning(f"Photo failed for unknown reason: {photo_err}")
+
+        # اگر عکس ارسال نشد (یا خراب بود و پاک شد)، پروفایل متنی رو بفرست
+        if not photo_sent:
             await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
 
-        # ارسال وویس/آهنگ پروفایل در صورت وجود
-        profile_voice = getattr(user, 'profile_voice_file_id', None)
-        if profile_voice:
-            await message.answer_voice(
-                voice=profile_voice,
-                caption="🎵 <b>آهنگ/وویس پروفایل شما</b>",
-                parse_mode=ParseMode.HTML
-            )
-            
+        # ---- ارسال آهنگ / وویس (با سیستم شکارچی ارور) ----
+        voice_id = getattr(user, 'profile_voice_file_id', None)
+        if voice_id:
+            try:
+                await message.answer_voice(voice=voice_id, caption="🎵 <b>صدای پروفایل شما</b>", parse_mode=ParseMode.HTML)
+            except Exception as voice_err:
+                err_str = str(voice_err)
+                if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
+                    logger.warning(f"Invalid Voice ID for user {tg_id}. Clearing from DB.")
+                    user.profile_voice_file_id = None
+                    await db_session.commit()
+                else:
+                    logger.warning(f"Voice failed for user {tg_id}: {voice_err}")
+
     except Exception as e:
-        logger.error(f"Error in view_user_profile: {e}")
-        await message.answer("⚠️ یه مشکلی پیش اومد! لطفاً چند لحظه دیگه دوباره روی دکمه کلیک کن.")
         
+        err_str = str(e)
+        if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
+            if 'user' in locals():
+                user.profile_photo_file_id = None
+                user.profile_voice_file_id = None
+                await db_session.commit()
+            await message.answer("⚠️ یکی از فایل‌های پروفایل شما (عکس یا وویس) نامعتبر بود و توسط سیستم امنیتی پاک شد. لطفاً دوباره روی «پروفایل من» کلیک کن.")
+        else:
+            logger.error(f"Error in view_user_profile: {e}", exc_info=True)
+            await message.answer("⚠️ یه مشکلی پیش اومد! لطفاً دوباره تلاش کنید.")
+
+            await message.answer(error_details, parse_mode=ParseMode.HTML)
+            
+
 # ==========================================
 # سیستم سایلنت مود
 # ==========================================
@@ -160,6 +183,9 @@ async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
         # یک تاریخ خیلی دور برای حالت همیشه سایلنت
         silent_until = now + timedelta(days=3650)
         msg = "🔕 با فعال کردن حالت سایلنت، درخواست‌های چت و دیت دیگر برای شما ارسال نخواهد شد."
+    else:
+        await call.answer("⚠️ گزینه نامعتبر.", show_alert=True)
+        return
     
     # 👈 فراخوانی تابع دیتابیس و کامیت کردن تغییرات
     await crud.update_silent_mode(db_session, call.from_user.id, silent_until)
@@ -169,6 +195,7 @@ async def handle_silent_options(call: CallbackQuery, db_session: AsyncSession):
     await call.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="close_menu")]]
     ))
+
     
 # ==========================================
 # سیستم حذف اکانت
@@ -206,7 +233,9 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
 
     # دریافت تعداد زیرمجموعه‌ها و ساخت لینک دعوت با آیدی جدید ربات
     ref_count = await crud.get_referral_count(db_session, tg_id)
-    invite_link = f"https://t.me/Blinddateirbot?start=ref_{tg_id}"
+    
+    bot_name = str(settings.BOT_USERNAME).replace("@", "")
+    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
     
     # بررسی وضعیت VIP کاربر
     from matching_bot_project.bot.handlers.vip import is_vip
@@ -225,7 +254,6 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
         "<blockquote><tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>رفیق، با دعوت از دوستات هم سکه می‌گیری هم سهمیه مچ زدن رایگان بهت می‌رسه! اگرم VIP داری که معطل نکن، از دکمه پایین تنظیماتتو شخصی‌سازی کن.</i></blockquote>"
     )
 
-    
     kb = None
     if user_is_vip:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -233,7 +261,7 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
         ])
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-
+    
 
 @router.message(F.text == ReplyBtn.HELP)
 async def view_help_panel(message: Message):

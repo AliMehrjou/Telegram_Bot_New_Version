@@ -552,8 +552,26 @@ async def finalize_questionnaire_and_request_approval(
     match_id: int,
     match_row: MatchHistory,
 ) -> None:
-    # (کدهای شمارش identical_count و compared_count دقیقاً مثل قبل بماند...)
-    # ...
+    try:
+        stmt = select(UserAnswer).where(UserAnswer.match_history_id == match_id)
+        result = await session.execute(stmt)
+        all_answers: list[UserAnswer] = list(result.scalars().all())
+    except Exception as exc:
+        logger.error("Failed to fetch UserAnswer records for match %s: %s", match_id, exc)
+        all_answers = []
+
+    per_question: dict[int, list[str]] = {}
+    for ans in all_answers:
+        per_question.setdefault(ans.question_id, []).append(ans.selected_option)
+
+    identical_count: int = 0
+    compared_count: int = 0
+
+    for options in per_question.values():
+        if len(options) == 2:
+            compared_count += 1
+            if options[0] == options[1]:
+                identical_count += 1
     
     compatibility_pct: int = (
         round((identical_count / compared_count) * 100) if compared_count > 0 else 50
@@ -604,7 +622,7 @@ async def finalize_questionnaire_and_request_approval(
             )
         except Exception as exc:
             logger.error(f"Failed to deliver approval prompt to {target_uid}: {exc}")
-
+            
 # ================== کدهای افزودنی ==================
 async def build_partner_answer_summary(session: AsyncSession, match_id: int, partner_id: int) -> str:
     """خلاصه‌ای از پاسخ‌های کاربر مقابل را برای نمایش می‌سازد"""

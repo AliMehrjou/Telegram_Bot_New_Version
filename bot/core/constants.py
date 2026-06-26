@@ -5,11 +5,6 @@ Single source of truth for key UI strings, reply keyboard labels,
 inline keyboard labels, and system messages.
 """
 # ================== کدهای افزودنی ==================
-class CompatibilityMsg:
-    TIER_LOW = "متن مربوط به زیر ۳۰٪ (دقیقاً کپی از پیام کارفرما)"
-    TIER_MID_LOW = "متن مربوط به ۳۰ تا ۵۰٪ (دقیقاً کپی از پیام کارفرما)"
-    TIER_MID_HIGH = "متن مربوط به ۵۰ تا ۷۰٪ (دقیقاً کپی از پیام کارفرما)"
-    TIER_HIGH = "متن مربوط به ۷۰ تا ۱۰۰٪ (دقیقاً کپی از پیام کارفرما)"
     
 class ReplyBtn:
     # --- Main Menu Options ---
@@ -90,7 +85,7 @@ class InlineBtn:
 
     # --- VIP Age Filter ---
     VIP_AGE_18_25 = "[۱۸-۲۵]"
-    VIP_AGE_25_30 = "[۲۵-۳۰]"
+    VIP_AGE_25_30 = "[۲۵-۳0]"
     VIP_AGE_30_40 = "[۳۰-۴۰]"
     VIP_AGE_ALL = "[هر سنی]"
 
@@ -164,3 +159,9 @@ class SystemMsg:
     ANSWER_ACK_TOAST = "پاسخ ثبت شد"
     PARTNER_WAIT_ALERT = "لطفا شکیبا باشید، پارتنر شما هنوز پاسخ نداده است."
     DATE_CANCELLED_TEXT = "دیت توسط یکی از طرفین لغو شد و به منوی اصلی بازگشتید."
+
+class CompatibilityMsg:
+    TIER_LOW = "![💔](tg://emoji?id=5471954395719539651) تفاهم شما با این کاربر پایین است. شاید نفر بهتری منتظر شماست!"
+    TIER_MID_LOW = "![🤔](tg://emoji?id=5370724846936267183) تفاهم متوسط. ارزش یک گفتگو دارد اما انتظارات را مدیریت کنید."
+    TIER_MID_HIGH = "![😊](tg://emoji?id=5370738629486319646) تفاهم خوبی دارید! شانس خوبی برای یک گفتگوی جذاب وجود دارد."
+    TIER_HIGH = "![🔥](tg://emoji?id=5420315771991497307) تفاهم بالا! احتمال زیادی برای یک اتصال عالی وجود دارد!"

@@ -121,7 +121,7 @@ async def fallback_receipt_input(message: Message):
         "اگر منصرف شده‌اید، روی دکمه «❌ انصراف» کلیک کنید.",
         parse_mode="HTML"
     )
-    
+
 @router.callback_query(PaymentStates.choosing_method, F.data == "pay_method_gateway")
 async def process_gateway_payment(call: CallbackQuery, state: FSMContext):
     if not settings.PAYMENT_GATEWAY_ENABLED:
@@ -191,11 +191,11 @@ async def admin_reject_receipt(call: CallbackQuery, db_session: AsyncSession):
     order.resolved_at = datetime.now(timezone.utc)
     await db_session.commit()
     
-        try:
-            new_caption = call.message.html_text + "\n\n❌ <b>رد شد.</b>"
-            await call.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Edit caption error: {e}")
+    try:
+        new_caption = call.message.html_text + "\n\n❌ <b>رد شد.</b>"
+        await call.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Edit caption error: {e}")
         
     try:
         await bot.send_message(

@@ -16,6 +16,11 @@ from matching_bot_project.database.models.models import (
 import math
 from matching_bot_project.database.models.models import CoinPackage, CoinPurchaseOrder
 
+from typing import Optional
+from sqlalchemy import select, case, func, and_, exists
+from sqlalchemy.ext.asyncio import AsyncSession
+from matching_bot_project.database.models.models import User, UserLike, BlockList
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,11 +330,14 @@ async def ensure_public_id_exists(session: AsyncSession, tg_id: int) -> str:
 
 
 async def get_discovery_candidate(session: AsyncSession, current_user_id: int, current_user_gender: str) -> Optional[User]:
-    target_gender = "Female" if current_user_gender.lower() == "male" else "Male"
-    if current_user_gender.lower() == "boy": target_gender = "girl"
-    if current_user_gender.lower() == "girl": target_gender = "boy"
-
-    from sqlalchemy import select, case, func, and_, exists
+    # FIXED: Unified gender opposite mapping
+    _GENDER_OPPOSITE = {
+        "male": "female",
+        "female": "male",
+        "boy": "girl",
+        "girl": "boy",
+    }
+    target_gender = _GENDER_OPPOSITE.get(current_user_gender.lower(), "female")
 
     liked_me_exists = select(1).where(
         and_(
@@ -365,24 +373,24 @@ async def get_discovery_candidate(session: AsyncSession, current_user_id: int, c
         else_=0
     )
 
-# ================== کدهای جایگزین (بخش return در تابع) ==================
     stmt = select(User).where(
         and_(
             User.tg_id != current_user_id,
-            func.lower(User.gender) == target_gender.lower(),
+            func.lower(User.gender) == target_gender, # FIXED: Compare against lowercase dictionary result
             User.completed_registration == True,
-            getattr(User, "invisible_mode", False) == False,
+            User.invisible_mode.is_(False),           # FIXED: Prevented the getattr() bug here too
             ~acted_by_me_exists,
             ~blocked_by_me_exists,
             ~blocked_me_exists
         )
     ).order_by(
         priority_expr.desc(),
-        User.last_active.desc() # جایگزین شد با func.rand()
+        User.last_active.desc() 
     ).limit(1)
 
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
 
 
 async def check_mutual_like(session: AsyncSession, user_one_id: int, user_two_id: int) -> bool:

@@ -29,7 +29,7 @@ from matching_bot_project.database.queries.crud import get_user_by_tg_id, proces
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
 from matching_bot_project.database.queries import crud
-
+from matching_bot_project.bot.core.config import settings
 from aiogram.filters import Command
 from matching_bot_project.bot.filters.custom import IsAdminFilter
 logger = logging.getLogger(__name__)
@@ -293,7 +293,7 @@ async def cmd_addcoinsvip(message: Message, db_session: AsyncSession):
     )
 
     async for user in stream_result:
-        await process_coin_transaction(db_session, user, amount, "VIP admin reward")
+        await process_coin_transaction(db_session, user, amount, "VIP admin reward", ignore_multiplier=True)
         user_ids.append(user.tg_id)
 
     await db_session.commit()
@@ -507,17 +507,14 @@ async def cq_stats(call: CallbackQuery, db_session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin_ban_"))
 async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
-    
-    
     try:
-        target_tg_id = int(call.data.split("_")[2])
-    except (IndexError, ValueError):
+        target_tg_id = int(call.data.removeprefix("admin_ban_"))
+    except ValueError:
         return await call.answer("⚠️ دیتای کالبک دکمه نامعتبر است!", show_alert=True)
     
     if target_tg_id == call.from_user.id:
         return await call.answer("⚠️ شما نمی‌توانید خودتان را مسدود کنید!", show_alert=True)
 
-    # 🔴 اضافه شدن کنترل امنیتی: جلوگیری از بن شدن سایر ادمین‌ها توسط دکمه شیشه‌ای
     if target_tg_id in settings.parsed_admin_ids:
         return await call.answer("⚠️ شما نمی‌توانید یک ادمین دیگر را مسدود کنید!", show_alert=True)
 
@@ -530,7 +527,6 @@ async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
     user.is_banned = True
     await db_session.commit()
     
-    # ادامه کدهای ارسال پیام به کاربر و آپدیت دکمه‌ها ...
     user_notification = "❌ <b>حساب کاربری شما به دلیل نقض قوانین مسدود (Ban) شد.</b>"
     try:
         await bot.send_message(chat_id=target_tg_id, text=user_notification, parse_mode="HTML")
@@ -555,17 +551,17 @@ async def admin_quick_ban(call: CallbackQuery, db_session: AsyncSession):
     )
 
 
+
 @router.callback_query(F.data.startswith("admin_unban_"))
 async def admin_quick_unban(call: CallbackQuery, db_session: AsyncSession):
     try:
-        target_tg_id = int(call.data.split("_")[2])
-    except (IndexError, ValueError):
+        target_tg_id = int(call.data.removeprefix("admin_unban_"))
+    except ValueError:
         return await call.answer("⚠️ دیتای کالبک دکمه نامعتبر است!", show_alert=True)
         
-    # ۱. متوقف کردن فوری لودینگ تلگرام
     await call.answer("کاربر رفع مسدودیت شد.")
     
-    user = await get_user_by_tg_id(db_session, target_tg_id)
+    user = await crud.get_user_by_tg_id(db_session, target_tg_id)
     if not user:
         return await call.message.answer("⚠️ این کاربر در دیتابیس یافت نشد!")
 
@@ -582,7 +578,6 @@ async def admin_quick_unban(call: CallbackQuery, db_session: AsyncSession):
     except Exception:
         unban_msg_status = "⚠️ کاربر ربات را بلاک کرده است."
 
-    # 🛠️ اصلاح باگ: کاراکتر آندرسکور (_) اصلاح شد تا دکمه مجدداً کار کند
     revert_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 پاسخ به کاربر", callback_data=f"admin_reply_{target_tg_id}")],
         [InlineKeyboardButton(text="⛔️ بن کردن کاربر", callback_data=f"admin_ban_{target_tg_id}")]
@@ -599,13 +594,16 @@ async def admin_quick_unban(call: CallbackQuery, db_session: AsyncSession):
         parse_mode="HTML",
         reply_markup=revert_kb
     )
-    
+
 
 # ─── ۴. هندلر کلیک روی دکمه پاسخ به کاربر ───
 @router.callback_query(F.data.startswith("admin_reply_"))
 async def admin_start_reply(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    target_tg_id = int(call.data.split("_")[2])
+    try:
+        target_tg_id = int(call.data.removeprefix("admin_reply_"))
+    except ValueError:
+        return await call.answer("⚠️ دیتای کالبک دکمه نامعتبر است!", show_alert=True)
     
     await state.update_data(reply_target_id=target_tg_id)
     await state.set_state(AdminStates.waiting_for_support_reply)
@@ -1129,7 +1127,21 @@ async def pbroadcast_get_message(message: Message, state: FSMContext, db_session
         reply_markup=confirm_kb,
     )
  
- 
+
+async def _background_pbroadcast(users_data: list[tuple[int, str]]):
+    sent = 0
+    failed = 0
+    for tg_id, text in users_data:
+        try:
+            await bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+        
+    logger.info(f"PBroadcast completed. Sent: {sent}, Failed: {failed}")
+
+
 @router.callback_query(PBroadcastStates.confirming, F.data == "pbroadcast_confirm")
 async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
     await call.answer()
@@ -1154,38 +1166,23 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
         stmt = stmt.where(and_(*conditions))
  
     await call.message.edit_text(
-        "⏳ <b>در حال ارسال پیام‌ها...</b>\n\n"
-        "پیام‌ها در حال شخصی‌سازی و ارسال زنده هستند. لطفاً تا پایان عملیات منتظر بمانید.",
+        "⏳ <b>در حال ارسال پیام‌ها در پس‌زمینه...</b>\n\n"
+        "پیام‌ها در حال شخصی‌سازی و ارسال هستند. شما می‌توانید به کار خود ادامه دهید.",
         parse_mode="HTML",
     )
     
-    sent = 0
-    failed = 0
-
-    
+    users_data = []
     stream_result = await db_session.stream_scalars(stmt.execution_options(yield_per=200))
-    
     async for user in stream_result:
         personalized_text = _personalize(template, user)
-        try:
-            await bot.send_message(chat_id=user.tg_id, text=personalized_text, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            failed += 1
-            
-        await asyncio.sleep(0.04)  # رعایت محدودیت 40 میلی‌ثانیه‌ای تلگرام (حدود 25 پیام در ثانیه)
- 
-    
-    if sent == 0 and failed == 0:
+        users_data.append((user.tg_id, personalized_text))
+        
+    if not users_data:
         await call.message.answer("⚠️ عملیات پایان یافت اما هیچ کاربری با این فیلترها در دیتابیس یافت نشد.")
-    else:
-        await call.message.answer(
-            f"✅ <b>عملیات ارسال پیام شخصی‌سازی‌شده (PBroadcast) تمام شد!</b>\n\n"
-            f"📩 تعداد ارسال موفق: <b>{sent}</b>\n"
-            f"🚫 تعداد ناموفق (بلاک/خطا): <b>{failed}</b>",
-            parse_mode="HTML",
-        )
-
+        return
+        
+    asyncio.create_task(_background_pbroadcast(users_data))
+    
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — Daily Report

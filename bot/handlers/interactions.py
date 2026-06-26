@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import F, Router
@@ -12,14 +12,16 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
-from sqlalchemy import select, delete, or_, and_
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Project Imports
 from matching_bot_project.bot.core.config import settings
-from matching_bot_project.bot.core.loader import bot, dp, redis_client, dating_scheduler
+from matching_bot_project.bot.core.constants import ReplyBtn, SystemMsg
+from matching_bot_project.bot.core.formatters import build_unified_profile_card
+from matching_bot_project.bot.core.loader import bot, dating_scheduler, dp, redis_client
 from matching_bot_project.bot.keyboards.inline import (
     get_end_chat_confirm_keyboard,
     get_end_date_confirm_keyboard,
@@ -31,16 +33,11 @@ from matching_bot_project.bot.states.states import (
     ChatStates,
     MatchingStates,
     QuestionnaireStates,
-    VIPStates,
     ReportStates,
-    
+    VIPStates,
 )
 from matching_bot_project.database.models.models import BlockList, MatchHistory, UserLike
 from matching_bot_project.database.queries import crud
-
-from matching_bot_project.bot.core.constants import SystemMsg
-from matching_bot_project.bot.core.constants import ReplyBtn
-from matching_bot_project.bot.core.formatters import build_unified_profile_card
 
 logger = logging.getLogger(__name__)
 router = Router(name="interactions_handler")
@@ -432,15 +429,42 @@ async def block_user(call: CallbackQuery, db_session: AsyncSession) -> None:
 
 @router.callback_query(F.data.startswith("req_direct_"))
 async def request_direct_message(call: CallbackQuery, state: FSMContext, db_session: AsyncSession) -> None:
-    # کدهای اولیه‌ی تابع (استخراج آیدی و بررسی بلاک و...) بماند تا خط کسر سکه...
-
-    # تغییر امن برای کسر سکه در زمان شروع تایپ دایرکت
-    success = await crud.process_coin_transaction(db_session, caller, -1, "هزینه ارسال پیام دایرکت")
-    if not success:
-        await call.answer("❌ سکه‌های شما کافی نیست! برای دریافت سکه از منوی اصلی اقدام کنید.", show_alert=True)
+    target_id = _parse_int_suffix(call.data, "req_direct_")
+    if target_id is None:
+        await call.answer("❌ درخواست نامعتبر.", show_alert=True)
         return
-        
-    await db_session.commit()
+
+    caller_id = call.from_user.id
+    caller = await crud.get_user_by_tg_id(db_session, caller_id)
+
+    if not caller:
+        await call.answer("❌ حساب کاربری شما یافت نشد.", show_alert=True)
+        return
+
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    if block_check.scalar_one_or_none():
+        await call.answer("🚫 امکان ارسال دایرکت وجود ندارد (شما توسط این کاربر بلاک شده‌اید).", show_alert=True)
+        return
+
+    target_user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not target_user:
+        await call.answer("❌ کاربر مقصد یافت نشد.", show_alert=True)
+        return
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if target_user.silent_until and target_user.silent_until > now_utc:
+        await call.answer("🔕 این کاربر در حال حاضر در حالت سایلنت است.", show_alert=True)
+        return
+
+    # FIXED: Check balance but DO NOT deduct coin yet.
+    if caller.coin_balance < 1:
+        await call.answer("❌ سکه‌های شما برای ارسال پیام کافی نیست!", show_alert=True)
+        return
 
     await state.set_state(ChatStates.typing_direct_message)
     await state.update_data(target_direct_id=target_id)
@@ -450,15 +474,15 @@ async def request_direct_message(call: CallbackQuery, state: FSMContext, db_sess
         await bot.send_message(
             chat_id=caller_id,
             text=(
-                "💬 پیام دایرکت خود را بنویسید (یک پیام متنی)."
-                " این پیام به صورت ناشناس برای کاربر ارسال می‌شود.\n"
-                "💡 هزینه (۱ سکه) پس از ارسال موفق کسر خواهد شد."
+                "💬 پیام دایرکت خود را بنویسید (یک پیام متنی).\n"
+                "این پیام به صورت ناشناس برای کاربر ارسال می‌شود.\n"
+                "هزینه ۱ سکه (فقط در صورت تحویل موفق کسر خواهد شد)."
             ),
             reply_markup=get_cancel_keyboard(),
         )
     except Exception as exc:
         logger.error("Failed to send DM prompt to user %s: %s", caller_id, exc)
-        
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 5 – Gamification, Social, & Moderation 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -846,7 +870,6 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
         await call.answer("⚠️ خطا در ارسال. کاربر ربات را متوقف کرده است.", show_alert=True)
 
 
-# ================== کدهای جایگزین ==================
 @router.callback_query(F.data.startswith("accept_req_date_"))
 async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):
     caller_id = _parse_int_suffix(call.data, "accept_req_date_")
@@ -869,71 +892,59 @@ async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):
     await db_session.commit()
 
     await call.answer("✅ درخواست دیت قبول شد! در حال اتصال...", show_alert=False)
-    # (بقیه توابع try catch ادیت پیام به حالت قبل باقی بماند)
 
-@router.callback_query(F.data.startswith("accept_req_chat_"))
-async def accept_chat_request(call: CallbackQuery, db_session: AsyncSession):
-    caller_id = _parse_int_suffix(call.data, "accept_req_chat_")
-    if not caller_id:
-        return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
-
-    target_id = call.from_user.id
-    
-    # --- منطق بررسی و کسر سکه از فرستنده درخواست ---
-    caller = await crud.get_user_by_tg_id(db_session, caller_id)
-    if not caller or caller.coin_balance < 1:
-        await call.answer("❌ موجودی سکه فرستنده کافی نیست. چت برقرار نشد.", show_alert=True)
-        try:
-            await bot.send_message(caller_id, "❌ درخواست چت پذیرفته شد، اما به دلیل عدم موجودی کافی شما (۱ سکه)، لغو گردید.")
-        except Exception:
-            pass
-        return
-        
-    await crud.process_coin_transaction(db_session, caller, -1, "هزینه درخواست چت پذیرفته‌شده")
-    await db_session.commit()
-    # -----------------------------------------------
-
-    await call.answer("✅ درخواست چت قبول شد! در حال اتصال...", show_alert=False)
-    
     try:
-        await call.message.edit_text("✅ شما درخواست چت این کاربر را قبول کردید. در حال آماده‌سازی چت... 🚀")
+        await call.message.edit_text("✅ شما درخواست دیت این کاربر را قبول کردید. در حال اتصال... 🚀")
     except TelegramBadRequest:
         pass
     except Exception as e:
         logger.error(f"Unexpected error editing message text: {e}")
 
-    # ساخت مچ‌هیستوری مستقیم بدون درگیر شدن در دیت فیزیکی
-    match_history = await crud.create_match_history(db_session, user_one_id=caller_id, user_two_id=target_id)
-    
-    caller_state = get_user_state(caller_id)
-    target_state = get_user_state(target_id)
-    
-    # پرش مستقیم به مرحله تأیید نهاییِ چت و تنظیم مقادیر FSM
-    await caller_state.set_state(ChatStates.waiting_for_approval)
-    await caller_state.update_data(match_history_id=match_history.id, partner_tg_id=target_id)
-    
-    await target_state.set_state(ChatStates.waiting_for_approval)
-    await target_state.update_data(match_history_id=match_history.id, partner_tg_id=caller_id)
-    
-    approval_text = "آیا مایل به شروع چت ناشناس هستید؟ در صورت قبول هر دو طرف، چت آغاز می‌شود."
-
     try:
-        await bot.send_message(
-            chat_id=caller_id,
-            text=f"🎉 کاربر مقابل درخواست چت شما را پذیرفت!\n\n{approval_text}",
-            reply_markup=get_chat_approval_keyboard()
-        )
+        await bot.send_message(caller_id, "🎉 درخواست دیت شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
     except Exception:
         pass
 
+    from matching_bot_project.bot.handlers.matching import handle_successful_match
+    await handle_successful_match(db_session, caller_id, target_id)
+
+@router.callback_query(F.data.startswith("accept_req_date_"))
+async def accept_date_request(call: CallbackQuery, db_session: AsyncSession):
+    caller_id = _parse_int_suffix(call.data, "accept_req_date_")
+    if not caller_id:
+        return await call.answer("❌ درخواست نامعتبر.", show_alert=True)
+
+    target_id = call.from_user.id
+    
+    # چک و کسر سکه از کاربری که درخواست را ارسال کرده (caller_id)
+    caller = await crud.get_user_by_tg_id(db_session, caller_id)
+    if not caller or caller.coin_balance < 1:
+        await call.answer("❌ موجودی سکه فرستنده کافی نیست. دیت برقرار نشد.", show_alert=True)
+        try:
+            await bot.send_message(caller_id, "❌ درخواست دیت پذیرفته شد، اما به دلیل عدم موجودی کافی شما (۱ سکه)، لغو گردید.")
+        except Exception:
+            pass
+        return
+        
+    await crud.process_coin_transaction(db_session, caller, -1, "هزینه درخواست دیت پذیرفته‌شده")
+    await db_session.commit()
+
+    await call.answer("✅ درخواست دیت قبول شد! در حال اتصال...", show_alert=False)
+
     try:
-        await bot.send_message(
-            chat_id=target_id,
-            text=f"✅ درخواست چت تایید شد.\n\n{approval_text}",
-            reply_markup=get_chat_approval_keyboard()
-        )
+        await call.message.edit_text("✅ شما درخواست دیت این کاربر را قبول کردید. در حال اتصال... 🚀")
+    except TelegramBadRequest:
+        pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing message text: {e}")
+
+    try:
+        await bot.send_message(caller_id, "🎉 درخواست دیت شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
     except Exception:
         pass
+
+    from matching_bot_project.bot.handlers.matching import handle_successful_match
+    await handle_successful_match(db_session, caller_id, target_id)
 
 @router.callback_query(F.data.startswith("reject_req_"))
 async def reject_request(call: CallbackQuery):
@@ -994,7 +1005,45 @@ async def stale_vip_button(call: CallbackQuery) -> None:
 
 @router.message(ChatStates.typing_direct_message)
 async def process_direct_message(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    # ... (کدهای بررسی پیام متنی و بلاک بودن)
+    # FIXED: Cancel condition does not cost the user any coins.
+    if message.text == ReplyBtn.CANCEL:
+        await state.clear()
+        await message.answer("❌ عملیات ارسال دایرکت لغو شد. هیچ سکه‌ای کسر نشد.", reply_markup=get_main_menu_keyboard())
+        return
+
+    if not message.text:
+        await message.reply("⚠️ لطفاً فقط پیام متنی ارسال کنید.")
+        return
+
+    data = await state.get_data()
+    target_id = data.get("target_direct_id")
+    caller_id = message.from_user.id
+
+    if not target_id:
+        await state.clear()
+        return
+
+    # Re-check if the user blocked the caller while they were typing
+    block_check = await db_session.execute(
+        select(BlockList).where(
+            BlockList.blocker_id == target_id,
+            BlockList.blocked_id == caller_id
+        )
+    )
+    if block_check.scalar_one_or_none():
+        await message.reply("🚫 شما توسط این کاربر مسدود شده‌اید.")
+        await state.clear()
+        return
+
+    caller = await crud.get_user_by_tg_id(db_session, caller_id)
+    if not caller or caller.coin_balance < 1:
+        await message.reply("❌ سکه‌های شما برای ارسال پیام کافی نیست!")
+        await state.clear()
+        return
+
+    # FIXED: Deduct 1 coin NOW, right before attempting delivery.
+    await crud.process_coin_transaction(db_session, caller, -1, "هزینه ارسال پیام دایرکت")
+    await db_session.commit()
 
     target_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 پاسخ دادن", callback_data=f"req_direct_{caller_id}")],
@@ -1005,16 +1054,17 @@ async def process_direct_message(message: Message, state: FSMContext, db_session
     ])
 
     try:
-        # ارسال پیام به کاربر مقابل
         await bot.send_message(
             chat_id=target_id,
             text=f"📩 <b>یک پیام دایرکت ناشناس دریافت کردید:</b>\n\n{html.escape(message.text)}",
             parse_mode="HTML",
             reply_markup=target_kb
         )
-        
-        await message.reply("✅ پیام شما تحویل داده شد و ۱ سکه کسر گردید.", reply_markup=get_main_menu_keyboard())
+        await message.reply("✅ پیام شما با موفقیت به کاربر تحویل داده شد و ۱ سکه کسر گردید.", reply_markup=get_main_menu_keyboard())
     except Exception:
-        await message.reply("⚠️ خطایی رخ داد. احتمالاً کاربر ربات را مسدود کرده است. سکه‌ای کسر نشد!", reply_markup=get_main_menu_keyboard())
+        # FIXED: Delivery failed! Refund the coin securely.
+        await crud.process_coin_transaction(db_session, caller, 1, "برگشت هزینه به دلیل خطای تحویل پیام دایرکت")
+        await db_session.commit()
+        await message.reply("⚠️ خطایی رخ داد (احتمالاً کاربر ربات را متوقف کرده است). ۱ سکه به شما برگشت داده شد.", reply_markup=get_main_menu_keyboard())
 
     await state.clear()
