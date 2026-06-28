@@ -250,7 +250,7 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
         # 👇 خط مربوط به کامنت‌ها تغییر کرد (دکمه ثبت کامنت اضافه شد)
         [
             InlineKeyboardButton(text="💬 مشاهده کامنت‌ها", callback_data=f"view_comments:{target_tg_id}:0", icon_custom_emoji_id="5465300082628763143", style="primary"),
-            InlineKeyboardButton(text="✍️ ثبت کامنت", callback_data=f"write_comment:{target_tg_id}", icon_custom_emoji_id="5470060791883374114", style="success")
+            InlineKeyboardButton(text="✍️ ثبت کامنت", callback_data=f"add_comment:{target_tg_id}", icon_custom_emoji_id="5470060791883374114", style="success")
         ],
         [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒
         [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️
@@ -321,4 +321,3 @@ def get_discovery_interests_keyboard(selected: list[str]) -> InlineKeyboardMarku
         
     keyboard.append([InlineKeyboardButton(text=InlineBtn.DISC_CONFIRM, callback_data="disc_int_confirm", icon_custom_emoji_id="5427009714745517609", style="success")]) # ✅
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-

@@ -15,6 +15,7 @@ from matching_bot_project.database.models.models import (
     CoinTransaction, FriendList, BlockList, UserLike, UserReport,
     CoinPackage, CoinPurchaseOrder, ProfileComment
 )
+from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -970,6 +971,23 @@ def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) ->
 _COMMENTS_PER_PAGE = 3
 
 
+async def is_blocked(session: AsyncSession, blocker_id: int, blocked_id: int) -> bool:
+    """
+    آیا blocker_id کاربر blocked_id را مسدود کرده است؟
+    استفاده می‌شود برای جلوگیری از ثبت کامنت توسط کاربری که قبلاً
+    توسط صاحب پروفایل (target) بلاک شده.
+    """
+    result = await session.execute(
+        select(BlockList.id).where(
+            and_(
+                BlockList.blocker_id == blocker_id,
+                BlockList.blocked_id == blocked_id,
+            )
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def upsert_profile_comment(
     session: AsyncSession,
     author_tg_id: int,
@@ -1020,6 +1038,7 @@ async def get_profile_comments(
 
     stmt = (
         select(ProfileComment)
+        .options(selectinload(ProfileComment.author))
         .where(ProfileComment.target_tg_id == target_tg_id)
         .order_by(ProfileComment.created_at.desc())
         .offset(page * _COMMENTS_PER_PAGE)

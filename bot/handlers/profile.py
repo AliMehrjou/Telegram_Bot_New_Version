@@ -21,9 +21,6 @@ from matching_bot_project.bot.core.constants import ReplyBtn
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
 from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
 from matching_bot_project.database.models.models import BlockList
-from matching_bot_project.bot.states.states import ProfileCommentStates
-from matching_bot_project.database.queries.crud import upsert_profile_comment
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 
@@ -528,52 +525,3 @@ async def send_referral_banner(call: CallbackQuery, db_session: AsyncSession):
         reply_markup=back_kb,
     )
     await call.answer()
-
-# ==========================================
-# سیستم ثبت و ویرایش کامنت پروفایل
-# ==========================================
-
-@router.callback_query(F.data.startswith("write_comment:"))
-async def trigger_write_comment(call: CallbackQuery, state: FSMContext):
-    """هندلر دکمه شیشه‌ای برای شروع فرآیند ثبت کامنت"""
-    target_tg_id = int(call.data.split(":")[1])
-    
-    # ذخیره آیدی پروفایل هدف در حافظه FSM
-    await state.update_data(target_profile_id=target_tg_id)
-    await state.set_state(ProfileCommentStates.waiting_for_comment_text)
-    
-    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 لغو و برگشت")]], resize_keyboard=True)
-    await call.message.answer("✍️ لطفاً کامنت خود را برای این پروفایل بنویسید:", reply_markup=cancel_kb)
-    await call.answer()
-
-
-@router.message(ProfileCommentStates.waiting_for_comment_text)
-async def save_comment_text(message: Message, state: FSMContext, db_session: AsyncSession):
-    """هندلر دریافت متن کامنت و ذخیره در دیتابیس"""
-    if message.text == "🔙 لغو و برگشت":
-        await state.clear()
-        # برگشت به منوی اصلی با استفاده از کیبورد منوی اصلی ربات
-        from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
-        return await message.answer("❌ ثبت کامنت لغو شد.", reply_markup=get_main_menu_keyboard())
-
-    data = await state.get_data()
-    target_tg_id = data.get("target_profile_id")
-    
-    # ذخیره یا ویرایش کامنت در دیتابیس
-    await upsert_profile_comment(
-        session=db_session,
-        author_tg_id=message.from_user.id,
-        target_tg_id=target_tg_id,
-        text=message.text
-    )
-    await db_session.commit()
-    
-    await state.clear()
-    
-    # نمایش پیام موفقیت با دکمه شیشه‌ای مشاهده کامنت‌ها
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="مشاهده کامنت‌ها 💬", callback_data=f"view_comments:{target_tg_id}:0")]
-    ])
-    
-    await message.answer("✅ کامنت شما با موفقیت ثبت/ویرایش شد.", reply_markup=kb)
-

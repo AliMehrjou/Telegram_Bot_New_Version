@@ -128,7 +128,8 @@ async def show_edit_menu(call: CallbackQuery, state: FSMContext):
                 InlineKeyboardButton(text="📍 استان/شهر", callback_data="change_location"),
                 InlineKeyboardButton(text="🌍 ثبت لوکیشن دقیق", callback_data="change_gps") # جدید
             ],
-            [InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")]
+            [InlineKeyboardButton(text="🎂 تغییر سن", callback_data="change_age")],
+            [InlineKeyboardButton(text="💬 کامنت‌های پروفایل من", callback_data=f"view_comments:{call.from_user.id}:0")]
         ])
     
     text_content = "⚙️ <b>کدام بخش از پروفایل خود را می‌خواهید ویرایش کنید؟</b>"
