@@ -118,8 +118,18 @@ async def _settle_coins_after_match(
     try:
         # کسر هزینه فقط از کاربر شروع کننده مچ
         # باگ ۲ فیکس شد: منطق کسر سکه از پارتنر منتظر در صف حذف گردید.
-        await crud.process_coin_transaction(db_session, user, -cost, "هزینه مچ موفق")
+        deducted = await crud.process_coin_transaction(db_session, user, -cost, "هزینه مچ موفق")
         await db_session.commit()
+        if not deducted:
+            # موجودی کاربر بین لحظه‌ی ورود به صف و لحظه‌ی مچ موفق کافی نبوده
+            # (مثلاً به خاطر تراکنش موازی دیگری). مچ همچنان برقرار می‌ماند،
+            # اما این رخداد باید برای بررسی احتمالی سوءاستفاده لاگ شود.
+            logger.warning(
+                "Coin deduction failed (insufficient balance at settlement) for user %s "
+                "after successful match with %s. Match proceeded without charge.",
+                user.tg_id,
+                matched_partner_id,
+            )
     except Exception as exc:
         logger.error(
             "Error deducting coins for match %s <-> %s: %s",
@@ -222,7 +232,7 @@ async def enter_match_queue(
 
     # ── 1. Guard: already waiting ────────────────────────────────────────────
     current_state = await state.get_state()
-    if current_state == MatchingStates.waiting_in_queue:
+    if current_state == MatchingStates.waiting_in_queue.state:
         await call.answer("⚠️ شما در حال حاضر در صف انتظار هستید!", show_alert=True)
         return
 
@@ -275,7 +285,7 @@ async def enter_match_queue(
         return
 
     # ── 6. VIP Age Filter Interception ───────────────────────────────────────
-    is_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.utcnow())
+    is_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > datetime.now(timezone.utc).replace(tzinfo=None))
     if is_vip and match_type != "nearby":
         await state.set_state(VIPStates.waiting_for_age_filter)
         await state.update_data(
@@ -497,7 +507,7 @@ async def handle_successful_match(
             match_history.id,
         )
         match_history.is_active = False
-        match_history.ended_at = datetime.utcnow()
+        match_history.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
         try:
             await session.commit()
         except Exception as exc:
@@ -628,4 +638,4 @@ async def handle_successful_match(
                 "Could not send first question to user %s: %s", target_id, exc
             )
             
-    return True 
+    return True

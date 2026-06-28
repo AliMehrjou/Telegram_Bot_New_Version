@@ -128,6 +128,12 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     forward_message_id = data.get("forward_message_id")
     reporter_id = call.from_user.id
 
+    if not reported_id:
+        logger.error("User %s reached handle_report_reason with no reported_id in FSM.", reporter_id)
+        await state.clear()
+        await call.answer("⚠️ خطا: اطلاعات گزارش یافت نشد. لطفاً دوباره تلاش کنید.", show_alert=True)
+        return
+
     # ─────────────────────────────────────────────────────────────────────────
     # BUG 9 FIX: Safe callback data parsing
     # ─────────────────────────────────────────────────────────────────────────
@@ -154,21 +160,35 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     }
     persian_reason = reason_map.get(reason, "نامشخص")
 
-    # ذخیره گزارش در دیتابیس
-    await create_user_report(
-        session=db_session,
-        reporter_id=reporter_id,
-        reported_id=reported_id,
-        reason=persian_reason,
-        match_history_id=match_id
-    )
-
     # ─────────────────────────────────────────────────────────────────────────
     # BUG 10 FIX: Single commit point for transactional safety
     # ─────────────────────────────────────────────────────────────────────────
-    await execute_chat_termination_no_commit(db_session, match_id, reporter_id)
-    await execute_user_blocking_no_commit(db_session, reporter_id, reported_id)
-    await db_session.commit()
+    try:
+        # ذخیره گزارش در دیتابیس
+        await create_user_report(
+            session=db_session,
+            reporter_id=reporter_id,
+            reported_id=reported_id,
+            reason=persian_reason,
+            match_history_id=match_id
+        )
+
+        await execute_chat_termination_no_commit(db_session, match_id, reporter_id)
+        await execute_user_blocking_no_commit(db_session, reporter_id, reported_id)
+        await db_session.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to commit safety report transaction (reporter=%s, reported=%s, match=%s): %s",
+            reporter_id, reported_id, match_id, exc,
+        )
+        await db_session.rollback()
+        await state.clear()
+        await call.answer("❌ خطای سرور در ثبت گزارش. لطفاً دوباره تلاش کنید.", show_alert=True)
+        try:
+            await call.message.edit_text("❌ ثبت گزارش با خطا مواجه شد. لطفاً دوباره تلاش کنید.")
+        except Exception:
+            pass
+        return
 
     admin_alert_text = (
         "🚨 <b>گزارش تخلف جدید (داخل چت ناشناس)</b>\n\n"
@@ -199,4 +219,3 @@ async def handle_report_reason(call: CallbackQuery, state: FSMContext, db_sessio
     await state.clear()
     await call.message.edit_text("✅ گزارش شما با موفقیت ثبت شد. گفتگو پایان یافت و کاربر خاطی برای همیشه مسدود شد.")
     await call.answer()
-

@@ -75,14 +75,13 @@ class CoinTransferStates(StatesGroup):
 class TransferCoinStates(StatesGroup):
     waiting_for_amount = State()
 
-# ================== کدهای افزودنی ==================
 class PaymentStates(StatesGroup):
     choosing_package = State()
     choosing_method = State()
     waiting_for_receipt_photo = State()
 
 class QuestionAddStates(StatesGroup):
-    choosing_type     = State()  
+    choosing_type     = State()   
     entering_text     = State()   
     entering_option_a = State()
     entering_option_b = State()
@@ -92,5 +91,5 @@ class QuestionAddStates(StatesGroup):
     confirming        = State()   
     waiting_for_excel = State()   
     confirming_bulk   = State()   
-class ProfileCommentStates(StatesGroup):
-    waiting_for_comment_text = State()
+class CommentStates(StatesGroup):
+    writing = State()   

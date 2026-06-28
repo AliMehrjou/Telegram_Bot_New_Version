@@ -32,15 +32,11 @@ def get_gender_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=InlineBtn.GENDER_MALE,
-                callback_data="set_gender_male",
-                icon_custom_emoji_id="5429564911048992647", # 🚹
-                style="primary"
+                callback_data="set_gender_male", # 🚹
             ),
             InlineKeyboardButton(
                 text=InlineBtn.GENDER_FEMALE,
-                callback_data="set_gender_female",
-                icon_custom_emoji_id="5429474729620677471", # 🚺
-                style="primary"
+                callback_data="set_gender_female", # 🚺
             ),
         ]
     ])
@@ -50,27 +46,19 @@ def get_matching_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=InlineBtn.MATCH_RANDOM,
-            callback_data="match_random",
-            icon_custom_emoji_id="5469741319330996757", # 💫
-            style="Success"
+            callback_data="match_random", # 💫
         )],
         [InlineKeyboardButton(
             text=InlineBtn.MATCH_BOY,
-            callback_data="match_boy",
-            icon_custom_emoji_id="5429564911048992647",# 🚹
-            style="primary"
+            callback_data="match_boy",# 🚹
         ),
         InlineKeyboardButton(
             text=InlineBtn.MATCH_GIRL,
-            callback_data="match_girl",
-            icon_custom_emoji_id="5429474729620677471",# 🚺
-            style="primary"
+            callback_data="match_girl",# 🚺
         )],
         [InlineKeyboardButton(
             text=InlineBtn.MATCH_NEARBY,
-            callback_data="match_nearby",
-            icon_custom_emoji_id="5415803062738504079",# 🗺
-            style="danger"
+            callback_data="match_nearby",# 🗺
         )],
     ])
 
@@ -79,64 +67,38 @@ def get_match_found_keyboard(partner_id: int, match_id: int) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=InlineBtn.VIEW_PROFILE,
-            callback_data=f"view_profile_{partner_id}",
-            icon_custom_emoji_id="5373012449597335010", # 👤
-            style="primary"
+            callback_data=f"view_profile_{partner_id}", # 👤
         )],
         [InlineKeyboardButton(
             text=InlineBtn.END_DATE_EARLY,
-            callback_data=f"end_date_{match_id}",
-            icon_custom_emoji_id="5465665476971471368", # ❌
-            style="danger"
+            callback_data=f"end_date_{match_id}", # ❌
         )],
     ])
 
 # --- Questionnaire ---
-def get_question_reply_keyboard(question_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def get_question_reply_keyboard(question_id: int, is_four_choice: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [
-            InlineKeyboardButton(
-                text=InlineBtn.OPTION_A,
-                callback_data=f"ans_a_{question_id}",
-                icon_custom_emoji_id="5350460637182993292", # 🎯
-                style="primary"
-            ),
-            InlineKeyboardButton(
-                text=InlineBtn.OPTION_B,
-                callback_data=f"ans_b_{question_id}",
-                icon_custom_emoji_id="5350460637182993292", # 🎯
-                style="primary"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=InlineBtn.OPTION_C,
-                callback_data=f"ans_c_{question_id}",
-                icon_custom_emoji_id="5350460637182993292", # 🎯
-                style="primary"
-            ),
-            InlineKeyboardButton(
-                text=InlineBtn.OPTION_D,
-                callback_data=f"ans_d_{question_id}",
-                icon_custom_emoji_id="5350460637182993292", # 🎯
-                style="primary"
-            ),
-        ],
-    ])
+            InlineKeyboardButton(text=InlineBtn.OPTION_A, callback_data=f"ans_a_{question_id}"),
+            InlineKeyboardButton(text=InlineBtn.OPTION_B, callback_data=f"ans_b_{question_id}"),
+        ]
+    ]
+    if is_four_choice:
+        rows.append([
+            InlineKeyboardButton(text=InlineBtn.OPTION_C, callback_data=f"ans_c_{question_id}"),
+            InlineKeyboardButton(text=InlineBtn.OPTION_D, callback_data=f"ans_d_{question_id}"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def get_chat_approval_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=InlineBtn.APPROVE_CHAT_YES,
-            callback_data="approve_chat_yes",
-            icon_custom_emoji_id="5427009714745517609", # ✅
-            style="success"
+            callback_data="approve_chat_yes", # ✅
         )],
         [InlineKeyboardButton(
             text=InlineBtn.APPROVE_CHAT_NO,
-            callback_data="approve_chat_no",
-            icon_custom_emoji_id="5465665476971471368", # ❌
-            style="danger"
+            callback_data="approve_chat_no", # ❌
         )],
     ])
 
@@ -144,45 +106,42 @@ def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=InlineBtn.END_ACTIVE_CHAT,
-            callback_data="end_active_chat",
-            icon_custom_emoji_id="5465665476971471368", # ❌
-            style="danger"
+            callback_data="end_active_chat", # ❌
         )],
         [InlineKeyboardButton(
             text=InlineBtn.REPORT_USER,
             # اصلاح شد: از trigger_report_ به report_user_ تغییر یافت
-            callback_data=f"report_user_{target_id}",
-            icon_custom_emoji_id="5467928559664242360" # ❗️
+            callback_data=f"report_user_{target_id}" # ❗️
         )],
     ])
 # --- Main Menu Sub-menus ---
 def get_nearby_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_FEMALE, callback_data="nearby_female", icon_custom_emoji_id="5429474729620677471", style="primary")], # 🚺
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_MALE, callback_data="nearby_male", icon_custom_emoji_id="5429564911048992647", style="primary")], # 🚹
-        [InlineKeyboardButton(text=InlineBtn.NEARBY_BOTH, callback_data="nearby_both", icon_custom_emoji_id="5372926953978341366", style="danger")] # 👥
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_FEMALE, callback_data="nearby_female")], # 🚺
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_MALE, callback_data="nearby_male")], # 🚹
+        [InlineKeyboardButton(text=InlineBtn.NEARBY_BOTH, callback_data="nearby_both")] # 👥
     ])
 
 def get_search_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_MALE, callback_data="search_online_male", icon_custom_emoji_id="5429564911048992647", style="success"),
-            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_FEMALE, callback_data="search_online_female", icon_custom_emoji_id="5429474729620677471", style="success")
+            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_MALE, callback_data="search_online_male"),
+            InlineKeyboardButton(text=InlineBtn.SEARCH_ONLINE_FEMALE, callback_data="search_online_female")
         ],
         [
-            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_PROVINCE, callback_data="search_same_prov", icon_custom_emoji_id="5264733042710181045", style="primary"), # 🏢
-            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_CITY, callback_data="search_same_city", icon_custom_emoji_id="5465226866321268133", style="primary") # 🏠
+            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_PROVINCE, callback_data="search_same_prov"), # 🏢
+            InlineKeyboardButton(text=InlineBtn.SEARCH_SAME_CITY, callback_data="search_same_city") # 🏠
         ],
         [
-            InlineKeyboardButton(text=InlineBtn.SEARCH_NO_CHAT, callback_data="search_no_chat", icon_custom_emoji_id="5465300082628763143") # 💬
+            InlineKeyboardButton(text=InlineBtn.SEARCH_NO_CHAT, callback_data="search_no_chat") # 💬
         ],
     ])
 
 
 def get_coins_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.COINS_HISTORY, callback_data="coins_history", icon_custom_emoji_id="5451732530048802485")], # ⏳
-        [InlineKeyboardButton(text=InlineBtn.COINS_PURCHASE, callback_data="coins_purchase", icon_custom_emoji_id="5379600444098093058", style="success")], # 🪙
+        [InlineKeyboardButton(text=InlineBtn.COINS_HISTORY, callback_data="coins_history")], # ⏳
+        [InlineKeyboardButton(text=InlineBtn.COINS_PURCHASE, callback_data="coins_purchase")], # 🪙
     ])
 
 # --- VIP Panel ---
@@ -191,37 +150,37 @@ def get_vip_panel_keyboard(invisible_mode: bool) -> InlineKeyboardMarkup:
     invisible_style = "success" if invisible_mode else "danger"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.VIP_VIEWERS, callback_data="vip_viewers", icon_custom_emoji_id="5424885441100782420", style="primary")], # 👀
-        [InlineKeyboardButton(text=invisible_text, callback_data="vip_toggle_inv", icon_custom_emoji_id="5371017798065592581", style=invisible_style)], # 👻
-        [InlineKeyboardButton(text=InlineBtn.VIP_REMATCH, callback_data="vip_rematch", icon_custom_emoji_id="5264727218734524899", style="primary")], # 🔄
+        [InlineKeyboardButton(text=InlineBtn.VIP_VIEWERS, callback_data="vip_viewers")], # 👀
+        [InlineKeyboardButton(text=invisible_text, callback_data="vip_toggle_inv")], # 👻
+        [InlineKeyboardButton(text=InlineBtn.VIP_REMATCH, callback_data="vip_rematch")], # 🔄
     ])
 
 def get_vip_age_filter_keyboard(match_type: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_18_25, callback_data=f"vip_age_18_25_{match_type}", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_25_30, callback_data=f"vip_age_25_30_{match_type}", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_30_40, callback_data=f"vip_age_30_40_{match_type}", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_ALL, callback_data=f"vip_age_all_{match_type}", style="primary")],
+        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_18_25, callback_data=f"vip_age_18_25_{match_type}")],
+        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_25_30, callback_data=f"vip_age_25_30_{match_type}")],
+        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_30_40, callback_data=f"vip_age_30_40_{match_type}")],
+        [InlineKeyboardButton(text=InlineBtn.VIP_AGE_ALL, callback_data=f"vip_age_all_{match_type}")],
     ])
 
 # ── Onboarding: terms acceptance ──
 def get_terms_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.TERMS_SHOW_INLINE, callback_data="terms_show", icon_custom_emoji_id="5226512880362332956", style="primary")], # 📖
-        [InlineKeyboardButton(text=InlineBtn.TERMS_ACCEPT_INLINE, callback_data="terms_accept", icon_custom_emoji_id="5427009714745517609", style="success")] # ✅
+        [InlineKeyboardButton(text=InlineBtn.TERMS_SHOW_INLINE, callback_data="terms_show")], # 📖
+        [InlineKeyboardButton(text=InlineBtn.TERMS_ACCEPT_INLINE, callback_data="terms_accept")] # ✅
     ])
 
 # ── Double-confirms ──
 def get_end_date_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.CONFIRM_END_DATE_YES, callback_data="confirm_end_date", icon_custom_emoji_id="5465665476971471368", style="danger")], # ❌
-        [InlineKeyboardButton(text=InlineBtn.CANCEL_RETURN, callback_data="cancel_end_date", icon_custom_emoji_id="5427009714745517609", style="primary")] # ✅
+        [InlineKeyboardButton(text=InlineBtn.CONFIRM_END_DATE_YES, callback_data="confirm_end_date")], # ❌
+        [InlineKeyboardButton(text=InlineBtn.CANCEL_RETURN, callback_data="cancel_end_date")] # ✅
     ])
 
 def get_end_chat_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.CONFIRM_END_CHAT_YES, callback_data="confirm_end_chat", icon_custom_emoji_id="5465665476971471368", style="danger")], # ❌
-        [InlineKeyboardButton(text=InlineBtn.CANCEL_RETURN, callback_data="cancel_end_chat", icon_custom_emoji_id="5427009714745517609", style="primary")] # ✅
+        [InlineKeyboardButton(text=InlineBtn.CONFIRM_END_CHAT_YES, callback_data="confirm_end_chat")], # ❌
+        [InlineKeyboardButton(text=InlineBtn.CANCEL_RETURN, callback_data="cancel_end_chat")] # ✅
     ])
 
 # ── Other-user profile action keyboard ──
@@ -236,27 +195,21 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DATE, callback_data=f"req_date_{target_tg_id}", icon_custom_emoji_id="5359370246190801956", style="success"), # ☕️
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_CHAT, callback_data=f"req_chat_{target_tg_id}", icon_custom_emoji_id="5465300082628763143", style="success") # 💬
+            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DATE, callback_data=f"req_date_{target_tg_id}"), # ☕️
+            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_CHAT, callback_data=f"req_chat_{target_tg_id}") # 💬
         ],
         [
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}", icon_custom_emoji_id="5472019095106886003", style="primary"), # 💌
-            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary") # 💸
+            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}"), # 💌
+            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}") # 💸
         ],
         [
-            InlineKeyboardButton(text=friend_text, callback_data=friend_callback, icon_custom_emoji_id="5370867268051806190", style=friend_style), # 🫂
-            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="danger") # ❤️
+            InlineKeyboardButton(text=friend_text, callback_data=friend_callback), # 🫂
+            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}") # ❤️
         ],
-        # 👇 خط مربوط به کامنت‌ها تغییر کرد (دکمه ثبت کامنت اضافه شد)
-        [
-            InlineKeyboardButton(text="💬 مشاهده کامنت‌ها", callback_data=f"view_comments:{target_tg_id}:0", icon_custom_emoji_id="5465300082628763143", style="primary"),
-            InlineKeyboardButton(text="✍️ ثبت کامنت", callback_data=f"add_comment:{target_tg_id}", icon_custom_emoji_id="5470060791883374114", style="success")
-        ],
-        [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒
-        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️
+        [InlineKeyboardButton(text="💬 کامنت‌ها", callback_data=f"view_comments:{target_tg_id}:0")], # 💬
+        [InlineKeyboardButton(text=block_text, callback_data=block_callback)], # 🔒
+        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}")] # ❗️
     ])
-
-
 
 
 # ── Report reasons ──
@@ -276,20 +229,20 @@ def get_report_reasons_keyboard(reported_tg_id: int) -> InlineKeyboardMarkup:
     
     # 🟢 اطمینان از استفاده از پیشوند دقیق report_reason_
     keyboard = [
-        [InlineKeyboardButton(text=label, callback_data=f"report_reason_{reported_tg_id}_{code}", icon_custom_emoji_id="5467928559664242360")] 
+        [InlineKeyboardButton(text=label, callback_data=f"report_reason_{reported_tg_id}_{code}")] 
         for label, code in reasons
     ]
-    keyboard.append([InlineKeyboardButton(text=InlineBtn.REPORT_CANCEL, callback_data="report_cancel", icon_custom_emoji_id="5465665476971471368", style="danger")]) 
+    keyboard.append([InlineKeyboardButton(text=InlineBtn.REPORT_CANCEL, callback_data="report_cancel")]) 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # ── Discovery ──
 def get_discovery_age_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_18_25, callback_data="disc_age_18_25", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_25_30, callback_data="disc_age_25_30", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_30_40, callback_data="disc_age_30_40", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_40_50, callback_data="disc_age_40_50", style="primary")],
-        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_ALL, callback_data="disc_age_all", style="primary")]
+        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_18_25, callback_data="disc_age_18_25")],
+        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_25_30, callback_data="disc_age_25_30")],
+        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_30_40, callback_data="disc_age_30_40")],
+        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_40_50, callback_data="disc_age_40_50")],
+        [InlineKeyboardButton(text=InlineBtn.DISC_AGE_ALL, callback_data="disc_age_all")]
     ])
 
 def get_discovery_interests_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
@@ -316,8 +269,8 @@ def get_discovery_interests_keyboard(selected: list[str]) -> InlineKeyboardMarku
                 label_text, emoji_id = interests[k]
                 label = f"{label_text} ✅" if k in selected else label_text
                 style = "success" if k in selected else "primary"
-                row.append(InlineKeyboardButton(text=label, callback_data=f"disc_int_{k}", icon_custom_emoji_id=emoji_id, style=style))
+                row.append(InlineKeyboardButton(text=label, callback_data=f"disc_int_{k}"))
         keyboard.append(row)
         
-    keyboard.append([InlineKeyboardButton(text=InlineBtn.DISC_CONFIRM, callback_data="disc_int_confirm", icon_custom_emoji_id="5427009714745517609", style="success")]) # ✅
+    keyboard.append([InlineKeyboardButton(text=InlineBtn.DISC_CONFIRM, callback_data="disc_int_confirm")]) # ✅
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

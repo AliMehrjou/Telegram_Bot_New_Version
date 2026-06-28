@@ -62,6 +62,9 @@ class User(Base):
     invisible_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     silent_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
+    # غیرفعال کردن کامل امکان کامنت‌گذاری دیگران روی پروفایل این کاربر
+    comments_disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Profile Extensions
     bio: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     interests: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -264,7 +267,5 @@ class ProfileComment(Base):
         nullable=False,
     )
 
-    # Relationships
     author = relationship("User", foreign_keys=[author_tg_id])
     target = relationship("User", foreign_keys=[target_tg_id])
-

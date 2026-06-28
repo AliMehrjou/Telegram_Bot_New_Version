@@ -264,6 +264,65 @@ async def execute_chat_termination(db_session: AsyncSession, match_id: int, call
     return True
 
 
+async def execute_chat_termination_no_commit(db_session: AsyncSession, match_id: int, caller_id: int) -> bool:
+    """
+    نسخه‌ی بدون commit از execute_chat_termination.
+    برای جریان‌هایی (مثل safety.py) که چندین تغییر دیتابیسی را باید در یک
+    تراکنش اتمیک واحد commit کنند، نه جداگانه.
+
+    توجه: caller مسئول صدا زدن db_session.commit()/rollback() است.
+    عملیات‌های جانبی (Redis، FSM، اطلاع‌رسانی به کاربران) مستقل از commit
+    اجرا می‌شوند چون idempotent هستند و تأخیرشان فایده‌ای ندارد.
+    """
+    result = await db_session.execute(
+        select(MatchHistory).where(MatchHistory.id == match_id)
+    )
+    match_history: MatchHistory | None = result.scalar_one_or_none()
+
+    if not match_history or not match_history.is_active:
+        return False
+
+    match_history.is_active = False
+    match_history.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 💡 commit/rollback عمداً انجام نمی‌شود — caller مسئول آن است.
+
+    try:
+        if hasattr(dating_scheduler, 'cancel_match_timeout'):
+            await dating_scheduler.cancel_match_timeout(match_id)
+
+        await dating_scheduler.redis.delete(f"date:timeout:{match_id}")
+        await dating_scheduler.redis.delete(f"user:state:{match_history.user_one_id}")
+        await dating_scheduler.redis.delete(f"user:state:{match_history.user_two_id}")
+    except Exception as exc:
+        logger.warning("Could not delete core Redis tracking keys for match cancellation %s: %s", match_id, exc)
+
+    for uid in (match_history.user_one_id, match_history.user_two_id):
+        ctx = get_user_state(uid)
+        try:
+            await ctx.set_state(None)
+            await ctx.clear()
+        except Exception as exc:
+            logger.warning("Could not clear FSM state for user %s: %s", uid, exc)
+
+        try:
+            if uid != caller_id:
+                await bot.send_message(
+                    chat_id=uid,
+                    text="طرف مقابل دیت را پایان داد.",
+                    reply_markup=get_main_menu_keyboard(),
+                )
+            else:
+                await bot.send_message(
+                    chat_id=uid,
+                    text=_DATE_CANCELLED_TEXT,
+                    reply_markup=get_main_menu_keyboard(),
+                )
+        except Exception as exc:
+            logger.error("Failed to send cancellation notice to user %s: %s", uid, exc)
+
+    return True
+
+
 @router.message(F.text == ReplyBtn.END_DATE)
 async def request_end_date_confirm(message: Message, db_session: AsyncSession) -> None:
     active_match = await crud.get_active_match(db_session, message.from_user.id)
@@ -394,6 +453,57 @@ async def execute_user_blocking(db_session: AsyncSession, blocker_id: int, block
         await db_session.rollback()
         logger.error("Unexpected error while user %s attempted to block user %s: %s", blocker_id, blocked_id, exc)
         return False, "❌ خطای سرور. لطفاً دوباره تلاش کنید."
+
+
+async def execute_user_blocking_no_commit(db_session: AsyncSession, blocker_id: int, blocked_id: int) -> tuple[bool, str]:
+    """
+    نسخه‌ی بدون commit از execute_user_blocking.
+    برای جریان‌هایی (مثل safety.py) که چندین تغییر دیتابیسی را باید در یک
+    تراکنش اتمیک واحد commit کنند، نه جداگانه.
+
+    توجه: caller مسئول صدا زدن db_session.commit()/rollback() است.
+    چون نمی‌توان برای تشخیص بلاک تکراری روی IntegrityError در زمان
+    commit تکیه کرد (commit به تعویق افتاده)، ابتدا با یک SELECT
+    وجود بلاک قبلی را صریحاً بررسی می‌کنیم.
+    """
+    if blocker_id == blocked_id:
+        return False, "❌ نمی‌توانید خودتان را مسدود کنید."
+
+    existing = await db_session.execute(
+        select(BlockList.id).where(
+            BlockList.blocker_id == blocker_id,
+            BlockList.blocked_id == blocked_id,
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        return False, "⚠️ این کاربر قبلاً مسدود شده است."
+
+    db_session.add(BlockList(blocker_id=blocker_id, blocked_id=blocked_id))
+    # 💡 commit/rollback عمداً انجام نمی‌شود — caller مسئول آن است.
+
+    try:
+        await redis_client.sadd(f"user:{blocker_id}:blocks", str(blocked_id))
+    except Exception as exc:
+        logger.warning("Could not sync block to Redis for %s -> %s: %s", blocker_id, blocked_id, exc)
+
+    try:
+        match_query = await db_session.execute(
+            select(MatchHistory).where(
+                MatchHistory.is_active == True,
+                or_(
+                    and_(MatchHistory.user_one_id == blocker_id, MatchHistory.user_two_id == blocked_id),
+                    and_(MatchHistory.user_one_id == blocked_id, MatchHistory.user_two_id == blocker_id)
+                )
+            )
+        )
+        active_match = match_query.scalar_one_or_none()
+        if active_match:
+            # نسخه‌ی no_commit چت فعال را هم بدون commit جداگانه می‌بندد
+            await execute_chat_termination_no_commit(db_session, active_match.id, blocker_id)
+    except Exception as exc:
+        logger.error("Error checking/terminating active match during no-commit block %s -> %s: %s", blocker_id, blocked_id, exc)
+
+    return True, "🚫 کاربر مسدود شد و دیگر به شما متصل نخواهد شد."
     
 @router.callback_query(F.data.startswith("block_user_"))
 async def block_user(call: CallbackQuery, db_session: AsyncSession) -> None:

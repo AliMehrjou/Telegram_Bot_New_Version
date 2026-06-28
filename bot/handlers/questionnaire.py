@@ -71,7 +71,7 @@ def get_user_state(user_id: int) -> FSMContext:
 
 def _parse_answer_callback(callback_data: str) -> tuple[str, int] | None:
     """
-    Parse ``ans_a_{question_id}`` or ``ans_b_{question_id}`` into
+    Parse ``ans_a_{question_id}`` ... ``ans_d_{question_id}`` into
     ``(option_uppercase, question_id)``.
 
     Returns ``None`` on any malformed input so callers can emit an alert
@@ -79,19 +79,16 @@ def _parse_answer_callback(callback_data: str) -> tuple[str, int] | None:
 
     Token layout after ``split("_")``
     ───────────────────────────────────
-    Index 0  → "ans"          (literal prefix, already guaranteed by the filter)
-    Index 1  → "a" or "b"    (the selected option)
-    Index 2  → str(int)       (the question primary key)
-
-    The function deliberately rejects payloads with a part count other than 3
-    since a valid integer question ID can never contain underscores.
+    Index 0  → "ans"                   (literal prefix)
+    Index 1  → "a", "b", "c", or "d"  (selected option)
+    Index 2  → str(int)                (question primary key)
     """
     parts = callback_data.split("_")
 
     if len(parts) != 3:
         return None
 
-    if parts[1] not in ("a", "b"):
+    if parts[1] not in ("a", "b", "c", "d"):
         return None
 
     try:
@@ -99,7 +96,7 @@ def _parse_answer_callback(callback_data: str) -> tuple[str, int] | None:
     except ValueError:
         return None
 
-    return parts[1].upper(), question_id  # option is 'A' or 'B'
+    return parts[1].upper(), question_id  # 'A', 'B', 'C', or 'D'
 
 
 async def _fetch_question_pool(match_history_id: int) -> list[int] | None:
@@ -359,113 +356,6 @@ async def register_question_response(
         )
 
 
-# ── Section 2.2 – Redis atomic sync using Set (Anti-Spam & Safe) ───────────
-    sync_key = f"match:{match_history_id}:q:{question_id}:sync"
-
-    try:
-        # دریافت آیدی کاربر جاری از کال‌بک تلگرام
-        # (اگر نام متغیر کال‌بک شما در ورودی تابع چیزی غیر از `call` است، آن را اصلاح کنید)
-        current_user_id = call.from_user.id
-        
-        # افزودن آیدی کاربر به مجموعه (Set) در ردیس به صورت اتمیک
-        # اگر کاربر قبلاً کلیک کرده باشد، ردیس مقدار 0 برمی‌گرداند.
-        added: int = await redis_client.sadd(sync_key, current_user_id)
-
-        if added == 0:
-            # کلیک تکراری پیش از اعمال کامل قفل FSM؛ درخواست بدون اثر نادیده گرفته می‌شود.
-            await call.answer()
-            return
-
-        # محاسبه تعداد کاربران منحصربه‌فردی که به این سوال پاسخ داده‌اند
-        sync_count: int = await redis_client.scard(sync_key)
-
-        if sync_count == 1:
-            # First to answer.  Set a safety TTL so abandoned matches do not
-            # leak keys in Redis, then return — we are now waiting.
-            await redis_client.expire(sync_key, _SYNC_KEY_TTL_SECONDS)
-            return
-
-        if sync_count > 2:
-            # Guard against a third element, which should be impossible given
-            # state locking but is handled defensively.
-            logger.warning(
-                "sync_count=%s on key %r; expected 1 or 2. Ignoring.",
-                sync_count,
-                sync_key,
-            )
-            return
-
-    except Exception as exc:
-        logger.error(
-            "Redis error on sync key %r for match %s: %s",
-            sync_key,
-            match_history_id,
-            exc,
-        )
-        # رفع خطای Soft-lock: بازگرداندن وضعیت کاربر به حالت مجاز برای پاسخگویی تا کاربر گیر نکند
-        # (اگر نام متغیر FSM شما در ورودی تابع چیزی غیر از `state` است، آن را اصلاح کنید)
-        await state.set_state(QuestionnaireStates.answering_questions)
-        await call.answer("⚠️ خطای موقت در سرور. لطفا مجدداً گزینه را انتخاب کنید.", show_alert=True)
-        return
-
-    # sync_count == 2: BOTH users have answered this question.
-    # The current coroutine is responsible for driving the entire match forward.
-    # ── Section 3.1 – Compute next question index ─────────────────────────────
-    next_q_index: int = current_q_index + 1
-
-    # ── Section 3.2 – Fetch question pool from Redis ─────────────────────────
-    q_ids: list[int] | None = await _fetch_question_pool(match_history_id)
-    if q_ids is None:
-        logger.error(
-            "Cannot advance match %s past question index %s: "
-            "question pool unavailable from Redis.",
-            match_history_id,
-            current_q_index,
-        )
-        return
-
-    # ── Section 3.3 – Fetch MatchHistory for participant IDs ─────────────────
-    match_history: MatchHistory | None = await db_session.get(
-        MatchHistory, match_history_id
-    )
-    if not match_history:
-        logger.error(
-            "MatchHistory %s not found in DB when advancing to index %s.",
-            match_history_id,
-            next_q_index,
-        )
-        return
-
-    # ── Section 3.4 – Branch: next question or finalise ──────────────────────
-    if next_q_index < TOTAL_QUESTIONS:
-        await _deliver_next_question(
-            match_history_id=match_history_id,
-            next_q_index=next_q_index,
-            q_ids=q_ids,
-            user_one_id=match_history.user_one_id,
-            user_two_id=match_history.user_two_id,
-            db_session=db_session,
-        )
-    else:
-        # next_q_index == TOTAL_QUESTIONS: all 20 questions answered.
-        match_history.questionnaire_completed = True
-        try:
-            await db_session.commit()
-        except Exception as exc:
-            logger.error(
-                "Failed to mark questionnaire_completed=True for match %s: %s",
-                match_history_id,
-                exc,
-            )
-            await db_session.rollback()
-            # Non-fatal for UX: score calculation reads UserAnswer, not this flag.
-
-        await finalize_questionnaire_and_request_approval(
-            session=db_session,
-            match_id=match_history_id,
-            match_row=match_history,
-        )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 4 – Silent wait-state guard
@@ -528,6 +418,12 @@ async def _deliver_next_question(
         return
  
     progress_bar = build_progress_bar(next_q_index + 1, TOTAL_QUESTIONS)
+
+    # ساخت متن سوال — اگه ۴ گزینه داشت همه رو نشون بده
+    opt_c = getattr(next_question, 'option_c', None)
+    opt_d = getattr(next_question, 'option_d', None)
+    is_four_choice = bool(opt_c and opt_d)
+
     question_text = (
         f"{progress_bar}"
         f"❓ *سوال {next_q_index + 1} از {TOTAL_QUESTIONS}:*\n\n"
@@ -535,7 +431,13 @@ async def _deliver_next_question(
         f"🅰️ گزینه اول: {next_question.option_a}\n"
         f"🅱️ گزینه دوم: {next_question.option_b}"
     )
-    keyboard = get_question_reply_keyboard(next_question_id)
+    if is_four_choice:
+        question_text += (
+            f"\n🅲 گزینه سوم: {opt_c}"
+            f"\n🅳 گزینه چهارم: {opt_d}"
+        )
+
+    keyboard = get_question_reply_keyboard(next_question_id, is_four_choice=is_four_choice)
  
     for uid in (user_one_id, user_two_id):
         ctx = get_user_state(uid)
@@ -669,28 +571,36 @@ async def finalize_questionnaire_and_request_approval(
 
 # ================== کدهای افزودنی ==================
 async def build_partner_answer_summary(session: AsyncSession, match_id: int, partner_id: int) -> str:
-    """خلاصه‌ای از پاسخ‌های کاربر مقابل را برای نمایش می‌سازد (محدود به ۵ مورد برای جلوگیری از خطای طول پیام)"""
+    """خلاصه‌ای از پاسخ‌های کاربر مقابل را برای نمایش می‌سازد (محدود به ۵ مورد)"""
     stmt = select(UserAnswer, Question).join(Question, UserAnswer.question_id == Question.id).where(
         UserAnswer.match_history_id == match_id,
         UserAnswer.user_id == partner_id
     ).order_by(UserAnswer.id)
-    
+
     result = await session.execute(stmt)
     all_results = result.all()
-    
+
     lines = []
     max_display = 5
-    
+
+    _opt_map = {
+        'A': 'option_a',
+        'B': 'option_b',
+        'C': 'option_c',
+        'D': 'option_d',
+    }
+
     for idx, (ans, q) in enumerate(all_results[:max_display], 1):
         q_text = getattr(q, 'short_label', None)
         if not q_text:
             q_text = q.question_text[:30] + "..." if len(q.question_text) > 30 else q.question_text
-            
-        opt_text = q.option_a if ans.selected_option == 'A' else q.option_b
+
+        opt_attr = _opt_map.get(ans.selected_option, 'option_a')
+        opt_text = getattr(q, opt_attr, None) or q.option_a
         lines.append(f"سؤال {idx} (کد {q.id}): {q_text} ⬅️ {opt_text}")
-        
+
     remaining = len(all_results) - max_display
     if remaining > 0:
         lines.append(f"و {remaining} مورد دیگر...")
-        
+
     return "\n".join(lines)

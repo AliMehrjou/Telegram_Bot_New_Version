@@ -988,6 +988,28 @@ async def is_blocked(session: AsyncSession, blocker_id: int, blocked_id: int) ->
     return result.scalar_one_or_none() is not None
 
 
+async def are_comments_disabled(session: AsyncSession, target_tg_id: int) -> bool:
+    """آیا صاحب پروفایل (target_tg_id) کلاً امکان کامنت‌گذاری را بسته است؟"""
+    result = await session.execute(
+        select(User.comments_disabled).where(User.tg_id == target_tg_id)
+    )
+    value = result.scalar_one_or_none()
+    return bool(value)
+
+
+async def toggle_comments_disabled(session: AsyncSession, tg_id: int) -> Optional[bool]:
+    """
+    وضعیت فعلی comments_disabled کاربر را برعکس می‌کند و مقدار جدید را برمی‌گرداند.
+    اگه کاربر پیدا نشه None برمی‌گردونه.
+    """
+    user = await get_user_by_tg_id(session, tg_id)
+    if not user:
+        return None
+    user.comments_disabled = not user.comments_disabled
+    await session.flush()
+    return user.comments_disabled
+
+
 async def upsert_profile_comment(
     session: AsyncSession,
     author_tg_id: int,
@@ -1091,4 +1113,3 @@ async def delete_profile_comment(
     await session.delete(comment)
     await session.flush()
     return True
-

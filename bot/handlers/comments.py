@@ -7,12 +7,15 @@ handlers/comments.py
   - نویسنده می‌تونه کامنت خودش رو پاک کنه
   - صاحب پروفایل می‌تونه نویسنده‌ی هر کامنت رو مستقیماً از همین‌جا بلاک کنه
   - کاربری که توسط صاحب پروفایل بلاک شده، نمی‌تونه کامنت بگذاره
+  - صاحب پروفایل می‌تونه کلاً امکان کامنت‌گذاری روی پروفایلش رو ببندد/باز کند
+  - وقتی کامنت جدیدی ثبت می‌شه، صاحب پروفایل نوتیف می‌گیرد
   - pagination با ۳ کامنت در صفحه
 
 نقاط ورود:
-  callback_data="view_comments:{target_tg_id}:0"              ← نمایش کامنت‌ها (از profile.py / profile_edit.py)
-  callback_data="add_comment:{target_tg_id}"                  ← شروع نوشتن کامنت
+  callback_data="view_comments:{target_tg_id}:0"                    ← نمایش کامنت‌ها (از profile.py / profile_edit.py)
+  callback_data="add_comment:{target_tg_id}"                        ← شروع نوشتن کامنت
   callback_data="block_from_comment:{author_id}:{target_id}:{page}" ← بلاک نویسنده‌ی کامنت توسط صاحب پروفایل
+  callback_data="toggle_comments:{target_tg_id}:{page}"             ← باز/بسته کردن کامل امکان کامنت‌گذاری
 """
 
 import html
@@ -31,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.states.states import ProfileCommentStates
+from matching_bot_project.bot.core.loader import bot
 
 logger = logging.getLogger(__name__)
 router = Router(name="comments_handler")
@@ -60,6 +64,28 @@ def _build_comments_text(comments) -> str:
     return "\n".join(lines)
 
 
+async def _notify_new_comment(target_tg_id: int, author_name: str, comment_text: str, is_edit: bool) -> None:
+    """
+    به صاحب پروفایل اطلاع می‌دهد که کسی برایش کامنت گذاشته/ویرایش کرده.
+    اگر ارسال پیام شکست بخورد (مثلاً کاربر بات را بلاک کرده)، بی‌صدا نادیده گرفته می‌شود.
+    """
+    action_text = "کامنت خودش رو ویرایش کرد" if is_edit else "یک کامنت جدید برات گذاشت"
+    text = (
+        f"💬 <b>{html.escape(author_name)}</b> {action_text}:\n\n"
+        f"<i>{comment_text}</i>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="💬 مشاهده کامنت‌ها",
+            callback_data=f"view_comments:{target_tg_id}:0",
+        )
+    ]])
+    try:
+        await bot.send_message(chat_id=target_tg_id, text=text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.info(f"Could not notify user {target_tg_id} about new comment: {e}")
+
+
 # ══════════════════════════════════════════════════════════════
 # کیبوردها
 # ══════════════════════════════════════════════════════════════
@@ -71,30 +97,46 @@ def _comments_keyboard(
     total: int,
     viewer_tg_id: int,
     is_own_profile: bool,
+    comments_disabled: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = []
 
-    # دکمه‌های هر کامنت: حذف (صاحب پروفایل یا نویسنده) + بلاک نویسنده (فقط صاحب پروفایل)
+    # دکمه‌های هر کامنت
     for c in comments:
         can_delete = is_own_profile or (c.author_tg_id == viewer_tg_id)
-        comment_row = []
+        is_others_comment = c.author_tg_id != viewer_tg_id
+
+        # ردیف اول: حذف + بلاک نویسنده (فقط صاحب پروفایل، فقط روی کامنت‌های دیگران)
+        row_1 = []
         if can_delete:
-            comment_row.append(
+            row_1.append(
                 InlineKeyboardButton(
                     text=f"🗑 حذف #{c.id}",
                     callback_data=f"del_comment:{c.id}:{target_tg_id}:{page}",
                 )
             )
-        # صاحب پروفایل می‌تونه نویسنده‌ی مزاحم رو همینجا بلاک کنه
-        if is_own_profile and c.author_tg_id != viewer_tg_id:
-            comment_row.append(
+        if is_own_profile and is_others_comment:
+            row_1.append(
                 InlineKeyboardButton(
-                    text=f"🚫 بلاک نویسنده #{c.id}",
+                    text=f"🚫 بلاک #{c.id}",
                     callback_data=f"block_from_comment:{c.author_tg_id}:{target_tg_id}:{page}",
                 )
             )
-        if comment_row:
-            rows.append(comment_row)
+        if row_1:
+            rows.append(row_1)
+
+        # ردیف دوم: مشاهده پروفایل + گزارش نویسنده (فقط صاحب پروفایل، فقط روی کامنت‌های دیگران)
+        if is_own_profile and is_others_comment:
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"👤 پروفایل #{c.id}",
+                    callback_data=f"view_profile_{c.author_tg_id}",
+                ),
+                InlineKeyboardButton(
+                    text=f"🚩 گزارش #{c.id}",
+                    callback_data=f"report_user_{c.author_tg_id}",
+                ),
+            ])
 
     # navigation
     nav = []
@@ -119,14 +161,24 @@ def _comments_keyboard(
     if nav:
         rows.append(nav)
 
-    # دکمه نوشتن / ویرایش کامنت (برای پروفایل دیگران)
-    if not is_own_profile:
+    if is_own_profile:
+        # صاحب پروفایل می‌تونه کلاً امکان کامنت‌گذاری رو ببندد یا دوباره باز کند
+        toggle_text = "🔓 باز کردن کامنت‌گذاری" if comments_disabled else "🔒 بستن کامنت‌گذاری"
         rows.append([
             InlineKeyboardButton(
-                text="✏️ کامنت من",
-                callback_data=f"add_comment:{target_tg_id}",
+                text=toggle_text,
+                callback_data=f"toggle_comments:{target_tg_id}:{page}",
             )
         ])
+    else:
+        # دکمه نوشتن / ویرایش کامنت (برای پروفایل دیگران) — فقط اگه کامنت‌گذاری باز باشه
+        if not comments_disabled:
+            rows.append([
+                InlineKeyboardButton(
+                    text="✏️ کامنت من",
+                    callback_data=f"add_comment:{target_tg_id}",
+                )
+            ])
 
     rows.append([
         InlineKeyboardButton(text="🔙 بستن", callback_data="close_comments")
@@ -149,8 +201,11 @@ async def show_comments(call: CallbackQuery, db_session: AsyncSession):
     is_own_profile = (viewer_tg_id == target_tg_id)
 
     comments, total = await crud.get_profile_comments(db_session, target_tg_id, page)
+    comments_disabled = await crud.are_comments_disabled(db_session, target_tg_id)
 
     text = _build_comments_text(comments)
+    if comments_disabled and not is_own_profile:
+        text += "\n\n🔒 <i>این کاربر کامنت‌گذاری روی پروفایلش را بسته است.</i>"
 
     kb = _comments_keyboard(
         comments=comments,
@@ -159,6 +214,7 @@ async def show_comments(call: CallbackQuery, db_session: AsyncSession):
         total=total,
         viewer_tg_id=viewer_tg_id,
         is_own_profile=is_own_profile,
+        comments_disabled=comments_disabled,
     )
 
     try:
@@ -180,6 +236,11 @@ async def start_add_comment(call: CallbackQuery, state: FSMContext, db_session: 
 
     if author_tg_id == target_tg_id:
         await call.answer("⚠️ نمی‌توانید روی پروفایل خودتان کامنت بگذارید.", show_alert=True)
+        return
+
+    # صاحب پروفایل ممکنه کلاً امکان کامنت‌گذاری رو بسته باشه
+    if await crud.are_comments_disabled(db_session, target_tg_id):
+        await call.answer("🔒 این کاربر کامنت‌گذاری روی پروفایلش را بسته است.", show_alert=True)
         return
 
     # اگه صاحب پروفایل قبلاً این کاربر رو بلاک کرده باشه، اجازه‌ی کامنت گذاشتن نداره
@@ -234,7 +295,12 @@ async def process_comment_text(message: Message, state: FSMContext, db_session: 
     target_tg_id = data["target_tg_id"]
     author_tg_id = message.from_user.id
 
-    # چک مجدد بلاک — ممکنه کاربر بین شروع و ارسال متن بلاک شده باشه
+    # چک مجدد: ممکنه بین شروع و ارسال متن، کامنت‌گذاری بسته یا کاربر بلاک شده باشه
+    if await crud.are_comments_disabled(db_session, target_tg_id):
+        await state.clear()
+        await message.answer("🔒 این کاربر کامنت‌گذاری روی پروفایلش را بسته است. کامنت شما ثبت نشد.")
+        return
+
     if await crud.is_blocked(db_session, blocker_id=target_tg_id, blocked_id=author_tg_id):
         await state.clear()
         await message.answer("🚫 شما توسط این کاربر مسدود شده‌اید و کامنت شما ثبت نشد.")
@@ -263,6 +329,10 @@ async def process_comment_text(message: Message, state: FSMContext, db_session: 
         f"✅ کامنت شما با موفقیت {action} شد.",
         reply_markup=kb,
     )
+
+    # نوتیف به صاحب پروفایل
+    author_name = message.from_user.first_name or "کاربر"
+    await _notify_new_comment(target_tg_id, author_name, safe_text, is_edit)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -297,6 +367,7 @@ async def delete_comment(call: CallbackQuery, db_session: AsyncSession):
         comments, total = await crud.get_profile_comments(db_session, target_tg_id, page)
 
     is_own_profile = (call.from_user.id == target_tg_id)
+    comments_disabled = await crud.are_comments_disabled(db_session, target_tg_id)
 
     text = _build_comments_text(comments)
 
@@ -307,6 +378,7 @@ async def delete_comment(call: CallbackQuery, db_session: AsyncSession):
         total=total,
         viewer_tg_id=call.from_user.id,
         is_own_profile=is_own_profile,
+        comments_disabled=comments_disabled,
     )
 
     try:
@@ -348,6 +420,8 @@ async def block_comment_author(call: CallbackQuery, db_session: AsyncSession):
         page -= 1
         comments, total = await crud.get_profile_comments(db_session, target_tg_id, page)
 
+    comments_disabled = await crud.are_comments_disabled(db_session, target_tg_id)
+
     text = _build_comments_text(comments)
     kb = _comments_keyboard(
         comments=comments,
@@ -356,6 +430,51 @@ async def block_comment_author(call: CallbackQuery, db_session: AsyncSession):
         total=total,
         viewer_tg_id=call.from_user.id,
         is_own_profile=True,
+        comments_disabled=comments_disabled,
+    )
+
+    try:
+        await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════
+# باز/بسته کردن کلی امکان کامنت‌گذاری
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("toggle_comments:"))
+async def toggle_comments(call: CallbackQuery, db_session: AsyncSession):
+    # toggle_comments:{target_tg_id}:{page}
+    parts = call.data.split(":")
+    target_tg_id = int(parts[1])
+    page         = int(parts[2]) if len(parts) > 2 else 0
+
+    # فقط صاحب پروفایل می‌تونه وضعیت کامنت‌گذاری روی پروفایل خودش رو تغییر بده
+    if call.from_user.id != target_tg_id:
+        await call.answer("⚠️ دسترسی ندارید.", show_alert=True)
+        return
+
+    new_state = await crud.toggle_comments_disabled(db_session, target_tg_id)
+    if new_state is None:
+        await call.answer("❌ حساب کاربری یافت نشد.", show_alert=True)
+        return
+
+    await db_session.commit()
+
+    msg = "🔒 کامنت‌گذاری روی پروفایل شما بسته شد." if new_state else "🔓 کامنت‌گذاری روی پروفایل شما باز شد."
+    await call.answer(msg, show_alert=True)
+
+    comments, total = await crud.get_profile_comments(db_session, target_tg_id, page)
+    text = _build_comments_text(comments)
+    kb = _comments_keyboard(
+        comments=comments,
+        target_tg_id=target_tg_id,
+        page=page,
+        total=total,
+        viewer_tg_id=call.from_user.id,
+        is_own_profile=True,
+        comments_disabled=new_state,
     )
 
     try:

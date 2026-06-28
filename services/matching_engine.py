@@ -241,10 +241,12 @@ class MatchingEngine:
 
                     # آپدیت وضعیت کاربر درخواست‌دهنده
                     caller_queue_key = self._get_queue_key(gender, target_gender, province)
+                    norm_caller_target = target_gender.strip().lower() if target_gender else ""
+                    norm_caller_province = province.strip().lower().replace(" ", "_") if province else ""
                     pipe.hset(user_state_key, mapping={
                         "gender": gender,
-                        "target_gender": target_gender or "",
-                        "province": province or "",
+                        "target_gender": norm_caller_target,
+                        "province": norm_caller_province,
                         "queue_key": caller_queue_key,
                         "status": "matched",
                         "matched_with": str(candidate_id)
