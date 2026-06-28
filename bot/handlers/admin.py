@@ -27,7 +27,7 @@ from matching_bot_project.bot.filters.custom import IsAdminFilter
 from matching_bot_project.database.models.models import MatchHistory, User
 from matching_bot_project.database.queries.crud import get_user_by_tg_id, process_coin_transaction
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
-from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates
+from matching_bot_project.bot.states.states import AdminStates, EventStates, PBroadcastStates, QuestionAddStates
 from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.core.config import settings
 from aiogram.filters import Command
@@ -1525,3 +1525,529 @@ async def cmd_sponsors(message: Message):
         
     await message.answer(text, parse_mode="HTML")
  
+
+# ══════════════════════════════════════════════════════════════
+# سیستم افزودن دستی سوال به بانک سوالات (حداکثر ۸۰ سوال)
+# ══════════════════════════════════════════════════════════════
+
+MAX_QUESTIONS = 80
+
+def _question_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="2️⃣ دو گزینه‌ای", callback_data="qtype:2"),
+            InlineKeyboardButton(text="4️⃣ چهار گزینه‌ای", callback_data="qtype:4"),
+        ],
+        [InlineKeyboardButton(text="❌ لغو", callback_data="qtype:cancel")],
+    ])
+
+
+def _confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ ذخیره", callback_data="qconfirm:save"),
+            InlineKeyboardButton(text="🔄 دوباره", callback_data="qconfirm:redo"),
+        ],
+        [InlineKeyboardButton(text="❌ لغو کامل", callback_data="qconfirm:cancel")],
+    ])
+
+
+def _build_preview(data: dict) -> str:
+    q_type = data.get("q_type", 2)
+    lines = [
+        "📋 <b>پیش‌نمایش سوال:</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"❓ <b>متن:</b> {data.get('q_text', '')}",
+        f"🅰️ گزینه الف: {data.get('opt_a', '')}",
+        f"🅱️ گزینه ب: {data.get('opt_b', '')}",
+    ]
+    if q_type == 4:
+        lines.append(f"🅲 گزینه ج: {data.get('opt_c', '')}")
+        lines.append(f"🅳 گزینه د: {data.get('opt_d', '')}")
+    lines.append(f"🏷 دسته‌بندی: {data.get('category', '')}")
+    return "\n".join(lines)
+
+
+@router.message(Command("addquestion"))
+async def cmd_addquestion(message: Message, state: FSMContext, db_session: AsyncSession):
+    """شروع فرآیند افزودن سوال جدید"""
+    count = await crud.get_question_count(db_session)
+    if count >= MAX_QUESTIONS:
+        return await message.answer(
+            f"⚠️ بانک سوالات پر است ({count}/{MAX_QUESTIONS}).\n"
+            "برای افزودن سوال جدید ابتدا یک سوال قدیمی را حذف کنید."
+        )
+
+    await state.set_state(QuestionAddStates.choosing_type)
+    await message.answer(
+        f"➕ <b>افزودن سوال جدید</b>\n"
+        f"📊 ظرفیت: <b>{count}/{MAX_QUESTIONS}</b>\n\n"
+        "نوع سوال را انتخاب کنید:",
+        reply_markup=_question_type_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(QuestionAddStates.choosing_type, F.data.startswith("qtype:"))
+async def handle_question_type(call: CallbackQuery, state: FSMContext):
+    action = call.data.split(":")[1]
+
+    if action == "cancel":
+        await state.clear()
+        await call.message.edit_text("❌ عملیات لغو شد.")
+        return await call.answer()
+
+    q_type = int(action)  # 2 یا 4
+    await state.update_data(q_type=q_type)
+    await state.set_state(QuestionAddStates.entering_text)
+
+    await call.message.edit_text(
+        f"{'2️⃣' if q_type == 2 else '4️⃣'} سوال <b>{'دو' if q_type == 2 else 'چهار'} گزینه‌ای</b> انتخاب شد.\n\n"
+        "✍️ متن سوال را بنویسید:",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.message(QuestionAddStates.entering_text)
+async def handle_question_text(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text:
+        return await message.answer("⚠️ متن سوال نمی‌تواند خالی باشد. دوباره بنویسید:")
+    if len(text) > 300:
+        return await message.answer("⚠️ متن سوال حداکثر ۳۰۰ کاراکتر می‌تواند باشد.")
+
+    await state.update_data(q_text=text)
+    await state.set_state(QuestionAddStates.entering_option_a)
+    await message.answer("🅰️ <b>گزینه الف</b> را بنویسید:", parse_mode="HTML")
+
+
+@router.message(QuestionAddStates.entering_option_a)
+async def handle_option_a(message: Message, state: FSMContext):
+    opt = (message.text or "").strip()
+    if not opt:
+        return await message.answer("⚠️ گزینه نمی‌تواند خالی باشد.")
+    await state.update_data(opt_a=opt)
+    await state.set_state(QuestionAddStates.entering_option_b)
+    await message.answer("🅱️ <b>گزینه ب</b> را بنویسید:", parse_mode="HTML")
+
+
+@router.message(QuestionAddStates.entering_option_b)
+async def handle_option_b(message: Message, state: FSMContext):
+    opt = (message.text or "").strip()
+    if not opt:
+        return await message.answer("⚠️ گزینه نمی‌تواند خالی باشد.")
+
+    await state.update_data(opt_b=opt)
+    data = await state.get_data()
+
+    if data["q_type"] == 4:
+        await state.set_state(QuestionAddStates.entering_option_c)
+        await message.answer("🅲 <b>گزینه ج</b> را بنویسید:", parse_mode="HTML")
+    else:
+        # ۲ گزینه‌ای — مستقیم به دسته‌بندی
+        await state.set_state(QuestionAddStates.entering_category)
+        await message.answer("🏷 <b>دسته‌بندی</b> سوال را بنویسید (مثال: عاطفی، مالی، تفریحات):", parse_mode="HTML")
+
+
+@router.message(QuestionAddStates.entering_option_c)
+async def handle_option_c(message: Message, state: FSMContext):
+    opt = (message.text or "").strip()
+    if not opt:
+        return await message.answer("⚠️ گزینه نمی‌تواند خالی باشد.")
+    await state.update_data(opt_c=opt)
+    await state.set_state(QuestionAddStates.entering_option_d)
+    await message.answer("🅳 <b>گزینه د</b> را بنویسید:", parse_mode="HTML")
+
+
+@router.message(QuestionAddStates.entering_option_d)
+async def handle_option_d(message: Message, state: FSMContext):
+    opt = (message.text or "").strip()
+    if not opt:
+        return await message.answer("⚠️ گزینه نمی‌تواند خالی باشد.")
+    await state.update_data(opt_d=opt)
+    await state.set_state(QuestionAddStates.entering_category)
+    await message.answer("🏷 <b>دسته‌بندی</b> سوال را بنویسید (مثال: عاطفی، مالی، تفریحات):", parse_mode="HTML")
+
+
+@router.message(QuestionAddStates.entering_category)
+async def handle_category(message: Message, state: FSMContext):
+    cat = (message.text or "").strip()
+    if not cat:
+        return await message.answer("⚠️ دسته‌بندی نمی‌تواند خالی باشد.")
+
+    await state.update_data(category=cat)
+    await state.set_state(QuestionAddStates.confirming)
+
+    data = await state.get_data()
+    preview = _build_preview(data)
+    await message.answer(
+        f"{preview}\n\n━━━━━━━━━━━━━━━━━━━━\nذخیره شود؟",
+        reply_markup=_confirm_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(QuestionAddStates.confirming, F.data.startswith("qconfirm:"))
+async def handle_question_confirm(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):
+    action = call.data.split(":")[1]
+
+    if action == "cancel":
+        await state.clear()
+        await call.message.edit_text("❌ عملیات لغو شد.")
+        return await call.answer()
+
+    if action == "redo":
+        # برگشت به ابتدا — نوع سوال را نگه می‌داریم
+        data = await state.get_data()
+        q_type = data.get("q_type", 2)
+        await state.set_data({"q_type": q_type})
+        await state.set_state(QuestionAddStates.entering_text)
+        await call.message.edit_text(
+            "🔄 از ابتدا شروع می‌کنیم.\n\n✍️ متن سوال را بنویسید:"
+        )
+        return await call.answer()
+
+    # action == "save"
+    data = await state.get_data()
+    count = await crud.get_question_count(db_session)
+    if count >= MAX_QUESTIONS:
+        await state.clear()
+        await call.message.edit_text(
+            f"⚠️ بانک سوالات در این لحظه پر شد ({count}/{MAX_QUESTIONS}). سوال ذخیره نشد."
+        )
+        return await call.answer()
+
+    q = await crud.add_question(
+        session=db_session,
+        question_text=data["q_text"],
+        option_a=data["opt_a"],
+        option_b=data["opt_b"],
+        option_c=data.get("opt_c"),
+        option_d=data.get("opt_d"),
+        category=data["category"],
+    )
+    await db_session.commit()
+    await state.clear()
+
+    q_type_label = "دو گزینه‌ای" if data["q_type"] == 2 else "چهار گزینه‌ای"
+    await call.message.edit_text(
+        f"✅ سوال <b>{q_type_label}</b> با شناسه <code>{q.id}</code> ذخیره شد.\n"
+        f"📊 بانک سوالات: <b>{count + 1}/{MAX_QUESTIONS}</b>\n\n"
+        "برای افزودن سوال بعدی دوباره /addquestion بزنید.",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+# ══════════════════════════════════════════════════════════════
+# آپلود فایل Excel سوالات — bulk import
+# ══════════════════════════════════════════════════════════════
+
+import io
+import openpyxl
+
+
+def _parse_question_excel(file_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """
+    پارس کردن فایل Excel سوالات.
+    برمی‌گردونه: (لیست سوالات معتبر، لیست خطاها)
+
+    ساختار هر سوال:
+        { q_text, opt_a, opt_b, opt_c|None, opt_d|None, category, row_num }
+    """
+    questions: list[dict] = []
+    errors: list[str] = []
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        return [], [f"❌ فایل قابل خواندن نیست: {e}"]
+
+    # ردیف ۱ هدر، ردیف ۲ راهنما — از ردیف ۳ شروع می‌کنیم
+    for row_idx, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
+        # سطرهای خالی رو skip می‌کنیم
+        if not any(row):
+            continue
+
+        def cell(i):
+            v = row[i] if i < len(row) else None
+            return str(v).strip() if v is not None and str(v).strip() else None
+
+        q_text   = cell(0)
+        opt_a    = cell(1)
+        opt_b    = cell(2)
+        opt_c    = cell(3)
+        opt_d    = cell(4)
+        category = cell(5)
+
+        # اعتبارسنجی
+        row_errors = []
+        if not q_text:
+            row_errors.append("متن سوال خالیه")
+        elif len(q_text) > 300:
+            row_errors.append(f"متن سوال بیشتر از ۳۰۰ کاراکتره ({len(q_text)})")
+
+        if not opt_a:
+            row_errors.append("گزینه الف خالیه")
+        if not opt_b:
+            row_errors.append("گزینه ب خالیه")
+
+        # اگه ج داره، د هم باید داشته باشه
+        if opt_c and not opt_d:
+            row_errors.append("گزینه ج دارد ولی گزینه د ندارد")
+        if opt_d and not opt_c:
+            row_errors.append("گزینه د دارد ولی گزینه ج ندارد")
+
+        if not category:
+            row_errors.append("دسته‌بندی خالیه")
+
+        if row_errors:
+            errors.append(f"ردیف {row_idx}: {' | '.join(row_errors)}")
+            continue
+
+        questions.append({
+            "q_text":   q_text,
+            "opt_a":    opt_a,
+            "opt_b":    opt_b,
+            "opt_c":    opt_c,
+            "opt_d":    opt_d,
+            "category": category,
+            "row_num":  row_idx,
+        })
+
+    return questions, errors
+
+
+def _bulk_import_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ بله، همه رو ذخیره کن", callback_data="qbulk:confirm"),
+            InlineKeyboardButton(text="❌ لغو", callback_data="qbulk:cancel"),
+        ]
+    ])
+
+
+@router.message(Command("importquestions"), IsAdminFilter())
+async def cmd_importquestions(message: Message, state: FSMContext, db_session: AsyncSession):
+    """
+    دانلود تمپلیت یا راهنمای آپلود.
+    ادمین بعد از دیدن این پیام، فایل Excel رو آپلود می‌کنه.
+    """
+    count = await crud.get_question_count(db_session)
+
+    capacity = MAX_QUESTIONS - count
+    if capacity <= 0:
+        return await message.answer(
+            f"⚠️ بانک سوالات پر است ({count}/{MAX_QUESTIONS}).\n"
+            "برای import جدید ابتدا سوالات قدیمی را حذف کنید."
+        )
+
+    await state.set_state(QuestionAddStates.waiting_for_excel)
+    await message.answer(
+        f"📥 <b>آپلود فایل سوالات</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 ظرفیت خالی: <b>{capacity}/{MAX_QUESTIONS}</b>\n\n"
+        f"فایل Excel (<code>.xlsx</code>) سوالات را ارسال کنید.\n\n"
+        f"💡 <i>فرمت فایل: ستون‌ها به ترتیب: متن سوال، گزینه الف، گزینه ب، گزینه ج (اختیاری)، گزینه د (اختیاری)، دسته‌بندی</i>\n\n"
+        f"برای دریافت فایل نمونه: /question_template\n"
+        f"برای لغو: /cancel",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("question_template"), IsAdminFilter())
+async def cmd_question_template(message: Message):
+    """ارسال فایل تمپلیت Excel برای ادمین"""
+    template_path = Path("json_files/question_bank_template.xlsx")
+    if not template_path.exists():
+        template_path = Path("/app/json_files/question_bank_template.xlsx")
+
+    if not template_path.exists():
+        return await message.answer("⚠️ فایل تمپلیت یافت نشد. با توسعه‌دهنده تماس بگیرید.")
+
+    from aiogram.types import FSInputFile
+    file = FSInputFile(str(template_path), filename="question_bank_template.xlsx")
+    await message.answer_document(
+        document=file,
+        caption=(
+            "📋 <b>فایل تمپلیت سوالات</b>\n\n"
+            "این فایل را پر کنید و با /importquestions آپلود کنید.\n"
+            "راهنمای کامل در sheet دوم فایل موجوده."
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.message(QuestionAddStates.waiting_for_excel, F.document)
+async def handle_question_excel_upload(
+    message: Message, state: FSMContext, db_session: AsyncSession
+):
+    """دریافت فایل Excel و نمایش پیش‌نمایش قبل از ذخیره"""
+    doc = message.document
+
+    # چک فرمت
+    if not (doc.file_name or "").lower().endswith(".xlsx"):
+        return await message.answer(
+            "⚠️ لطفاً فقط فایل Excel با پسوند <code>.xlsx</code> ارسال کنید.",
+            parse_mode="HTML",
+        )
+
+    # چک حجم (حداکثر ۵ مگ)
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
+        return await message.answer("⚠️ حجم فایل بیش از ۵ مگابایت است.")
+
+    await message.answer("⏳ در حال پردازش فایل...")
+
+    # دانلود فایل
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        file_bytes = buf.getvalue()
+    except Exception as e:
+        logger.error(f"Failed to download question Excel: {e}")
+        return await message.answer("❌ دانلود فایل ناموفق بود. دوباره تلاش کنید.")
+
+    # پارس کردن
+    questions, errors = _parse_question_excel(file_bytes)
+
+    # نمایش خطاها
+    error_text = ""
+    if errors:
+        error_lines = "\n".join(errors[:10])  # حداکثر ۱۰ خطا نشون بده
+        extra = f"\n... و {len(errors) - 10} خطای دیگر" if len(errors) > 10 else ""
+        error_text = f"\n\n⚠️ <b>خطاهای یافت‌شده ({len(errors)} ردیف نادیده گرفته شد):</b>\n<code>{error_lines}{extra}</code>"
+
+    if not questions:
+        await state.clear()
+        return await message.answer(
+            f"❌ هیچ سوال معتبری در فایل یافت نشد.{error_text}",
+            parse_mode="HTML",
+        )
+
+    # چک ظرفیت
+    current_count = await crud.get_question_count(db_session)
+    capacity = MAX_QUESTIONS - current_count
+    importable = questions[:capacity]
+    skipped_capacity = len(questions) - len(importable)
+
+    # ذخیره‌ی موقت در FSM state
+    await state.update_data(pending_questions=importable)
+
+    # ساخت پیش‌نمایش
+    two_opt  = sum(1 for q in importable if not q["opt_c"])
+    four_opt = sum(1 for q in importable if q["opt_c"])
+    cats     = list(dict.fromkeys(q["category"] for q in importable))  # unique با حفظ ترتیب
+
+    preview_samples = importable[:3]
+    sample_lines = []
+    for i, q in enumerate(preview_samples, 1):
+        q_type = "۴ گزینه‌ای" if q["opt_c"] else "۲ گزینه‌ای"
+        sample_lines.append(
+            f"<b>{i}. [{q_type}]</b> {q['q_text'][:60]}{'...' if len(q['q_text']) > 60 else ''}\n"
+            f"   الف: {q['opt_a']} | ب: {q['opt_b']}"
+            + (f" | ج: {q['opt_c']} | د: {q['opt_d']}" if q["opt_c"] else "")
+        )
+
+    cap_warn = f"\n⚠️ <i>ظرفیت محدود است — {skipped_capacity} سوال آخر نادیده گرفته می‌شن.</i>" if skipped_capacity else ""
+
+    preview_text = (
+        f"📊 <b>پیش‌نمایش import</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ سوالات معتبر: <b>{len(importable)}</b>\n"
+        f"2️⃣ دو گزینه‌ای: <b>{two_opt}</b>  |  4️⃣ چهار گزینه‌ای: <b>{four_opt}</b>\n"
+        f"🏷 دسته‌بندی‌ها: <i>{', '.join(cats[:5])}{'...' if len(cats) > 5 else ''}</i>\n"
+        f"{cap_warn}"
+        f"{error_text}\n\n"
+        f"<b>نمونه ۳ سوال اول:</b>\n"
+        f"{'─' * 20}\n"
+        + "\n\n".join(sample_lines)
+        + f"\n{'─' * 20}\n\n"
+        f"آیا این {len(importable)} سوال ذخیره شوند؟"
+    )
+
+    await state.set_state(QuestionAddStates.confirming_bulk)
+    await message.answer(
+        preview_text,
+        reply_markup=_bulk_import_confirm_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(QuestionAddStates.waiting_for_excel)
+async def handle_excel_invalid_input(message: Message):
+    """اگه چیزی غیر از فایل فرستاد"""
+    if message.text and message.text.strip() in ("/cancel", "لغو"):
+        return  # cancel handler جداست
+    await message.answer(
+        "⚠️ لطفاً فقط فایل Excel (<code>.xlsx</code>) ارسال کنید.\n"
+        "برای لغو: /cancel",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(QuestionAddStates.confirming_bulk, F.data == "qbulk:cancel")
+async def bulk_import_cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ عملیات import لغو شد.")
+    await call.answer()
+
+
+@router.callback_query(QuestionAddStates.confirming_bulk, F.data == "qbulk:confirm")
+async def bulk_import_confirm(
+    call: CallbackQuery, state: FSMContext, db_session: AsyncSession
+):
+    """bulk insert همه سوالات تایید شده"""
+    data = await state.get_data()
+    questions = data.get("pending_questions", [])
+
+    if not questions:
+        await state.clear()
+        await call.message.edit_text("⚠️ سوالی برای ذخیره یافت نشد.")
+        return await call.answer()
+
+    await call.message.edit_text("⏳ در حال ذخیره‌سازی...")
+
+    # چک مجدد ظرفیت (ممکنه در فاصله تایید تغییر کرده باشه)
+    current_count = await crud.get_question_count(db_session)
+    capacity = MAX_QUESTIONS - current_count
+    to_insert = questions[:capacity]
+
+    saved = 0
+    failed = 0
+    for q in to_insert:
+        try:
+            await crud.add_question(
+                session=db_session,
+                question_text=q["q_text"],
+                option_a=q["opt_a"],
+                option_b=q["opt_b"],
+                option_c=q.get("opt_c"),
+                option_d=q.get("opt_d"),
+                category=q["category"],
+            )
+            saved += 1
+        except Exception as e:
+            logger.error(f"Failed to insert question row {q['row_num']}: {e}")
+            failed += 1
+
+    await db_session.commit()
+    await state.clear()
+
+    final_count = current_count + saved
+    result_text = (
+        f"✅ <b>import با موفقیت انجام شد!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💾 ذخیره‌شده: <b>{saved}</b> سوال\n"
+    )
+    if failed:
+        result_text += f"⚠️ خطا در ذخیره: <b>{failed}</b> سوال\n"
+    if len(questions) > len(to_insert):
+        result_text += f"⚠️ به دلیل ظرفیت، {len(questions) - len(to_insert)} سوال نادیده گرفته شد\n"
+
+    result_text += f"📊 بانک سوالات: <b>{final_count}/{MAX_QUESTIONS}</b>"
+
+    await call.message.edit_text(result_text, parse_mode="HTML")
+    await call.answer()

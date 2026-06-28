@@ -2,7 +2,7 @@ import string
 import random
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from matching_bot_project.database.session import Base
 from sqlalchemy import Float
@@ -73,7 +73,8 @@ class User(Base):
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_active: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     
-    
+    re_engaged_at:     Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    re_engage_blocked: Mapped[bool]               = mapped_column(Boolean, default=False, nullable=False)
     # Referral system
     referrer_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -138,6 +139,8 @@ class Question(Base):
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     option_a: Mapped[str] = mapped_column(String(200), nullable=False)
     option_b: Mapped[str] = mapped_column(String(200), nullable=False)
+    option_c: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    option_d: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     category: Mapped[str] = mapped_column(String(50), default="General", nullable=False)
     short_label: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
@@ -222,3 +225,46 @@ class CoinPurchaseOrder(Base):
     gateway_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ProfileComment(Base):
+    """
+    کامنت‌های پروفایل کاربران.
+    هر کاربر فقط یه کامنت روی هر پروفایل می‌تونه داشته باشه (ویرایش‌پذیر).
+    صاحب پروفایل می‌تونه کامنت‌های ناخواسته رو پاک کنه.
+    """
+    __tablename__ = "profile_comments"
+    __table_args__ = (
+        UniqueConstraint("author_tg_id", "target_tg_id", name="uq_author_target_comment"),
+        Index("ix_comment_target_created", "target_tg_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # نویسنده کامنت
+    author_tg_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False
+    )
+    # صاحب پروفایلی که کامنت روش نوشته شده
+    target_tg_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    text: Mapped[str] = mapped_column(String(300), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+    # Relationships
+    author = relationship("User", foreign_keys=[author_tg_id])
+    target = relationship("User", foreign_keys=[target_tg_id])
+

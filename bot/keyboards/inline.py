@@ -241,15 +241,22 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
         ],
         [
             InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}", icon_custom_emoji_id="5472019095106886003", style="primary"), # 💌
-            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary") # 💸 اصلاح شد جهت اتصال مستقیم به transfer.py
+            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary") # 💸
         ],
         [
-            InlineKeyboardButton(text=friend_text, callback_data=friend_callback, icon_custom_emoji_id="5370867268051806190", style=friend_style), # 🫂 اصلاح شد
-            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="danger") # ❤️ اصلاح شد
+            InlineKeyboardButton(text=friend_text, callback_data=friend_callback, icon_custom_emoji_id="5370867268051806190", style=friend_style), # 🫂
+            InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="danger") # ❤️
         ],
-        [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒 اصلاح شد
-        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️ اصلاح شد
+        # 👇 خط مربوط به کامنت‌ها تغییر کرد (دکمه ثبت کامنت اضافه شد)
+        [
+            InlineKeyboardButton(text="💬 مشاهده کامنت‌ها", callback_data=f"view_comments:{target_tg_id}:0", icon_custom_emoji_id="5465300082628763143", style="primary"),
+            InlineKeyboardButton(text="✍️ ثبت کامنت", callback_data=f"write_comment:{target_tg_id}", icon_custom_emoji_id="5470060791883374114", style="success")
+        ],
+        [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)], # 🔒
+        [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")] # ❗️
     ])
+
+
 
 
 # ── Report reasons ──
@@ -314,3 +321,4 @@ def get_discovery_interests_keyboard(selected: list[str]) -> InlineKeyboardMarku
         
     keyboard.append([InlineKeyboardButton(text=InlineBtn.DISC_CONFIRM, callback_data="disc_int_confirm", icon_custom_emoji_id="5427009714745517609", style="success")]) # ✅
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+

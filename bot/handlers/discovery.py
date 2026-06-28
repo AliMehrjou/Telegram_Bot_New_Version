@@ -12,12 +12,21 @@ Two independent discovery flows share this router:
      3-step filtered search: province → interests → age range → results.
      States: DiscoveryStates.choosing_province / choosing_interests /
              choosing_age_range / showing_results
+
+     نسخه آپدیت‌شده (جستجوی پیشرفته):
+       • نتایج دیگر صرفاً فیلتر نیستند بلکه بر اساس ترکیب علایق مشترک،
+         فعالیت اخیر، نزدیکی جغرافیایی/استانی و اعتبار پروفایل رتبه‌بندی
+         می‌شوند (به‌جای ORDER BY last_active صرف).
+       • فهرست «کاربران دیده‌شده» از FSM state به یک Redis Set با TTL منتقل
+         شده تا (الف) با ری‌استارت ربات از بین نرود، (ب) سبک‌تر باشد، و
+         (ج) بشه به‌سادگی با دکمه «شروع مجدد» ریست شود.
+       • هر نتیجه یک نشانگر کیفیت تطابق (🔥 عالی / ✨ خوب / 🙂 معمولی) دارد
+         تا کاربر سریع متوجه شود چرا این پروفایل نشان داده شده.
 ──────────────────────────────────────────────────────────────────────────────
 """
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from datetime import datetime, timedelta
 from aiogram.exceptions import TelegramBadRequest
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -48,6 +57,7 @@ from matching_bot_project.database.queries.crud import (
     get_filtered_discovery_candidates,
     save_like,
     check_mutual_like,
+    calculate_distance_km,
 )
 
 from matching_bot_project.bot.core.constants import ReplyBtn
@@ -57,6 +67,30 @@ router = Router(name="discovery_handler")
 
 DAILY_LIKE_LIMIT = 30
 _MAX_RESULTS      = 5
+
+# مجموعه "کاربران دیده‌شده" در ویزارد فیلتر، به‌جای FSM state، در Redis نگه‌داری
+# می‌شود تا با ری‌استارت ربات پاک نشود و سبک‌تر باشد.
+_VIEWED_SET_PREFIX = "discovery:viewed"
+_VIEWED_SET_TTL     = 60 * 60 * 6  # ۶ ساعت — بعد از این مدت جستجوی قبلی "تازه" می‌شود
+
+
+def _viewed_set_key(tg_id: int) -> str:
+    return f"{_VIEWED_SET_PREFIX}:{tg_id}"
+
+
+async def _get_viewed_ids(tg_id: int) -> list[int]:
+    raw = await redis_client.smembers(_viewed_set_key(tg_id))
+    return [int(x) for x in raw] if raw else []
+
+
+async def _add_viewed_id(tg_id: int, candidate_id: int) -> None:
+    key = _viewed_set_key(tg_id)
+    await redis_client.sadd(key, candidate_id)
+    await redis_client.expire(key, _VIEWED_SET_TTL)
+
+
+async def _clear_viewed_ids(tg_id: int) -> None:
+    await redis_client.delete(_viewed_set_key(tg_id))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -267,6 +301,55 @@ def _restart_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _match_quality_label(
+    caller,
+    candidate,
+    interest_filter: set[str],
+) -> str:
+    """
+    یک نشانگر کیفیت تطابق ساده برای نمایش بالای کارت نتیجه می‌سازد.
+    این یک هیوریستیک نمایشی سبک است (نه دقیقاً همان فرمول امتیازدهی دیتابیس)
+    تا کاربر سریع بفهمد چرا این پروفایل بالا آمده.
+    """
+    cand_interests = (
+        {i.strip() for i in candidate.interests.split(",") if i.strip()}
+        if getattr(candidate, "interests", None) else set()
+    )
+    caller_interests = (
+        {i.strip() for i in caller.interests.split(",") if i.strip()}
+        if caller and caller.interests else set()
+    )
+    reference = interest_filter or caller_interests
+    shared = reference & cand_interests if reference else set()
+
+    same_city = bool(
+        caller and caller.city and candidate.city and caller.city == candidate.city
+    )
+    same_province = bool(
+        caller and caller.province and candidate.province and caller.province == candidate.province
+    )
+
+    distance_km = None
+    if (
+        caller and caller.location_lat is not None and caller.location_lng is not None
+        and candidate.location_lat is not None and candidate.location_lng is not None
+    ):
+        distance_km = calculate_distance_km(
+            caller.location_lat, caller.location_lng,
+            candidate.location_lat, candidate.location_lng,
+        )
+
+    closeness = (distance_km is not None and distance_km <= 20) or same_city
+
+    if len(shared) >= 2 and closeness:
+        return "🔥 تطابق عالی"
+    if len(shared) >= 2 or (len(shared) >= 1 and closeness):
+        return "✨ تطابق خوب"
+    if shared or same_province:
+        return "🙂 تطابق نسبی"
+    return "🔎 نتیجه جدید"
+
+
 @router.message(F.text == ReplyBtn.BACK_TO_MENU)
 async def cancel_wizard(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
@@ -365,45 +448,51 @@ async def toggle_discovery_interest(call: CallbackQuery, state: FSMContext) -> N
 
 
 async def show_filtered_candidate(call_or_message, state: FSMContext, db_session: AsyncSession):
-    """تابع اصلی برای کشیدن فقط یک کاربر از دیتابیس و نمایش آن"""
+    """تابع اصلی برای کشیدن کاندیداهای رتبه‌بندی‌شده از دیتابیس و نمایش بهترین گزینه بعدی"""
+    caller_tg_id = call_or_message.from_user.id
+
     data = await state.get_data()
     province = data.get("province")
     interests = data.get("selected_interests") or []
     min_age = data.get("min_age", 0)
     max_age = data.get("max_age", 99)
-    viewed_ids = data.get("viewed_ids", [])
 
-    # گرفتن یک لیست بزرگتر از دیتابیس تا بتوانیم تکراری‌ها را رد کنیم
+    # 💡 لیست دیده‌شده‌ها از Redis Set خوانده می‌شود (نه از FSM state)
+    viewed_ids = await _get_viewed_ids(caller_tg_id)
+
+    caller = await get_user_by_tg_id(db_session, caller_tg_id)
+
+    # گرفتن کاندیداهای از قبل رتبه‌بندی‌شده (علایق + فعالیت + فاصله + اعتبار)
     candidates = await get_filtered_discovery_candidates(
         session=db_session,
-        caller_tg_id=call_or_message.from_user.id,
+        caller_tg_id=caller_tg_id,
         province=province,
         interests=interests if interests else None,
         min_age=min_age,
         max_age=max_age,
-        limit=30, 
+        exclude_ids=viewed_ids,
+        limit=_MAX_RESULTS,
     )
 
-    # پیدا کردن اولین کاربری که آیدی او در لیست دیده‌شده‌ها (viewed_ids) نیست
-    candidate = next((c for c in candidates if c.tg_id not in viewed_ids), None)
+    candidate = candidates[0] if candidates else None
 
     if not candidate:
         text = "😔 کاربری با این مشخصات یافت نشد یا تمام نتایج را مشاهده کردید.\nفیلترها را تغییر دهید و دوباره جستجو کنید."
         kb = _restart_keyboard()
         await bot.send_message(
-            chat_id=call_or_message.from_user.id,
+            chat_id=caller_tg_id,
             text=text,
             reply_markup=kb
         )
         return
 
-    # ذخیره آیدی کاربر برای اینکه دفعه بعد دوباره نمایش داده نشود
-    viewed_ids.append(candidate.tg_id)
-    await state.update_data(viewed_ids=viewed_ids)
+    # ذخیره آیدی کاربر در Redis تا دفعه بعد دوباره نمایش داده نشود
+    await _add_viewed_id(caller_tg_id, candidate.tg_id)
 
-    profile_text = _build_profile_card(candidate)
+    badge = _match_quality_label(caller, candidate, set(interests))
+    profile_text = f"{badge}\n\n" + _build_profile_card(candidate)
     base_kb = get_user_action_keyboard(candidate.tg_id)
-    
+
     # 💡 اضافه کردن دکمه کاربر بعدی به پروفایل
     inline_kb = list(base_kb.inline_keyboard)
     inline_kb.append([
@@ -414,7 +503,7 @@ async def show_filtered_candidate(call_or_message, state: FSMContext, db_session
 
     try:
         await bot.send_message(
-            chat_id=call_or_message.from_user.id,
+            chat_id=caller_tg_id,
             text=profile_text,
             reply_markup=action_kb,
             parse_mode="HTML",
@@ -438,8 +527,9 @@ async def receive_age_range(
             return
         min_age, max_age = int(parts[0]), int(parts[1])
 
-    # 💡 ریست کردن لیست کاربران دیده شده برای جلوگیری از نمایش تکراری
-    await state.update_data(min_age=min_age, max_age=max_age, viewed_ids=[])
+    # 💡 ریست کردن لیست کاربران دیده‌شده (Redis Set) برای جلوگیری از نمایش تکراری
+    await state.update_data(min_age=min_age, max_age=max_age)
+    await _clear_viewed_ids(call.from_user.id)
     await state.set_state(DiscoveryStates.showing_results)
     
     await call.answer("⏳ در حال جستجو...")
@@ -464,6 +554,7 @@ async def disc_next_result(call: CallbackQuery, state: FSMContext, db_session: A
 async def disc_restart(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.clear()
+    await _clear_viewed_ids(call.from_user.id)
     await state.set_state(DiscoveryStates.choosing_province)
     
     # 💡 اصلاح باگ ۴: مدیریت استثنا برای متد حذف پیام تلگرام
@@ -492,3 +583,4 @@ async def disc_main_menu(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await call.message.delete()
     await call.message.answer("به منوی اصلی بازگشتید.", reply_markup=get_main_menu_keyboard())
+

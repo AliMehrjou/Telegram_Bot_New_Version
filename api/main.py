@@ -12,6 +12,7 @@ from matching_bot_project.database.session import engine, Base, async_session_fa
 from matching_bot_project.database.queries.crud import seed_question_bank_if_empty
 from matching_bot_project.bot.handlers.admin import _daily_report_loop
 from matching_bot_project.services.scheduler import OnlineStatusWorker
+from matching_bot_project.services.reengagement import ReEngagementWorker
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI):
     online_worker = OnlineStatusWorker(async_session_factory, idle_minutes=5)
     online_worker.start_polling()
 
+    # راه‌اندازی سرویس ری‌اینگیجمنت (ping کاربران بی‌تحرک هر ۳ روز)
+    reengagement_worker = ReEngagementWorker(async_session_factory, bot)
+    reengagement_worker.start_polling()
+
     # ایجاد تسک بک‌گراند برای گزارش روزانه
     asyncio.create_task(_daily_report_loop(async_session_factory))
 
@@ -90,6 +95,7 @@ async def lifespan(app: FastAPI):
     yield # حد فاصل اجرای Lifespan و Teardown
     
     # Tear-down connections
+    await reengagement_worker.stop()
     await matching_engine.disconnect()
     await bot.session.close()
     await engine.dispose()
@@ -122,3 +128,4 @@ app.include_router(admin.router)
 async def check_health_status():
     """Provides instant status telemetry for external monitors."""
     return {"status": "healthy", "service": "match_bot", "engine": "alive"}
+

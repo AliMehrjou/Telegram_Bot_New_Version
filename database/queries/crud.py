@@ -13,7 +13,7 @@ from matching_bot_project.bot.core.loader import redis_client
 from matching_bot_project.database.models.models import (
     User, MatchHistory, Question, UserAnswer,
     CoinTransaction, FriendList, BlockList, UserLike, UserReport,
-    CoinPackage, CoinPurchaseOrder
+    CoinPackage, CoinPurchaseOrder, ProfileComment
 )
 
 logger = logging.getLogger(__name__)
@@ -23,19 +23,7 @@ logger = logging.getLogger(__name__)
 async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> Optional[User]:
     stmt = select(User).where(User.tg_id == tg_id)
     result = await session.execute(stmt)
-    user = result.scalar_one_or_none()
-    
-    if user and user.is_vip and user.vip_expires_at:
-        from datetime import datetime, timezone
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-        
-        
-        if now_utc > user.vip_expires_at:
-            user.is_vip = False
-            user.vip_expires_at = None
-            session.add(user)
-            
-    return user
+    return result.scalar_one_or_none()
 
 async def get_user_by_public_id(session: AsyncSession, public_id: str) -> Optional[User]:
     stmt = select(User).where(User.public_id == public_id)
@@ -50,29 +38,42 @@ async def process_coin_transaction(
     description: str,
     ignore_multiplier: bool = False
 ) -> bool:
-    """Safely processes coin addition/deduction and logs the transaction."""
+    """Safely processes coin addition/deduction and logs the transaction.
+    Automatically applies active event multipliers for positive amounts unless ignored."""
     final_amount = amount
 
     if amount < 0:
         deduction = abs(amount)
+        # Atomic update to prevent race conditions on spend/transfer
+        stmt = (
+            update(User)
+            .where(and_(User.tg_id == user.tg_id, User.coin_balance >= deduction))
+            .values(
+                coin_balance=User.coin_balance - deduction,
+                total_spent_coins=User.total_spent_coins + deduction
+            )
+        )
+        result = await session.execute(stmt)
         
-        # --- فیکس باگ دوم: مدیریت صحیح حافظه و دیتابیس بدون کوئری موازی ---
-        if user.coin_balance < deduction:
-            return False 
+        if result.rowcount == 0:
+            return False # Insufficient funds or user not found
             
+        # Update in-memory object so it reflects reality for the rest of the current request
         user.coin_balance -= deduction
-        
-        # فقط در صورتی که تراکنش توسط ادمین کسر نشده باشد، آن را پای خرید کاربر می‌نویسیم
-        if "Admin" not in description and "مدیریت" not in description:
-            user.total_spent_coins += deduction
+        user.total_spent_coins += deduction
 
     else:
+        # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
         if not ignore_multiplier:
             try:
+                # خواندن ضریب ایونت فعال از ردیس
                 active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
                 if active_multiplier_str:
                     multiplier = float(active_multiplier_str)
+                    # ضرب کردن و رند کردن به عدد صحیح
                     final_amount = int(final_amount * multiplier)
+                    
+                    # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
                     if multiplier > 1.0:
                         description += f" (ضریب رویداد ×{multiplier})"
             except Exception as e:
@@ -482,6 +483,39 @@ async def seed_question_bank_if_empty(session: AsyncSession):
     logger.info("Successfully seeded 80 questions into MySQL database Questions schema.")
 
 
+async def get_question_count(session: AsyncSession) -> int:
+    """تعداد کل سوالات موجود در بانک سوالات"""
+    result = await session.execute(select(func.count()).select_from(Question))
+    return result.scalar() or 0
+
+
+async def add_question(
+    session: AsyncSession,
+    question_text: str,
+    option_a: str,
+    option_b: str,
+    category: str,
+    option_c: Optional[str] = None,
+    option_d: Optional[str] = None,
+) -> Question:
+    """
+    اضافه کردن یک سوال جدید به بانک سوالات.
+    سوالات ۲ گزینه‌ای: option_c و option_d خالی می‌مونن.
+    سوالات ۴ گزینه‌ای: همه چهار گزینه پر می‌شن.
+    """
+    q = Question(
+        question_text=question_text,
+        option_a=option_a,
+        option_b=option_b,
+        option_c=option_c,
+        option_d=option_d,
+        category=category,
+    )
+    session.add(q)
+    await session.flush()
+    return q
+
+
 async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
     user = await get_user_by_tg_id(session, tg_id)
     if not user:
@@ -621,15 +655,118 @@ async def find_interest_match_candidates(
     return candidates
 
 
+def _score_discovery_candidate(
+    candidate:          User,
+    caller_interests:   set,
+    caller_province:    Optional[str],
+    caller_city:        Optional[str],
+    caller_lat:         Optional[float],
+    caller_lng:         Optional[float],
+    same_province_bonus: bool,
+) -> float:
+    """
+    امتیازدهی ترکیبی به یک کاندیدا برای رتبه‌بندی نتایج جستجو (به‌جای فیلتر خام).
+    خروجی هرچه بالاتر، تطابق بهتر. این تابع خالص و بدون I/O است تا راحت قابل تست باشد.
+
+    وزن‌ها:
+      - علایق مشترک (Jaccard)......... 0 تا 45 امتیاز   [مهم‌ترین فاکتور]
+      - فعالیت اخیر (last_active)..... 0 تا 20 امتیاز
+      - فاصله جغرافیایی (در صورت وجود) 0 تا 20 امتیاز
+      - هم‌شهری / هم‌استانی بودن....... 0 تا 10 امتیاز
+      - اعتبار پروفایل (trust_score)... 0 تا 5 امتیاز
+    """
+    score = 0.0
+
+    # --- ۱) علایق مشترک (Jaccard similarity) ---
+    if caller_interests and candidate.interests:
+        cand_interests = {i.strip() for i in candidate.interests.split(",") if i.strip()}
+        if cand_interests:
+            shared = caller_interests & cand_interests
+            union  = caller_interests | cand_interests
+            jaccard = (len(shared) / len(union)) if union else 0.0
+            score += jaccard * 45.0
+            # پاداش کوچک اضافه برای هر علاقه مشترک (جدا از نسبت)، تا کاربرانی با
+            # تعداد علاقه مشترک بیشتر (حتی با لیست‌های نامتقارن) عقب نیفتند
+            score += min(len(shared), 5) * 2.0
+
+    # --- ۲) فعالیت اخیر ---
+    if candidate.last_active:
+        # توجه: به‌خاطر ناهماهنگی شناخته‌شده در ذخیره‌سازی timezone بین مدل‌های پروژه
+        # (برخی ستون‌ها naive و برخی aware هستند)، اینجا محافظه‌کارانه با مقدار naive
+        # مقایسه می‌کنیم تا با خطای "can't subtract offset-naive and offset-aware
+        # datetimes" کرش نکند. اگر در آینده تمام ستون‌های datetime به‌صورت
+        # یکدست aware (UTC) ذخیره شوند، این بخش باید به‌روزرسانی شود.
+        last_active = candidate.last_active
+        if last_active.tzinfo is not None:
+            last_active = last_active.replace(tzinfo=None)
+        now = datetime.utcnow()
+        hours_inactive = max((now - last_active).total_seconds() / 3600.0, 0.0)
+        if hours_inactive <= 1:
+            score += 20.0
+        elif hours_inactive <= 24:
+            score += 15.0
+        elif hours_inactive <= 24 * 7:
+            score += 8.0
+        elif hours_inactive <= 24 * 30:
+            score += 3.0
+
+    # --- ۳) فاصله جغرافیایی (در صورت وجود مختصات از هر دو طرف) ---
+    if (
+        caller_lat is not None and caller_lng is not None
+        and candidate.location_lat is not None and candidate.location_lng is not None
+    ):
+        dist_km = calculate_distance_km(caller_lat, caller_lng, candidate.location_lat, candidate.location_lng)
+        if dist_km <= 5:
+            score += 20.0
+        elif dist_km <= 20:
+            score += 14.0
+        elif dist_km <= 50:
+            score += 8.0
+        elif dist_km <= 150:
+            score += 3.0
+    elif same_province_bonus and caller_province and candidate.province == caller_province:
+        # اگر مختصات نداریم ولی هم‌استان هستند، جایگزین تقریبی برای فاصله
+        score += 10.0
+        if caller_city and candidate.city == caller_city:
+            score += 6.0
+
+    # --- ۴) اعتبار پروفایل ---
+    trust = getattr(candidate, "trust_score", None)
+    if trust:
+        score += min(max(trust, 0), 100) / 100.0 * 5.0
+
+    return round(score, 3)
+
+
 async def get_filtered_discovery_candidates(
-    session:    AsyncSession,
-    caller_tg_id: int,
-    province:   Optional[str]       = None,
-    interests:  Optional[List[str]] = None,
-    min_age:    int = 0,
-    max_age:    int = 99,
-    limit:      int = 10
+    session:        AsyncSession,
+    caller_tg_id:   int,
+    province:       Optional[str]       = None,
+    interests:       Optional[List[str]] = None,
+    min_age:         int = 0,
+    max_age:         int = 99,
+    exclude_ids:     Optional[List[int]] = None,
+    limit:           int = 10,
+    pool_size:       int = 150,
 ) -> List[User]:
+    """
+    جستجوی پیشرفته و رتبه‌بندی‌شده کاربران برای ویزارد فیلتر.
+
+    تفاوت کلیدی نسبت به نسخه قبلی: به‌جای فقط فیلتر کردن و گرفتن آخرین افراد فعال،
+    یک استخر بزرگ‌تر از کاندیداهای واجد شرط (`pool_size`) را از دیتابیس می‌گیرد و سپس
+    آن‌ها را بر اساس ترکیب «علایق مشترک + فعالیت اخیر + نزدیکی جغرافیایی/استانی +
+    اعتبار پروفایل» امتیازدهی و رتبه‌بندی می‌کند. استان همچنان به‌عنوان فیلتر سخت
+    اعمال می‌شود (چون کاربر صریحاً انتخابش کرده)، اما علایق دیگر یک فیلتر سخت
+    (AND/OR روی LIKE) نیست — بلکه یک سیگنال امتیازی است، بنابراین کاربرانی با
+    تطابق نسبی هم در نتایج می‌مانند و در رتبه مناسب خودشان نمایش داده می‌شوند.
+
+    exclude_ids: لیست آیدی‌هایی که کاربر همین حالا دیده (معمولاً از Redis Set
+    دیده‌شده‌ها) تا نتایج تکراری در صفحه بعدی نمایش داده نشوند.
+    """
+    caller = await get_user_by_tg_id(session, caller_tg_id)
+    if not caller:
+        return []
+
     blocked_by_caller  = (
         select(BlockList.blocked_id)
         .where(BlockList.blocker_id == caller_tg_id)
@@ -655,14 +792,55 @@ async def get_filtered_discovery_candidates(
         conditions.append(User.age >= min_age)
     if max_age < 99:
         conditions.append(User.age <= max_age)
-# ================== کدهای جایگزین (بخش اعمال order_by) ==================
-    if interests:
-        conditions.append(or_(*[User.interests.like(f"%{i}%") for i in interests]))
+    if exclude_ids:
+        conditions.append(User.tg_id.not_in(exclude_ids))
 
-    # تغییر order_by به جای func.rand()
-    stmt   = select(User).where(*conditions).order_by(User.last_active.desc()).limit(limit)
+    # علایق دیگر شرط سخت WHERE نیست؛ صرفاً برای رتبه‌بندی در پایتون استفاده می‌شود
+    # تا نتایج نزدیک ولی ناقص هم به کاربر نشان داده شوند.
+
+    # استخر بزرگ‌تری از last_active نسبتاً تازه می‌گیریم تا بعد در پایتون رتبه‌بندی شود.
+    stmt = (
+        select(User)
+        .where(*conditions)
+        .order_by(User.last_active.desc())
+        .limit(pool_size)
+    )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    pool = list(result.scalars().all())
+
+    if not pool:
+        return []
+
+    caller_interests = (
+        {i.strip() for i in caller.interests.split(",") if i.strip()}
+        if caller.interests else set()
+    )
+    interest_filter = {i.strip() for i in interests if i.strip()} if interests else set()
+
+    scored: List[tuple] = []
+    for cand in pool:
+        # اگر کاربر علایق خاصی را در ویزارد انتخاب کرده، حداقل یک تطابق لازم است
+        # وگرنه نتایج کاملاً نامرتبط هم نمایش داده می‌شوند. اما این هم‌چنان لیبرال‌تر
+        # از حالت قبلی است چون باقی رتبه‌بندی روی این فیلتر اولیه اعمال می‌شود.
+        if interest_filter:
+            cand_interests = {i.strip() for i in cand.interests.split(",")} if cand.interests else set()
+            if not (interest_filter & cand_interests):
+                continue
+
+        effective_caller_interests = interest_filter or caller_interests
+        score = _score_discovery_candidate(
+            candidate=cand,
+            caller_interests=effective_caller_interests,
+            caller_province=caller.province,
+            caller_city=caller.city,
+            caller_lat=caller.location_lat,
+            caller_lng=caller.location_lng,
+            same_province_bonus=not bool(province),  # اگه استان فیلتر سخت بود، این بونوس بی‌اثره
+        )
+        scored.append((score, cand))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [cand for _, cand in scored[:limit]]
 
 
 async def get_user_friends(session: AsyncSession, tg_id: int) -> List[User]:
@@ -782,3 +960,116 @@ def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) ->
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 1)
+
+
+
+# ══════════════════════════════════════════════════════════════
+# توابع سیستم کامنت پروفایل
+# ══════════════════════════════════════════════════════════════
+
+_COMMENTS_PER_PAGE = 3
+
+
+async def upsert_profile_comment(
+    session: AsyncSession,
+    author_tg_id: int,
+    target_tg_id: int,
+    text: str,
+) -> ProfileComment:
+    """
+    اگه کاربر قبلاً کامنت گذاشته → ویرایش می‌کنه.
+    اگه نه → کامنت جدید می‌سازه.
+    """
+    stmt = select(ProfileComment).where(
+        and_(
+            ProfileComment.author_tg_id == author_tg_id,
+            ProfileComment.target_tg_id == target_tg_id,
+        )
+    )
+    result = await session.execute(stmt)
+    comment = result.scalar_one_or_none()
+
+    if comment:
+        comment.text = text
+        comment.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    else:
+        comment = ProfileComment(
+            author_tg_id=author_tg_id,
+            target_tg_id=target_tg_id,
+            text=text,
+        )
+        session.add(comment)
+
+    await session.flush()
+    return comment
+
+
+async def get_profile_comments(
+    session: AsyncSession,
+    target_tg_id: int,
+    page: int = 0,
+) -> tuple[list[ProfileComment], int]:
+    """
+    کامنت‌های یک پروفایل با pagination.
+    برمی‌گردونه: (لیست کامنت‌ها، تعداد کل)
+    """
+    count_stmt = select(func.count()).where(
+        ProfileComment.target_tg_id == target_tg_id
+    )
+    total = (await session.execute(count_stmt)).scalar() or 0
+
+    stmt = (
+        select(ProfileComment)
+        .where(ProfileComment.target_tg_id == target_tg_id)
+        .order_by(ProfileComment.created_at.desc())
+        .offset(page * _COMMENTS_PER_PAGE)
+        .limit(_COMMENTS_PER_PAGE)
+    )
+    result = await session.execute(stmt)
+    comments = list(result.scalars().all())
+
+    return comments, total
+
+
+async def get_comment_by_id(
+    session: AsyncSession,
+    comment_id: int,
+) -> Optional[ProfileComment]:
+    return await session.get(ProfileComment, comment_id)
+
+
+async def get_my_comment_on_profile(
+    session: AsyncSession,
+    author_tg_id: int,
+    target_tg_id: int,
+) -> Optional[ProfileComment]:
+    """کامنت فعلی این کاربر روی این پروفایل (اگه وجود داشته باشه)"""
+    result = await session.execute(
+        select(ProfileComment).where(
+            and_(
+                ProfileComment.author_tg_id == author_tg_id,
+                ProfileComment.target_tg_id == target_tg_id,
+            )
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_profile_comment(
+    session: AsyncSession,
+    comment_id: int,
+    requester_tg_id: int,
+) -> bool:
+    """
+    حذف کامنت — فقط اگه requester صاحب پروفایل (target) یا نویسنده خودش باشه.
+    """
+    comment = await session.get(ProfileComment, comment_id)
+    if not comment:
+        return False
+    if requester_tg_id not in (comment.target_tg_id, comment.author_tg_id):
+        return False
+
+    await session.delete(comment)
+    await session.flush()
+    return True
+

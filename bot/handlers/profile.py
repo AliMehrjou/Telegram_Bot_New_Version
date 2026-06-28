@@ -21,6 +21,9 @@ from matching_bot_project.bot.core.constants import ReplyBtn
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
 from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
 from matching_bot_project.database.models.models import BlockList
+from matching_bot_project.bot.states.states import ProfileCommentStates
+from matching_bot_project.database.queries.crud import upsert_profile_comment
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 
@@ -251,11 +254,14 @@ async def view_referral_panel(message: Message, db_session: AsyncSession):
         "<blockquote><tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>رفیق، با دعوت از دوستات هم سکه می‌گیری هم سهمیه مچ زدن رایگان بهت می‌رسه! اگرم VIP داری که معطل نکن، از دکمه پایین تنظیماتتو شخصی‌سازی کن.</i></blockquote>"
     )
 
-    kb = None
+    inline_rows = [
+        [InlineKeyboardButton(text="🔗 بنرهای دعوت اختصاصی", callback_data="referral_banners")],
+    ]
     if user_is_vip:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
+        inline_rows.append(
             [InlineKeyboardButton(text="⚙️ ورود به پنل تنظیمات VIP", callback_data="vip_panel")]
-        ])
+        )
+    kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     
@@ -310,7 +316,8 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
     # ساخت کیبورد بر اساس مالکیت پروفایل
     if is_own_profile:
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")]
+            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
+            [InlineKeyboardButton(text="💬 کامنت‌های پروفایل من", callback_data=f"view_comments:{target_user.tg_id}:0")],
         ])
         profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
     else:
@@ -328,10 +335,10 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
         except Exception:
             already_friend = False
 
-        # 👈 فراخوانی تابع جامع دکمه‌های پروفایل به جای دکمه‌های دستی
+        # کیبورد اکشن‌های پروفایل — دکمه کامنت داخل get_user_action_keyboard هست
         markup = get_user_action_keyboard(
-            target_tg_id=target_user.tg_id, 
-            is_blocked=is_blocked, 
+            target_tg_id=target_user.tg_id,
+            is_blocked=is_blocked,
             is_friend=already_friend
         )
 
@@ -370,4 +377,203 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
             )
         except Exception as e:
             logger.error(f"Failed to send profile voice: {e}")
-            
+
+
+# ==========================================
+# پنل بنرهای دعوت (رفرال)
+# ==========================================
+
+# تعریف بنرها: کلید = filter_tag، مقدار = (متن دکمه، پارامتر لینک، متن بنر)
+# {invite_link} در متن بنر جایگزین لینک واقعی می‌شه
+_REFERRAL_BANNERS: list[tuple[str, str, str, str]] = [
+    (
+        "banner_1",
+        "📋 بنر متنی ۱",
+        "",   # بدون فیلتر — لینک ساده
+        (
+            "👋 سلام!\n\n"
+            "یه ربات خفن پیدا کردم که میتونی توش آدم‌های جدید پیدا کنی، "
+            "چت ناشناس داشته باشی و حتی دیت بری! 🎯\n\n"
+            "🔗 با لینک زیر بیا داخل، هم تو هم من سکه رایگان می‌گیریم:\n"
+            "{invite_link}"
+        ),
+    ),
+    (
+        "banner_2",
+        "🏠 بنر متنی ۲ — همشهری",
+        "city",
+        (
+            "📍 دنبال یه همشهری خوب می‌گردی؟\n\n"
+            "توی این ربات میتونی از همون شهر خودت آدم پیدا کنی، "
+            "چت کنی و آشنا بشی! 😊\n\n"
+            "🔗 از لینک زیر بیا داخل:\n"
+            "{invite_link}"
+        ),
+    ),
+    (
+        "banner_3",
+        "👦 بنر متنی ۳ — دنبال پسر",
+        "male",
+        (
+            "🙋‍♀️ دنبال یه پسر جالب برای آشنایی می‌گردی؟\n\n"
+            "اینجا میتونی به‌صورت ناشناس شروع کنی، "
+            "اگه جور بودید ادامه بدید! 🎲\n\n"
+            "🔗 از لینک زیر ثبت‌نام کن:\n"
+            "{invite_link}"
+        ),
+    ),
+    (
+        "banner_4",
+        "👧 بنر متنی ۴ — دنبال دختر",
+        "female",
+        (
+            "🙋‍♂️ دنبال یه دختر باحال برای آشنایی می‌گردی؟\n\n"
+            "توی این ربات میتونی ناشناس شروع کنی و "
+            "ببینی باهم جور هستید یا نه! ✨\n\n"
+            "🔗 از لینک زیر وارد شو:\n"
+            "{invite_link}"
+        ),
+    ),
+    (
+        "banner_5",
+        "🎂 بنر متنی ۵ — هم‌سن",
+        "sameage",
+        (
+            "⏳ دنبال یه نفر هم‌سن و هم‌نسل خودتی؟\n\n"
+            "این ربات بر اساس سن هم بهت پیشنهاد میده، "
+            "یعنی احتمال جور بودنتون خیلی بالاست! 🔥\n\n"
+            "🔗 بیا امتحان کن:\n"
+            "{invite_link}"
+        ),
+    ),
+]
+
+
+def _build_banner_keyboard() -> InlineKeyboardMarkup:
+    """کیبورد انتخاب بنر"""
+    rows = []
+    # دو تا دو تا کنار هم
+    buttons = [
+        InlineKeyboardButton(text=label, callback_data=f"ref_banner:{key}")
+        for key, label, _, _ in _REFERRAL_BANNERS
+    ]
+    for i in range(0, len(buttons), 2):
+        rows.append(buttons[i: i + 2])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "referral_banners")
+async def show_referral_banners(call: CallbackQuery, db_session: AsyncSession):
+    """نمایش منوی انتخاب بنر دعوت"""
+    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
+    if not user or not user.completed_registration:
+        await call.answer("⚠️ ابتدا ثبت‌نام را کامل کنید.", show_alert=True)
+        return
+
+    ref_count = await crud.get_referral_count(db_session, call.from_user.id)
+
+    text = (
+        "🔗 <b>بنرهای دعوت اختصاصی شما</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 تا الان <b>{ref_count} نفر</b> با لینک شما وارد شدن.\n\n"
+        "💡 <i>یه بنر انتخاب کن تا متن آماده برای فوروارد کردن بهت نشون داده بشه.</i>"
+    )
+
+    try:
+        await call.message.edit_text(text, reply_markup=_build_banner_keyboard(), parse_mode=ParseMode.HTML)
+    except Exception:
+        await call.message.answer(text, reply_markup=_build_banner_keyboard(), parse_mode=ParseMode.HTML)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("ref_banner:"))
+async def send_referral_banner(call: CallbackQuery, db_session: AsyncSession):
+    """ارسال متن بنر انتخاب‌شده با لینک فیلتردار"""
+    banner_key = call.data.split(":", 1)[1]
+
+    # پیدا کردن بنر
+    banner = next((b for b in _REFERRAL_BANNERS if b[0] == banner_key), None)
+    if not banner:
+        await call.answer("⚠️ بنر یافت نشد.", show_alert=True)
+        return
+
+    _, _, filter_param, banner_text = banner
+
+    user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
+    if not user:
+        await call.answer("⚠️ کاربر یافت نشد.", show_alert=True)
+        return
+
+    # ساخت لینک — اگه فیلتر داره پارامتر اضافه می‌شه
+    bot_name = str(settings.BOT_USERNAME).replace("@", "")
+    tg_id = call.from_user.id
+    if filter_param:
+        invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}_{filter_param}"
+    else:
+        invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
+
+    # جایگزینی لینک در متن بنر
+    final_text = banner_text.format(invite_link=invite_link)
+
+    # دکمه بازگشت به لیست بنرها
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 بازگشت به بنرها", callback_data="referral_banners")]
+    ])
+
+    await call.message.answer(
+        f"📋 <b>متن بنر — کپی کن و بفرست:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{final_text}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=back_kb,
+    )
+    await call.answer()
+
+# ==========================================
+# سیستم ثبت و ویرایش کامنت پروفایل
+# ==========================================
+
+@router.callback_query(F.data.startswith("write_comment:"))
+async def trigger_write_comment(call: CallbackQuery, state: FSMContext):
+    """هندلر دکمه شیشه‌ای برای شروع فرآیند ثبت کامنت"""
+    target_tg_id = int(call.data.split(":")[1])
+    
+    # ذخیره آیدی پروفایل هدف در حافظه FSM
+    await state.update_data(target_profile_id=target_tg_id)
+    await state.set_state(ProfileCommentStates.waiting_for_comment_text)
+    
+    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 لغو و برگشت")]], resize_keyboard=True)
+    await call.message.answer("✍️ لطفاً کامنت خود را برای این پروفایل بنویسید:", reply_markup=cancel_kb)
+    await call.answer()
+
+
+@router.message(ProfileCommentStates.waiting_for_comment_text)
+async def save_comment_text(message: Message, state: FSMContext, db_session: AsyncSession):
+    """هندلر دریافت متن کامنت و ذخیره در دیتابیس"""
+    if message.text == "🔙 لغو و برگشت":
+        await state.clear()
+        # برگشت به منوی اصلی با استفاده از کیبورد منوی اصلی ربات
+        from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
+        return await message.answer("❌ ثبت کامنت لغو شد.", reply_markup=get_main_menu_keyboard())
+
+    data = await state.get_data()
+    target_tg_id = data.get("target_profile_id")
+    
+    # ذخیره یا ویرایش کامنت در دیتابیس
+    await upsert_profile_comment(
+        session=db_session,
+        author_tg_id=message.from_user.id,
+        target_tg_id=target_tg_id,
+        text=message.text
+    )
+    await db_session.commit()
+    
+    await state.clear()
+    
+    # نمایش پیام موفقیت با دکمه شیشه‌ای مشاهده کامنت‌ها
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="مشاهده کامنت‌ها 💬", callback_data=f"view_comments:{target_tg_id}:0")]
+    ])
+    
+    await message.answer("✅ کامنت شما با موفقیت ثبت/ویرایش شد.", reply_markup=kb)
+

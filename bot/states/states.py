@@ -80,3 +80,17 @@ class PaymentStates(StatesGroup):
     choosing_package = State()
     choosing_method = State()
     waiting_for_receipt_photo = State()
+
+class QuestionAddStates(StatesGroup):
+    choosing_type     = State()  
+    entering_text     = State()   
+    entering_option_a = State()
+    entering_option_b = State()
+    entering_option_c = State()  
+    entering_option_d = State()   
+    entering_category = State()   
+    confirming        = State()   
+    waiting_for_excel = State()   
+    confirming_bulk   = State()   
+class ProfileCommentStates(StatesGroup):
+    waiting_for_comment_text = State()

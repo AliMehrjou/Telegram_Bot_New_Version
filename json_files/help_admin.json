@@ -4,7 +4,7 @@
       "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | کنترل کاربران</b>",
       "",
       "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>کنترل و وضعیت کاربران:</b>",
-      "<blockquote>🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت کامل کاربر</i>\n🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری کاربر متخلف</i>\n🔸 <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت کاربر</i>\n🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای اشتراک ویژه VIP</i>\n🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی و ریست پروفایل کاربر</i></blockquote>"
+      "<blockquote>🔸 <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت کامل کاربر</i>\n🔸 <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری کاربر متخلف</i>\n🔸 <code>/setvip [id] [days]</code> ▫️ <i>اعطای اشتراک ویژه VIP</i>\n🔸 <code>/resetprofile [id]</code> ▫️ <i>پاکسازی و ریست پروفایل کاربر</i></blockquote>"
     ],
     [
       "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | بخش مالی و بسته‌ها</b>",
@@ -33,6 +33,12 @@
       "",
       "<tg-emoji emoji-id=\"5415803062738504079\">📢</tg-emoji> <b>مدیریت اسپانسرها (Force Join):</b>",
       "<blockquote>🔹 <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال اسپانسر جدید</i>\n🔹 <code>/removesponsor [id]</code> ▫️ <i>حذف کانال از لیست جوین اجباری</i>\n🔹 <code>/sponsors</code> ▫️ <i>مشاهده لیست کانال‌های اسپانسر فعال</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت | بانک سوالات</b>",
+      "",
+      "<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <b>مدیریت سوالات:</b>",
+      "<blockquote>🔸 <code>/addquestion</code> ▫️ <i>افزودن دستی سوال جدید (۲ یا ۴ گزینه‌ای)</i>\n🔸 <code>/importquestions</code> ▫️ <i>آپلود فایل Excel سوالات (گروهی)</i>\n🔸 <code>/question_template</code> ▫️ <i>دریافت فایل نمونه اکسل سوالات</i></blockquote>"
     ]
   ]
 }

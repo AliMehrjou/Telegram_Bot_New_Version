@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any, Callable, Dict, Awaitable
 from aiogram import BaseMiddleware
@@ -9,6 +10,11 @@ from matching_bot_project.bot.core.loader import redis_client, bot
 logger = logging.getLogger(__name__)
 
 _ALLOWED_STATUSES = {"creator", "administrator", "member"}
+
+# 💡 جلوگیری از اسپام پیام عضویت: اگر کاربر همین چند ثانیه پیش این پیام رو دیده،
+# دوباره برای هر پیام متنی جدیدش یک پیام تازه ارسال نکن (فقط برای حالت Message؛
+# حالت CallbackQuery از قبل با edit_text روی همون پیام کار می‌کرد و این مشکل رو نداشت).
+_PROMPT_COOLDOWN_SECONDS = 20
 
 
 def _to_str(val) -> str:
@@ -91,16 +97,36 @@ class ForceJoinMiddleware(BaseMiddleware):
         # 6. چک Telegram API برای هر کانال + حفاظت در برابر FloodWait
         missing_sponsors: dict[str, str] = {}
         broken_channels: list[str] = []
+
+        # 💡 بهینه‌سازی: به‌جای N بار await متوالی برای exists() در حلقه،
+        # همه‌ی چک‌های "آیا این کانال خراب است؟" را یک‌جا و موازی اجرا می‌کنیم.
+        # روی هر پیام/کلیک کاربرانِ غیرعضو این اجرا می‌شود، پس با تعداد زیاد
+        # کانال اسپانسر، نسخه قبلی به‌ازای هر پیام N رفت‌وبرگشت متوالی به Redis
+        # می‌زد؛ این نسخه همه را همزمان می‌فرستد.
+        channel_ids = list(sponsors.keys())
+        bad_channel_keys = [f"bot:bad_sponsor:{cid}" for cid in channel_ids]
+        try:
+            bad_channel_flags = await asyncio.gather(
+                *[redis_client.exists(k) for k in bad_channel_keys],
+                return_exceptions=True,
+            )
+        except Exception as e:
+            logger.warning("Batched bad_sponsor existence check failed: %s", e)
+            bad_channel_flags = [False] * len(channel_ids)
+
+        already_known_broken = {
+            channel_id
+            for channel_id, flag in zip(channel_ids, bad_channel_flags)
+            if flag and not isinstance(flag, Exception)
+        }
+
         for channel_id, invite_link in sponsors.items():
             try:
                 cid = int(channel_id)
             except ValueError:
                 cid = channel_id
 
-            bad_channel_key = f"bot:bad_sponsor:{cid}"
-            
-            # اگر این کانال در 15 دقیقه گذشته خطا داده، به تلگرام ریکوئست نده
-            if await redis_client.exists(bad_channel_key):
+            if channel_id in already_known_broken:
                 broken_channels.append(channel_id)
                 continue
 
@@ -110,6 +136,7 @@ class ForceJoinMiddleware(BaseMiddleware):
                 logger.error("ForceJoin lookup failed for channel %s (user %s): %s", channel_id, user_id, e)
                 broken_channels.append(channel_id)
                 # کش کردن وضعیت خرابی کانال به مدت 15 دقیقه (900 ثانیه)
+                bad_channel_key = f"bot:bad_sponsor:{cid}"
                 await redis_client.setex(bad_channel_key, 900, "1")
                 continue
 
@@ -147,7 +174,25 @@ class ForceJoinMiddleware(BaseMiddleware):
 
         try:
             if isinstance(event, Message):
-                await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="HTML")
+                # 💡 فیکس باگ اسپام: قبلاً برای هر پیام متنی کاربر غیرعضو
+                # (حتی چت معمولی بی‌ربط)، یک پیام تازه «لطفاً عضو شوید» ارسال
+                # می‌شد — یعنی اگر کاربر چند پیام پشت‌سرهم بفرسته، چت او پر از
+                # پیام‌های تکراری می‌شد. الان با یک کش کوتاه (۲۰ ثانیه) این
+                # ارسال مجدد را محدود می‌کنیم؛ کاربر هنوز هم بلاک می‌ماند
+                # (return None هم‌چنان اجرا می‌شود)، فقط اسپم پیام را حذف کردیم.
+                prompt_guard_key = f"user:force_join_prompted:{user_id}"
+                already_prompted = False
+                try:
+                    already_prompted = bool(await redis_client.exists(prompt_guard_key))
+                except Exception as e:
+                    logger.warning("Redis EXISTS failed for prompt guard %s: %s", user_id, e)
+
+                if not already_prompted:
+                    await event.answer(text=alert_text, reply_markup=keyboard, parse_mode="HTML")
+                    try:
+                        await redis_client.setex(prompt_guard_key, _PROMPT_COOLDOWN_SECONDS, "1")
+                    except Exception:
+                        pass
             elif isinstance(event, CallbackQuery):
                 if event.message:
                     try:

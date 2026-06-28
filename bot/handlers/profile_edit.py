@@ -8,6 +8,7 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import StateFilter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update 
 
@@ -92,7 +93,19 @@ def get_cities_reply_keyboard(province_name: str) -> ReplyKeyboardMarkup:
 # ==================== هندلرهای مدیریت FSM ====================
 
 
-@router.message(F.text == ReplyBtn.BACK_TO_MENU)
+@router.message(
+    StateFilter(
+        ProfileEditStates.editing_bio,
+        ProfileEditStates.selecting_interests,
+        ProfileEditStates.waiting_for_photo,
+        ProfileEditStates.waiting_for_voice,
+        ProfileEditStates.updating_province,
+        ProfileEditStates.updating_city,
+        ProfileEditStates.updating_age,
+        ProfileEditStates.waiting_for_gps,
+    ),
+    F.text == ReplyBtn.BACK_TO_MENU,
+)
 async def cancel_profile_editing(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ عملیات ویرایش پروفایل لغو شد.", reply_markup=get_main_menu_keyboard())
@@ -204,7 +217,10 @@ async def save_profile_changes(call: CallbackQuery, state: FSMContext, db_sessio
 @router.callback_query(F.data == "change_photo")
 async def start_photo_edit(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ProfileEditStates.waiting_for_photo)
-    cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 برگشت به منوی اصلی")]], resize_keyboard=True)
+    cancel_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=ReplyBtn.BACK_TO_MENU)]],
+        resize_keyboard=True,
+    )
     await call.message.answer("📸 لطفاً عکس جدید پروفایل خود را ارسال کنید:", reply_markup=cancel_kb)
     await call.answer()
 
@@ -213,18 +229,26 @@ async def start_photo_edit(call: CallbackQuery, state: FSMContext) -> None:
 async def process_new_photo(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     photo_file_id = message.photo[-1].file_id
     tg_id = message.from_user.id
-     
+
     await db_session.execute(
         update(User).where(User.tg_id == tg_id).values(profile_photo_file_id=photo_file_id)
     )
     await db_session.commit()
-    
-    await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
+
+    # اول state رو clear کن، بعد answer بفرست — جلوگیری از آویزون موندن state
     await state.clear()
+    await message.answer("✅ عکس پروفایل شما با موفقیت به‌روزرسانی شد.", reply_markup=get_main_menu_keyboard())
+
 
 @router.message(ProfileEditStates.waiting_for_photo, F.document)
 async def process_new_photo_document(message: Message) -> None:
     await message.answer("⚠️ لطفاً عکس را به صورت تصویری (Photo) ارسال کنید، نه به عنوان فایل!")
+
+
+@router.message(ProfileEditStates.waiting_for_photo)
+async def process_photo_invalid(message: Message, state: FSMContext) -> None:
+    """Fallback: هر ورودی غیر از Photo/Document در این state — BACK_TO_MENU اینجا نمی‌رسه چون StateFilter بالاتر می‌گیره"""
+    await message.answer("⚠️ لطفاً فقط یک تصویر (Photo) ارسال کنید یا از دکمه بازگشت استفاده کنید.")
 
 # ==================== بخش مربوط به ویرایش سن ====================
 
