@@ -4,24 +4,25 @@ import logging
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
+import pytz
+import jdatetime
 
 logger = logging.getLogger(__name__)
 
 def _safe_format_var(value: str) -> str:
     """
-    Escape curly braces to prevent formatting errors,
-    and also keep the string HTML-safe.
+    جلوگیری از خطاهای فرمت‌دهی رشته با اسکیپ کردن کرلی بریس‌ها {}
+    و ایمن‌سازی متون برای نمایش در ساختار HTML تلگرام.
     """
-    # اول HTML escape
     escaped = html.escape(str(value))
-    # بعد replace { و } با نسخه‌ی دوتایی برای format
     return escaped.replace("{", "{{").replace("}", "}}")
 
 def build_unified_profile_card(user, is_own_profile: bool = False,
                                compatibility: Optional[int] = None,
                                distance_km: Optional[float] = None) -> str:
     """
-    تابع یکپارچه برای ساخت کارت پروفایل از روی قالب JSON.
+    تابع یکپارچه و بهینه برای ساخت کارت پروفایل از روی قالب JSON.
+    همراه با حل مشکل ریجن و اختلاف زمانی آخرین بازدید کاربران بر اساس تایم‌زون ایران.
     """
     try:
         # ──── ۱. بارگذاری قالب ────
@@ -40,7 +41,9 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
                 "{profile_title} {first_name}\n"
                 "🆔 {public_id}\n"
                 "جنسیت: {gender}\n"
+                "وضعیت تأهل: {marital_status}\n"
                 "سن: {age}\n"
+                "استان: {province}\n"
                 "شهر: {city}\n"
                 "بیو: {bio}\n"
                 "علایق: {interests}\n"
@@ -84,46 +87,60 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
     likes_count = getattr(user, 'likes_count', 0)
     
     # ──── ۳. محاسبه‌های داینامیک ────
-    # درصد تفاهم و فاصله
+    # درصد تفاهم و فاصله جغرافیایی
     compatibility_text = ""
     if compatibility is not None:
         compatibility_text = f"💞 <b>میزان تفاهم:</b> {compatibility}%"
         if distance_km is not None and not is_own_profile:
             compatibility_text += f"\n📏 <b>فاصله از شما:</b> {distance_km} کیلومتر"
+    elif distance_km is not None and not is_own_profile:
+        compatibility_text = f"📏 <b>فاصله از شما:</b> {distance_km} کیلومتر"
     
-    # اطلاعات خصوصی (مخصوص خود کاربر)
+    # اطلاعات خصوصی (مخصوص لایه کاربری خود شخص)
     private_info = ""
     if is_own_profile:
         coin_balance = getattr(user, 'coin_balance', 0)
         private_info = (
-            f"\n<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> <b>موجودی سکه:</b> {coin_balance} سکه\n"
+            f"\n<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-cookie> <b>موجودی سکه:</b> {coin_balance} سکه\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"<tg-emoji emoji-id=\"5371017798065592581\">🔔</tg-emoji> تنظیم حالت سایلنت: /silent\n"
             f"<tg-emoji emoji-id=\"5465665476971471368\">❌</tg-emoji> حذف اکانت ربات: /delete_account\n"
             f"<tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
         )
     
-    # آخرین بازدید (فقط برای پروفایل دیگران)
+    # آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
     last_seen_text = ""
     if not is_own_profile and hasattr(user, 'last_active') and user.last_active:
         try:
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            diff = (now - user.last_active).total_seconds()
-            if diff < 3600:
+            last_active_dt = user.last_active
+            # فرونشاندن ماهیت خام دیتا عودتی از MySQL به ساختار آگاهِ UTC
+            if last_active_dt.tzinfo is None:
+                last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
+                
+            # انتقال جهت جغرافیایی زمان به آسیا/تهران
+            tehran_tz = pytz.timezone('Asia/Tehran')
+            local_time = last_active_dt.astimezone(tehran_tz)
+            now_tehran = datetime.now(tehran_tz)
+            
+            diff = (now_tehran - local_time).total_seconds()
+            
+            if diff < 300:  # کمتر از ۵ دقیقه
+                last_seen_text = "\n⏱ <b>آخرین بازدید:</b> آنلاین 🟢"
+            elif diff < 3600:  # کمتر از ۱ ساعت
                 mins = max(1, int(diff // 60))
                 last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {mins} دقیقه پیش"
-            elif diff < 86400:
-                hrs = int(diff // 3600)
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {hrs} ساعت پیش"
-            else:
-                days = int(diff // 86400)
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {days} روز پیش"
+            elif diff < 86400 and now_tehran.date() == local_time.date():  # امروز
+                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> امروز {local_time.strftime('%H:%M')}"
+            elif diff < 172800 and (now_tehran.date() - local_time.date()).days == 1:  # دیروز
+                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> دیروز {local_time.strftime('%H:%M')}"
+            else:  # روزهای قبل به شمسی
+                jalali_date = jdatetime.datetime.fromgregorian(datetime=local_time)
+                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {jalali_date.strftime('%Y/%m/%d')}"
         except Exception as e:
-            logger.warning(f"Could not compute last seen: {e}")
+            logger.warning(f"Could not compute last seen timezone calibration: {e}")
     
     # ──── ۴. مونتاژ نهایی با محافظت در برابر خطاهای فرمت ────
     try:
-        # همه‌ی متغیرها را به صورت safe (بدون { و } آزاد) پاس می‌دهیم
         formatted_card = template_str.format(
             profile_title=profile_title,
             public_id=public_id,

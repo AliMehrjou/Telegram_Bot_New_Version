@@ -91,5 +91,5 @@ class QuestionAddStates(StatesGroup):
     confirming        = State()   
     waiting_for_excel = State()   
     confirming_bulk   = State()   
-class CommentStates(StatesGroup):
-    writing = State()   
+class ProfileCommentStates(StatesGroup):
+    waiting_for_comment_text = State()   

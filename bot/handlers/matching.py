@@ -16,11 +16,13 @@ from matching_bot_project.bot.keyboards.inline import (
     get_match_found_keyboard,
     get_question_reply_keyboard,
     get_vip_age_filter_keyboard,
+    get_active_chat_controls
 )
 from matching_bot_project.bot.keyboards.reply import (
     get_cancel_keyboard,
     get_date_phase_keyboard,          
     get_main_menu_keyboard,
+    get_chat_phase_keyboard
 )
 from matching_bot_project.bot.states.states import MatchingStates, QuestionnaireStates, VIPStates
 from matching_bot_project.database.queries import crud
@@ -486,6 +488,7 @@ async def handle_successful_match(
     session: AsyncSession,
     user_one_id: int,
     user_two_id: int,
+    is_chat: bool = False
 ) -> bool:
     """
     Employer-mandated match-initialisation workflow.
@@ -494,6 +497,42 @@ async def handle_successful_match(
     """
     # ── Step 1: persist match history ────────────────────────────────────────
     match_history = await crud.create_match_history(session, user_one_id, user_two_id)
+
+    # 🔻 مسیر ۱: درخواست چت ناشناس (بدون پرسشنامه)
+    if is_chat:
+        match_history.chat_approved = True
+        match_history.user_one_approved = True
+        match_history.user_two_approved = True
+        await session.commit()
+        
+        for uid, peer_id in [(user_one_id, user_two_id), (user_two_id, user_one_id)]:
+            ctx = get_user_state(uid)
+            await ctx.set_state(ChatStates.anonymous_chat_active)
+            await ctx.update_data(match_history_id=match_history.id, partner_id=peer_id)
+            
+            try:
+                await bot.send_message(
+                    chat_id=uid,
+                    text=(
+                        "🗣️ *اتصال با موفقیت برقرار شد! گفتگو آغاز گردید.*\n\n"
+                        "🔒 امنیت شما محفوظ است. هویت پارتنر کاملاً پنهان نگه داشته می‌شود.\n"
+                        "🚫 آیدی تلگرام، شماره تلفن و لینک‌های وب به صورت خودکار فیلتر می‌شوند.\n\n"
+                        "برای پایان دادن به گفتگو دکمه زیر را فشار دهید 👇"
+                    ),
+                    reply_markup=get_active_chat_controls(peer_id),
+                    parse_mode="Markdown"
+                )
+                await bot.send_message(
+                    chat_id=uid,
+                    text="کیبورد چت ناشناس شما آماده است 👇",
+                    reply_markup=get_chat_phase_keyboard(),
+                )
+            except Exception as exc:
+                logger.error("Failed to notify user %s of chat start: %s", uid, exc)
+                
+        return True
+
+    # 🔻 مسیر ۲: درخواست دیت (پرسشنامه)
     await session.commit()
     await dating_scheduler.register_match_timeout(match_history.id, user_one_id, user_two_id)
 
@@ -533,7 +572,7 @@ async def handle_successful_match(
                 logger.error(
                     "Failed to send no-questions notice to user %s: %s", uid, exc
                 )
-        return False  # باگ ۳: برگرداندن False برای جلوگیری از کسر سکه
+        return False
 
     q_ids_str = ",".join(str(q.id) for q in pool)
     await matching_engine.redis.set(
@@ -582,7 +621,7 @@ async def handle_successful_match(
             user_two_id,
             reason=f"notification delivery failed for user {delivery_failed_for}",
         )
-        return False  # باگ ۳: برگرداندن False برای جلوگیری از کسر سکه
+        return False
 
     # ── Step 5: set both users' FSM state ────────────────────────────────────
     for target_id in (user_one_id, user_two_id):
@@ -608,7 +647,6 @@ async def handle_successful_match(
             "Skipping question delivery.",
             match_history.id,
         )
-        # مچ فعال نیست ولی عملیات اولیه موفق بوده است
         return True
 
     # ── Steps 8 & 9: transition to answering and deliver first question ───────
