@@ -45,7 +45,7 @@ async def is_vip(db_session: AsyncSession, tg_id: int) -> bool:
     return _is_vip_active(user)
 
 
-@router.callback_query(F.data == "vip_panel")
+
 @router.callback_query(F.data == "vip_panel")
 async def open_vip_panel(call: CallbackQuery, db_session: AsyncSession):
     tg_id = call.from_user.id

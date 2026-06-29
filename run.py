@@ -20,27 +20,16 @@ from matching_bot_project.bot.handlers import comments
 logger = logging.getLogger("launcher")
 
 
+# در فایل run.py
+
 def register_bot_middlewares_and_routers():
     """Attaches all routers and intermediate global middlewares to aiogram dispatcher."""
-    # The correct middleware hierarchy: ThrottlingMiddleware -> ForceJoinMiddleware -> DbSessionMiddleware
-
-    # 1. ThrottlingMiddleware (must be outer so it catches before anything else if spammed)
     dp.message.outer_middleware(ThrottlingMiddleware())
     dp.callback_query.outer_middleware(ThrottlingMiddleware())
 
-    # 2. ForceJoinMiddleware
-    # 💡 فیکس باگ: این middleware باید قبل از DbSessionMiddleware ثبت شود، نه بعدش.
-    # میدلورهای aiogram به ترتیب ثبت، یکی داخل دیگری اجرا می‌شوند؛ پس با ثبت قبلی
-    # DbSessionMiddleware (نسخه قبلی کد)، یک session/transaction دیتابیس برای *هر*
-    # پیام/کلیک کاربرانی که هنوز عضو کانال‌ها نشده‌اند باز و بسته می‌شد — حتی
-    # کاربرانی که قرار است همان لحظه توسط ForceJoinMiddleware بلاک شوند. این یعنی
-    # زیر بار سنگین (مثلاً بعد از افزودن یک اسپانسر جدید و ری‌پرامپت‌شدن همه‌ی
-    # کاربران)، فشار غیرضروری روی Connection Pool دیتابیس وارد می‌شد. با این
-    # ترتیب جدید، کاربرانی که عضو نیستند حتی یک session دیتابیس هم مصرف نمی‌کنند.
     dp.message.middleware(ForceJoinMiddleware())
     dp.callback_query.middleware(ForceJoinMiddleware())
 
-    # 3. DbSessionMiddleware
     dp.message.middleware(DbSessionMiddleware())
     dp.callback_query.middleware(DbSessionMiddleware())
 
@@ -53,12 +42,16 @@ def register_bot_middlewares_and_routers():
     dp.include_router(interactions.router)
     dp.include_router(questionnaire.router)
     dp.include_router(anonymous_chat.router)
+    
+    # ثبت روتر VIP قبل از ادمین و بقیه ماژول‌های ثانویه
+    dp.include_router(vip.router) 
+    
     dp.include_router(admin.router)
     dp.include_router(discovery.router)
     dp.include_router(transfer.router)
     dp.include_router(payments.router)
     dp.include_router(comments.router)
-    dp.include_router(vip.router)
+    
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 

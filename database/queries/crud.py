@@ -518,10 +518,7 @@ async def add_question(
 
 
 async def get_referral_count(session: AsyncSession, tg_id: int) -> int:
-    user = await get_user_by_tg_id(session, tg_id)
-    if not user:
-        return 0
-    stmt = select(func.count(User.id)).where(User.referrer_id == user.id)
+    stmt = select(func.count(User.id)).where(User.referrer_id == tg_id)
     result = await session.execute(stmt)
     return result.scalar() or 0
 
