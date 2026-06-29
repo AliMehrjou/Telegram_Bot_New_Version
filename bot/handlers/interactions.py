@@ -17,6 +17,7 @@ from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.bot.handlers.matching import handle_successful_match
+from matching_bot_project.bot.handlers.anonymous_chat import activate_anonymous_chat_session
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.constants import ReplyBtn, SystemMsg
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
@@ -1007,6 +1008,7 @@ async def handle_requests_to_users(call: CallbackQuery, db_session: AsyncSession
 
 @router.callback_query(F.data.startswith("accept_req_date_") | F.data.startswith("accept_req_chat_"))
 async def accept_user_request(call: CallbackQuery, db_session: AsyncSession):
+    # تشخیص نوع درخواست (چت یا دیت) 
     is_chat = call.data.startswith("accept_req_chat_")
     prefix = "accept_req_chat_" if is_chat else "accept_req_date_"
     caller_id = _parse_int_suffix(call.data, prefix)
@@ -1017,9 +1019,12 @@ async def accept_user_request(call: CallbackQuery, db_session: AsyncSession):
     target_id = call.from_user.id
     req_type_str = "چت 💬" if is_chat else "دیت 💘"
     
+    # چک موجودی سکه فرستنده
     caller = await crud.get_user_by_tg_id(db_session, caller_id)
     if not caller or caller.coin_balance < 1:
         await call.answer("❌ موجودی سکه فرستنده کافی نیست. ارتباط برقرار نشد.", show_alert=True)
+        
+        # 💡 تغییر جدید: ویرایش پیام گیرنده تا دکمه‌ها حذف شوند و وضعیت شفاف باشد
         try:
             await call.message.edit_text(
                 f"❌ <b>درخواست لغو شد</b>\n"
@@ -1028,16 +1033,20 @@ async def accept_user_request(call: CallbackQuery, db_session: AsyncSession):
             )
         except TelegramBadRequest:
             pass
-        
+        except Exception as e:
+            logger.error(f"Unexpected error editing message text for insufficient coins: {e}")
+
+        # اطلاع‌رسانی به فرستنده‌ای که سکه نداشته است
         try:
             await bot.send_message(
                 caller_id, 
-                f"❌ درخواست {req_type_str} شما پذیرفته شد، اما به دلیل عدم موجودی کافی (حداقل ۱ سکه)، اتصال لغو گردید."
+                f"❌ درخواست {req_type_str} شما پذیرفته شد، اما به دلیل عدم موجودی کافی شما (حداقل ۱ سکه)، اتصال لغو گردید."
             )
         except Exception:
             pass
         return
         
+    # کسر سکه در صورت موفقیت
     await crud.process_coin_transaction(db_session, caller, -1, f"هزینه درخواست {req_type_str} پذیرفته‌شده")
     await db_session.commit()
 
@@ -1047,15 +1056,35 @@ async def accept_user_request(call: CallbackQuery, db_session: AsyncSession):
         await call.message.edit_text(f"✅ شما درخواست {req_type_str} این کاربر را قبول کردید. در حال اتصال... 🚀")
     except TelegramBadRequest:
         pass
+    except Exception as e:
+        logger.error(f"Unexpected error editing message text: {e}")
 
     try:
-        await bot.send_message(caller_id, f"🎉 درخواست {req_type_str} شما پذیرفته شد! در حال اتصال... 🚀")
+        await bot.send_message(caller_id, f"🎉 درخواست {req_type_str} شما توسط کاربر مقابل پذیرفته شد! در حال اتصال... 🚀")
     except Exception:
         pass
 
-    # 💡 اینجا is_chat به عنوان آرگومان جدید ارسال می‌شود
-    from matching_bot_project.bot.handlers.matching import handle_successful_match
-    await handle_successful_match(db_session, caller_id, target_id, is_chat=is_chat)
+    # 💡 فیکس باگ: قبلاً همیشه handle_successful_match (فلوی دیت + کوییز) صدا
+    # زده می‌شد، حتی برای درخواست‌های «چت». حالا بر اساس نوع درخواست، مسیر
+    # درست انتخاب می‌شود: چت مستقیم بدون کوییز، یا دیت با کوییز سوالات.
+    if is_chat:
+        try:
+            await activate_anonymous_chat_session(db_session, caller_id, target_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to activate direct anonymous chat session %s <-> %s: %s",
+                caller_id, target_id, exc,
+            )
+            for uid in (caller_id, target_id):
+                try:
+                    await bot.send_message(
+                        uid,
+                        "⚠️ خطایی در برقراری چت ناشناس رخ داد. لطفاً دوباره تلاش کنید.",
+                    )
+                except Exception:
+                    pass
+    else:
+        await handle_successful_match(db_session, caller_id, target_id)
 
 
 @router.callback_query(F.data.startswith("reject_req_"))
@@ -1179,3 +1208,4 @@ async def process_direct_message(message: Message, state: FSMContext, db_session
         await message.reply("⚠️ خطایی رخ داد (احتمالاً کاربر ربات را متوقف کرده است). ۱ سکه به شما برگشت داده شد.", reply_markup=get_main_menu_keyboard())
 
     await state.clear()
+

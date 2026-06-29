@@ -180,6 +180,97 @@ async def _safe_send(
         logger.error("Could not deliver message to user %d: %s", tg_id, exc)
 
 
+async def activate_anonymous_chat_session(
+    db_session: AsyncSession,
+    user_one_id: int,
+    user_two_id: int,
+    match_history: MatchHistory | None = None,
+) -> MatchHistory:
+    """
+    باز کردن کانال چت ناشناس بین دو کاربر و قرار دادن هر دو در
+    ``ChatStates.anonymous_chat_active``.
+
+    این تابع، منطق مشترکی است که هم پس از تکمیل موفق کوییز/دیت
+    (``register_chat_consent``) و هم برای درخواست‌های مستقیم چت
+    (``req_chat_`` در interactions.py، بدون نیاز به کوییز) استفاده می‌شود.
+
+    اگر ``match_history`` پاس داده نشود، یک رکورد جدید با
+    ``chat_approved=True`` ساخته می‌شود (مسیر درخواست مستقیم چت).
+    اگر پاس داده شود، فرض بر این است که از قبل ساخته شده (مسیر کوییز/دیت)
+    و فقط فلگ‌های لازم روی آن ست می‌شود.
+    """
+    if match_history is None:
+        match_history = await crud.create_match_history(db_session, user_one_id, user_two_id)
+
+    match_history.chat_approved = True
+    match_history.questionnaire_completed = True
+    match_history.user_one_approved = True
+    match_history.user_two_approved = True
+
+    try:
+        await db_session.commit()
+    except Exception as exc:
+        logger.error(
+            "DB commit failed when activating anonymous chat session %s <-> %s: %s",
+            user_one_id, user_two_id, exc,
+        )
+        await db_session.rollback()
+        raise
+
+    # خلع سلاح تایمر دیت (اگر از مسیر کوییز آمده باشد و تایمری ثبت شده باشد)
+    try:
+        await redis_client.delete(f"date:timeout:{match_history.id}")
+    except Exception as exc:
+        logger.error("Failed to disarm timeout timer for match %d: %s", match_history.id, exc)
+
+    try:
+        await redis_client.hset(f"user:state:{user_one_id}", "status", "chatting")
+        await redis_client.hset(f"user:state:{user_two_id}", "status", "chatting")
+    except Exception as exc:
+        logger.error(
+            "Redis status update failed for match %d: %s", match_history.id, exc
+        )
+
+    activation_text = (
+        "🗣️ *اتصال با موفقیت برقرار شد! گفتگو آغاز گردید.*\n\n"
+        "🔒 امنیت شما محفوظ است. هویت پارتنر کاملاً پنهان نگه داشته می‌شود.\n"
+        "🚫 آیدی تلگرام، شماره تلفن و لینک‌های وب به صورت خودکار فیلتر می‌شوند.\n\n"
+        "برای پایان دادن به گفتگو دکمه زیر را فشار دهید 👇"
+    )
+
+    for uid, peer_id in ((user_one_id, user_two_id), (user_two_id, user_one_id)):
+        ctx = _resolve_partner_fsm(uid)
+        await ctx.set_state(ChatStates.anonymous_chat_active)
+        await ctx.update_data(
+            match_history_id=match_history.id,
+            partner_id=peer_id,
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=uid,
+                text=activation_text,
+                reply_markup=get_active_chat_controls(peer_id),
+                parse_mode="Markdown",
+            )
+            try:
+                await bot.send_message(
+                    chat_id=uid,
+                    text="کیبورد چت ناشناس شما آماده است 👇",
+                    reply_markup=get_chat_phase_keyboard(),
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.error(
+                "Failed to deliver chat-activation message to user %d: %s",
+                uid,
+                exc,
+            )
+
+    return match_history
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler 1 – Consent phase (approve / reject the anonymous chat channel)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,83 +391,17 @@ async def register_chat_consent(
 
     # ── Both parties have consented → open the anonymous channel ─────────── #
     if both_approved:
-        match_history.chat_approved = True
         try:
-            await db_session.commit()
-        except Exception as exc:
-            logger.error(
-                "DB commit failed when setting chat_approved on match %d: %s",
-                match_history_id,
-                exc,
+            await activate_anonymous_chat_session(
+                db_session, match_history.user_one_id, match_history.user_two_id, match_history
             )
-            await db_session.rollback()
-            return
-
-        # 💡 اصلاح باگ ۵: خنثی کردن تایمر پس‌زمینه دیت
-        # با پاک کردن این کلید از ردیس، اگر Scheduler بیدار شود و ببیند کلید نیست، دیت را قطع نمی‌کند
-        try:
-            await redis_client.delete(f"date:timeout:{match_history.id}")
-            # اگر دسترسی مستقیم به آبجکت scheduler در این فایل دارید، می‌توانید تسک را هم صراحتاً کنسل کنید:
-            # from matching_bot_project.bot.core.loader import dating_scheduler
-            # if hasattr(dating_scheduler, 'cancel_match_timeout'):
-            #     await dating_scheduler.cancel_match_timeout(match_history.id)
-        except Exception as exc:
-            logger.error("Failed to disarm timeout timer for match %d: %s", match_history_id, exc)
-
-        # Inform external services (e.g. timeout scheduler) that both users
-        # have transitioned out of the questionnaire / consent phase.
-        try:
-            await redis_client.hset(f"user:state:{tg_id}", "status", "chatting")
-            await redis_client.hset(f"user:state:{partner_id}", "status", "chatting")
-        except Exception as exc:
-            logger.error(
-                "Redis status update failed for match %d: %s", match_history_id, exc
-            )
-
-
-        activation_text = (
-            "🗣️ *اتصال با موفقیت برقرار شد! گفتگو آغاز گردید.*\n\n"
-            "🔒 امنیت شما محفوظ است. هویت پارتنر کاملاً پنهان نگه داشته می‌شود.\n"
-            "🚫 آیدی تلگرام، شماره تلفن و لینک‌های وب به صورت خودکار فیلتر می‌شوند.\n\n"
-            "برای پایان دادن به گفتگو دکمه زیر را فشار دهید 👇"
-        )
-
-        # Set FSM state and dispatch the activation notice for both users.
-        for uid, peer_id in ((tg_id, partner_id), (partner_id, tg_id)):
-            ctx = _resolve_partner_fsm(uid)
-            await ctx.set_state(ChatStates.anonymous_chat_active)
-            await ctx.update_data(
-                match_history_id=match_history.id,
-                partner_id=peer_id,
-            )
-
-
+        except Exception:
             try:
-                partner_for_uid = match_history.user_one_id if uid == match_history.user_two_id else match_history.user_two_id
-                
-                await bot.send_message(
-                    chat_id=uid,
-                    text=activation_text,
-                    reply_markup=get_active_chat_controls(partner_for_uid),
-                    parse_mode="Markdown",
+                await call.message.answer(
+                    "⚠️ خطایی در فعال‌سازی گفتگو رخ داد. لطفاً دوباره امتحان کنید."
                 )
-                
-                # Send chat-phase reply keyboard
-                try:
-                    await bot.send_message(
-                        chat_id=uid,
-                        text="کیبورد چت ناشناس شما آماده است 👇",
-                        reply_markup=get_chat_phase_keyboard(),
-                    )
-                except Exception:
-                    pass
-
-            except Exception as exc:
-                logger.error(
-                    "Failed to deliver chat-activation message to user %d: %s",
-                    uid,
-                    exc,
-                )
+            except Exception:
+                pass
 
     # ── Only this party has approved – ask the caller to wait ────────────── #
     else:

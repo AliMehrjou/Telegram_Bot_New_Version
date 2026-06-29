@@ -23,9 +23,12 @@ async def is_vip(db_session: AsyncSession, tg_id: int) -> bool:
     if user.is_vip:
         return True
     
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    if user.vip_expires_at and user.vip_expires_at > now_utc:
-        return True
+    if user.vip_expires_at:
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        # هر دو حالت naive و aware رو پوشش می‌ده
+        expires = user.vip_expires_at.replace(tzinfo=None) if user.vip_expires_at.tzinfo else user.vip_expires_at
+        if expires > now_naive:
+            return True
         
     return False
 
@@ -153,10 +156,18 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
     # Trigger instant match!
     # باگ ۱۱ فیکس شد (بخش دوم): اضافه شدن _settle_coins_after_match به لیست ایمپورت‌های محلی
     from matching_bot_project.bot.handlers.matching import (
-        handle_successful_match, 
-        get_user_state, 
+        handle_successful_match,
         _settle_coins_after_match
     )
+    from matching_bot_project.bot.core.loader import dp
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+
+    def _get_user_state(user_tg_id: int) -> FSMContext:
+        return FSMContext(
+            storage=dp.storage,
+            key=StorageKey(bot_id=bot.id, chat_id=user_tg_id, user_id=user_tg_id)
+        )
 
     # Remove both from any queue if they are in it
     from matching_bot_project.bot.core.loader import matching_engine
@@ -164,10 +175,10 @@ async def rematch_previous_partner(call: CallbackQuery, db_session: AsyncSession
     await matching_engine.remove_from_queue(partner_id)
 
     # Clear FSM states to prevent trapping users in previous states
-    caller_ctx = get_user_state(tg_id)
+    caller_ctx = _get_user_state(tg_id)
     await caller_ctx.clear()
     
-    partner_ctx = get_user_state(partner_id)
+    partner_ctx = _get_user_state(partner_id)
     await partner_ctx.clear()
 
     await call.message.answer(f"🔁 در حال اتصال مجدد به پارتنر قبلی... (هزینه: {REMATCH_COST} سکه در صورت موفقیت)")

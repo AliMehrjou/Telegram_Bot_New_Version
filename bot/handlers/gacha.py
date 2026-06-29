@@ -44,9 +44,23 @@ async def process_open_lootbox(call: CallbackQuery, db_session: AsyncSession):
         
     if user.lootbox_count <= 0:
         return await call.answer("📦 شما هیچ صندوقچه‌ای برای باز کردن ندارید!", show_alert=True)
-        
-    # کم کردن یکی از صندوق‌ها
-    user.lootbox_count -= 1
+
+    # FIX: atomic check-and-decrement — جلوگیری از race condition دوبار کلیک
+    from sqlalchemy import update as sa_update
+    result = await db_session.execute(
+        sa_update(type(user))
+        .where(type(user).tg_id == user.tg_id, type(user).lootbox_count > 0)
+        .values(lootbox_count=type(user).lootbox_count - 1)
+        .returning(type(user).lootbox_count)
+    )
+    updated = result.fetchone()
+    if not updated:
+        await db_session.rollback()
+        return await call.answer("📦 صندوقچه‌ای برای باز کردن وجود ندارد!", show_alert=True)
+    await db_session.commit()
+
+    # refresh برای خواندن مقدار جدید
+    await db_session.refresh(user)
     
     # منطق گاچا (Gacha Drop Rates)
     rand_val = random.random()

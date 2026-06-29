@@ -128,11 +128,13 @@ async def handle_start_command(
     
     if command.args and command.args.startswith("ref_"):
         try:
-            ref_id_candidate = int(command.args.split("_", 1)[1])
+            # فرمت: ref_{tg_id} یا ref_{tg_id}_{filter}
+            ref_parts = command.args.split("_")  # ["ref", "123456"] یا ["ref", "123456", "city"]
+            ref_id_candidate = int(ref_parts[1])
             if ref_id_candidate != tg_id:
                 referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                 if referrer:
-                    referrer_id = referrer.id # FIX: Storing Telegram ID instead of DB Primary Key
+                    referrer_id = referrer.tg_id  # FIX: tg_id نه .id (DB pk)
         except Exception:
             pass
 
@@ -144,7 +146,7 @@ async def handle_start_command(
                 if ref_id_candidate != tg_id:
                     referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
                     if referrer:
-                         referrer_id = referrer.id  # FIX: Storing Telegram ID instead of DB Primary Key
+                        referrer_id = referrer.tg_id  # FIX: tg_id نه .id (DB pk)
             except Exception:
                 pass
             await redis_client.delete(f"pending_ref:{tg_id}")
@@ -501,9 +503,9 @@ async def show_coin_wallet(message: Message, db_session: AsyncSession) -> None:
         await message.answer("⚠️ ابتدا ثبت‌نام خود را تکمیل کنید. /start")
         return
 
-    coin_balance: int = getattr(user, "coin_balance", getattr(user, "vip_quota", 0))
+    coin_balance: int = getattr(user, "coin_balance", 0)
     coins_spent: int = getattr(user, "total_spent_coins", 0)
-    total_earned: int = getattr(user, "total_earned_coins", coin_balance + coins_spent)
+    total_earned: int = getattr(user, "total_earned_coins", 0)
 
     bot_name = str(settings.BOT_USERNAME).replace("@", "")
     invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}"
@@ -668,4 +670,4 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
-    
+
