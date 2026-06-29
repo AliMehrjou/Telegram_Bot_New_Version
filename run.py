@@ -16,7 +16,7 @@ from matching_bot_project.bot.handlers import (
 )
 from matching_bot_project.bot.handlers import payments
 from matching_bot_project.bot.handlers import comments
-
+from matching_bot_project.bot.middlewares.state_lock import StateLockMiddleware
 logger = logging.getLogger("launcher")
 
 
@@ -33,6 +33,10 @@ def register_bot_middlewares_and_routers():
     dp.message.middleware(DbSessionMiddleware())
     dp.callback_query.middleware(DbSessionMiddleware())
 
+    # ----- NEW: State lock middleware (blocks menu during active sessions) -----
+    dp.message.middleware(StateLockMiddleware())
+    dp.callback_query.middleware(StateLockMiddleware())
+
     # Attach feature handlers to the core stack
     dp.include_router(start.router)
     dp.include_router(profile.router)
@@ -42,16 +46,13 @@ def register_bot_middlewares_and_routers():
     dp.include_router(interactions.router)
     dp.include_router(questionnaire.router)
     dp.include_router(anonymous_chat.router)
-    
-    # ثبت روتر VIP قبل از ادمین و بقیه ماژول‌های ثانویه
-    dp.include_router(vip.router) 
-    
+    dp.include_router(vip.router)
     dp.include_router(admin.router)
     dp.include_router(discovery.router)
     dp.include_router(transfer.router)
     dp.include_router(payments.router)
     dp.include_router(comments.router)
-    
+
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 
