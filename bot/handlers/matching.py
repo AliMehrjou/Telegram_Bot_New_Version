@@ -31,6 +31,17 @@ from matching_bot_project.database.models.models import User
 from matching_bot_project.bot.core.constants import SystemMsg
 from matching_bot_project.bot.core.constants import ReplyBtn
 
+
+from datetime import datetime, timezone
+import logging
+
+from aiogram.fsm.context import FSMContext
+from sqlalchemy.ext.asyncio import AsyncSession
+from matching_bot_project.database.queries import crud
+
+
+
+
 logger = logging.getLogger(__name__)
 router = Router(name="matching_handler")
 
@@ -677,3 +688,44 @@ async def handle_successful_match(
             )
             
     return True
+
+async def auto_heal_ghost_state(tg_id: int, state: FSMContext, db_session: AsyncSession) -> bool:
+    """
+    تشخیص و رفع خودکار Ghost State.
+    اگر استیت FSM کاربر خالی باشد (در منوی اصلی باشد) اما دیتابیس یا ردیس 
+    او را درگیر یک دیت فعال نشان دهند، دیتای گیر کرده پاکسازی می‌شود.
+    """
+    current_state = await state.get_state()
+    
+    # ۱. اگر کاربر واقعاً در فرآیند چت، مچینگ یا پاسخ به سوالات است، کاری نمی‌کنیم (شبح نیست)
+    if current_state and any(phase in current_state.lower() for phase in ["chat", "matching", "questionnaire"]):
+        return False
+
+    healed = False
+
+    # ۲. بررسی و پاکسازی دیتابیس (بستن دیت‌های باز و رها شده)
+    active_match = await crud.get_active_match(db_session, tg_id)
+    if active_match:
+        active_match.is_active = False
+        active_match.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        # پاکسازی تایمرهای احتمالی منقضی نشده در بک‌گراند
+        try:
+            if hasattr(dating_scheduler, 'cancel_match_timeout'):
+                await dating_scheduler.cancel_match_timeout(active_match.id)
+            await redis_client.delete(f"date:timeout:{active_match.id}")
+        except Exception as exc:
+            logger.warning(f"Failed to clear timeouts during auto-heal for match {active_match.id}: {exc}")
+            
+        await db_session.commit()
+        logger.info(f"Auto-healed ghost DB match {active_match.id} for user {tg_id}")
+        healed = True
+
+    # ۳. بررسی و پاکسازی کش ردیس (خروج اجباری از صف یا وضعیت چت)
+    redis_state_exists = await redis_client.exists(f"user:state:{tg_id}")
+    if redis_state_exists:
+        await matching_engine.remove_from_queue(tg_id)
+        logger.info(f"Auto-healed ghost Redis state for user {tg_id}")
+        healed = True
+        
+    return healed

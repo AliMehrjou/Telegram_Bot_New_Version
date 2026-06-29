@@ -8,7 +8,7 @@ from matching_bot_project.bot.core.loader import dp, bot, matching_engine
 from matching_bot_project.bot.middlewares.database import DbSessionMiddleware
 from matching_bot_project.bot.middlewares.force_join import ForceJoinMiddleware
 from matching_bot_project.bot.middlewares.anti_spam import ThrottlingMiddleware
-
+from matching_bot_project.bot.handlers import vip
 from matching_bot_project.bot.handlers import (
     start, profile, profile_edit, matching, 
     questionnaire, anonymous_chat, explore, 
@@ -58,6 +58,7 @@ def register_bot_middlewares_and_routers():
     dp.include_router(transfer.router)
     dp.include_router(payments.router)
     dp.include_router(comments.router)
+    dp.include_router(vip.router)
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 

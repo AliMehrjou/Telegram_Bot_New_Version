@@ -102,7 +102,6 @@ dating_scheduler = DatingScheduler(
     dp=dp,
     redis_client=redis_client,
     session_factory=session_factory_instance,
-    timeout_seconds=180
 )
 
 logger.info("Bot loader initialized successfully.")

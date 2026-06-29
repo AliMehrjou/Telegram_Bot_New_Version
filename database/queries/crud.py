@@ -3,7 +3,7 @@ import string
 import random
 import math
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select, and_, or_, func, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -195,7 +195,7 @@ async def get_active_match(session: AsyncSession, tg_id: int) -> Optional[MatchH
         )
     )
     res = await session.execute(stmt)
-    return res.scalar_one_or_none()
+    return res.scalars().first()
 
 
 async def get_random_questions(session: AsyncSession, limit: int = 20) -> List[Question]:

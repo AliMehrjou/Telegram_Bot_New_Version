@@ -101,7 +101,7 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
     if is_own_profile:
         coin_balance = getattr(user, 'coin_balance', 0)
         private_info = (
-            f"\n<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-cookie> <b>موجودی سکه:</b> {coin_balance} سکه\n"
+            f"\n<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> <b>موجودی سکه:</b> {coin_balance} سکه\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"<tg-emoji emoji-id=\"5371017798065592581\">🔔</tg-emoji> تنظیم حالت سایلنت: /silent\n"
             f"<tg-emoji emoji-id=\"5465665476971471368\">❌</tg-emoji> حذف اکانت ربات: /delete_account\n"

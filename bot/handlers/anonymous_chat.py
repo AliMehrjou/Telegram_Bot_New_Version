@@ -57,6 +57,37 @@ logger = logging.getLogger(__name__)
 router = Router(name="anonymous_chat_handler")
 
 
+async def _recover_chat_session(tg_id: int, state: FSMContext) -> tuple[int | None, int | None]:
+    """
+    وقتی کاربر در ChatStates.anonymous_chat_active هست ولی FSM data ناقصه
+    (مثلاً بعد از رفتن به پروفایل و برگشتن)، اطلاعات چت رو از Redis بازیابی
+    می‌کنه و دوباره در FSM ذخیره می‌کنه تا چت ادامه پیدا کنه.
+
+    Returns:
+        (partner_id, match_history_id)
+    """
+    try:
+        redis_state = await redis_client.hgetall(f"user:state:{tg_id}")
+        matched_with = redis_state.get("matched_with") if redis_state else None
+        partner_id = int(matched_with) if matched_with else None
+
+        fsm_data = await state.get_data()
+        match_history_id = fsm_data.get("match_history_id")
+
+        if partner_id:
+            await state.update_data(partner_id=partner_id)
+            logger.info(
+                "Recovered partner_id=%d for user %d from Redis (FSM data was stale).",
+                partner_id, tg_id,
+            )
+
+        return partner_id, match_history_id
+
+    except Exception as exc:
+        logger.error("Failed to recover chat session for user %d: %s", tg_id, exc)
+        return None, None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Security filter configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -432,10 +463,14 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
     fsm_data: dict = await state.get_data()
     partner_id: int | None = fsm_data.get("partner_id")
 
-    # Guard: partner_id must be present; absence indicates a broken session.
+    # Guard: اگه partner_id در FSM نبود (مثلاً کاربر رفته پروفایل و برگشته)،
+    # اول از Redis بازیابی کن — فقط اگه اونجا هم نبود چت رو ببند.
+    if not partner_id:
+        partner_id, _ = await _recover_chat_session(tg_id, state)
+
     if not partner_id:
         logger.error(
-            "User %d is in anonymous_chat_active but has no partner_id in FSM.",
+            "User %d is in anonymous_chat_active but partner_id not found in FSM or Redis. Closing session.",
             tg_id,
         )
         await message.answer(
@@ -527,6 +562,51 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             "یا پارتنر ربات را بلاک کرده است."
         )
         
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler 2.5 – Profile view during chat (restore chat session on return)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.message(
+    ChatStates.anonymous_chat_active,
+    F.text == ReplyBtn.PHASE_USER_PROFILE,
+)
+async def view_partner_profile_during_chat(message: Message, state: FSMContext) -> None:
+    """
+    کاربر در حین چت ناشناس روی دکمه "پروفایل" زده.
+    
+    مشکل اصلی: هندلرهای پروفایل/کامنت ممکنه state.clear() یا state.update_data()
+    بزنن و partner_id رو از FSM پاک کنن. بعد از برگشت، کاربر در 
+    ChatStates.anonymous_chat_active میمونه ولی چت یه‌طرفه میشه.
+    
+    راه‌حل: قبل از فوروارد کردن به هندلر پروفایل، partner_id و match_history_id
+    رو در Redis ذخیره می‌کنیم. بعد از برگشت، _recover_chat_session اون‌ها رو
+    دوباره در FSM بازیابی می‌کنه.
+    """
+    tg_id = message.from_user.id
+    fsm_data = await state.get_data()
+    partner_id = fsm_data.get("partner_id")
+    match_history_id = fsm_data.get("match_history_id")
+
+    # اگه partner_id از قبل در FSM نیست، از Redis بازیابی کن
+    if not partner_id:
+        partner_id, match_history_id = await _recover_chat_session(tg_id, state)
+
+    # partner_id رو در Redis ذخیره کن تا بعد از برگشت از پروفایل قابل بازیابی باشه
+    # (user:state:{tg_id} توسط matching_engine ست شده و matched_with داره)
+    # این فقط یه لایه اطمینان اضافیه.
+    if partner_id:
+        try:
+            await redis_client.hset(f"user:state:{tg_id}", "matched_with", str(partner_id))
+        except Exception as exc:
+            logger.warning("Could not persist matched_with for user %d: %s", tg_id, exc)
+
+    await message.answer(
+        "👤 برای دیدن پروفایل پارتنر از دکمه‌های زیر استفاده کنید. "
+        "وقتی برگشتید می‌تونید ادامه بدید — چت فعاله! 🟢",
+        reply_markup=get_chat_phase_keyboard(),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler 3 – Voluntary chat termination
 # ─────────────────────────────────────────────────────────────────────────────

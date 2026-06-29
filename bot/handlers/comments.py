@@ -35,6 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.states.states import ProfileCommentStates
 from matching_bot_project.bot.core.loader import bot
+from matching_bot_project.bot.states.states import ProfileCommentStates, ChatStates
+from matching_bot_project.bot.core.loader import bot, redis_client
 
 logger = logging.getLogger(__name__)
 router = Router(name="comments_handler")
@@ -273,13 +275,28 @@ async def start_add_comment(call: CallbackQuery, state: FSMContext, db_session: 
     await call.message.answer(prompt, parse_mode="HTML")
     await call.answer()
 
+async def _safe_clear_state(tg_id: int, state: FSMContext):
+    """گارد محافظ: اگر کاربر وسط چت ناشناس بود، به جای حذف کامل وضعیت، او را به چت برمی‌گرداند"""
+    try:
+        user_status = await redis_client.hget(f"user:state:{tg_id}", "status")
+        # چک می‌کنیم وضعیت کاربر در ردیس در حال چت هست یا نه
+        if user_status in ["chatting", b"chatting"]:
+            await state.set_state(ChatStates.anonymous_chat_active)
+            return
+    except Exception as e:
+        logger.error(f"Error checking redis state: {e}")
+        
+    # در غیر این صورت (مثلاً اگه از منوی اصلی اومده بود)، استیت با خیال راحت پاک می‌شه
+    await state.clear()
+
 
 @router.message(ProfileCommentStates.waiting_for_comment_text)
 async def process_comment_text(message: Message, state: FSMContext, db_session: AsyncSession):
     text = (message.text or "").strip()
+    tg_id = message.from_user.id
 
     if text.lower() == "/cancel":
-        await state.clear()
+        await _safe_clear_state(tg_id, state)
         await message.answer("❌ عملیات لغو شد.")
         return
 
@@ -292,17 +309,17 @@ async def process_comment_text(message: Message, state: FSMContext, db_session: 
         return
 
     data = await state.get_data()
-    target_tg_id = data["target_tg_id"]
-    author_tg_id = message.from_user.id
+    target_tg_id = data.get("target_tg_id")
+    author_tg_id = tg_id
 
     # چک مجدد: ممکنه بین شروع و ارسال متن، کامنت‌گذاری بسته یا کاربر بلاک شده باشه
     if await crud.are_comments_disabled(db_session, target_tg_id):
-        await state.clear()
+        await _safe_clear_state(tg_id, state)
         await message.answer("🔒 این کاربر کامنت‌گذاری روی پروفایلش را بسته است. کامنت شما ثبت نشد.")
         return
 
     if await crud.is_blocked(db_session, blocker_id=target_tg_id, blocked_id=author_tg_id):
-        await state.clear()
+        await _safe_clear_state(tg_id, state)
         await message.answer("🚫 شما توسط این کاربر مسدود شده‌اید و کامنت شما ثبت نشد.")
         return
 
@@ -314,7 +331,9 @@ async def process_comment_text(message: Message, state: FSMContext, db_session: 
         text=safe_text,
     )
     await db_session.commit()
-    await state.clear()
+    
+    # 💡 رفع باگ پریدن از چت: استفاده از تابع هوشمند برای بازگردانی استیت
+    await _safe_clear_state(tg_id, state)
 
     is_edit = comment.created_at != comment.updated_at
     action = "ویرایش" if is_edit else "ثبت"
@@ -333,6 +352,7 @@ async def process_comment_text(message: Message, state: FSMContext, db_session: 
     # نوتیف به صاحب پروفایل
     author_name = message.from_user.first_name or "کاربر"
     await _notify_new_comment(target_tg_id, author_name, safe_text, is_edit)
+
 
 
 # ══════════════════════════════════════════════════════════════

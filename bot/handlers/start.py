@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matching_bot_project.bot.core.config import settings
-from matching_bot_project.bot.core.loader import bot, redis_client
+from matching_bot_project.bot.core.loader import bot, redis_client, matching_engine
 from matching_bot_project.bot.keyboards.inline import (
     get_coins_menu_keyboard,
     get_gender_keyboard,
@@ -43,14 +43,14 @@ from matching_bot_project.bot.states.states import (
     QuestionnaireStates,
 )
 from matching_bot_project.database.queries import crud
-from matching_bot_project.services import matching_engine
 
 # Moved these imports to the top level
 from matching_bot_project.bot.handlers.profile_edit import IRAN_DATA, get_cities_reply_keyboard, get_provinces_reply_keyboard
 
 # --- NEW CONSTANTS IMPORT ---
 from matching_bot_project.bot.core.constants import ReplyBtn
-
+from datetime import datetime, timezone
+from matching_bot_project.bot.core.loader import dating_scheduler
 logger = logging.getLogger(__name__)
 router = Router(name="start_handler")
 
@@ -406,7 +406,7 @@ async def register_city(message: Message, state: FSMContext, db_session: AsyncSe
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.message(F.text == ReplyBtn.START_DATE)
-async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> None:
+async def start_anonymous_dating(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     tg_id = message.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
 
@@ -414,14 +414,12 @@ async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> 
         await message.answer("⚠️ رفیق ابتدا باید ثبت‌نامت رو تکمیل کنی.\nدستور /start رو بفرست تا شروع کنیم.")
         return
 
-    try:
-        active_match = await crud.get_active_match(db_session, tg_id)
-    except Exception:
-        logger.exception("get_active_match failed for user %d", tg_id)
-        await message.answer("⚠️ خطای سرور رخ داد. لطفاً چند لحظه دیگه دوباره تلاش کن.")
-        return
+    # 💡 اجرای سیستم خوددرمانی (Auto-Heal) قبل از هر لاجیک دیگه‌ای
+    await auto_heal_ghost_state(tg_id, state, db_session)
 
-    if active_match:
+    # 💡 بررسی وضعیت واقعی (بر اساس FSM)
+    current_state = await state.get_state()
+    if current_state and any(phase in current_state.lower() for phase in ["chat", "matching", "questionnaire"]):
         await message.answer("⚠️ شما در حال حاضر تو یه دیت فعال هستی!\nلطفاً اول اونو تموم کن بعد بیا سراغ یه دیت جدید.")
         return
 
@@ -440,7 +438,6 @@ async def start_anonymous_dating(message: Message, db_session: AsyncSession) -> 
         reply_markup=get_matching_type_keyboard(),
         parse_mode="HTML" 
     )
-
 
 @router.message(F.text == ReplyBtn.NEARBY)
 async def show_nearby_people(message: Message, db_session: AsyncSession) -> None:
@@ -670,4 +667,45 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
+
+async def auto_heal_ghost_state(tg_id: int, state: FSMContext, db_session: AsyncSession) -> bool:
+    """
+    تشخیص و رفع خودکار Ghost State.
+    اگر استیت FSM کاربر خالی باشد اما دیتابیس یا ردیس او را درگیر یک دیت فعال نشان دهند، 
+    دیتای گیر کرده پاکسازی می‌شود.
+    """
+    current_state = await state.get_state()
+    
+    # ۱. اگر کاربر واقعاً در فرآیند است، شبح نیست و کاری نمی‌کنیم
+    if current_state and any(phase in current_state.lower() for phase in ["chat", "matching", "questionnaire"]):
+        return False
+
+    healed = False
+
+    # ۲. پاکسازی دیتابیس (بستن دیت‌های باز و رها شده)
+    active_match = await crud.get_active_match(db_session, tg_id)
+    if active_match:
+        active_match.is_active = False
+        active_match.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        # پاکسازی تایمرهای بک‌گراند
+        try:
+            if hasattr(dating_scheduler, 'cancel_match_timeout'):
+                await dating_scheduler.cancel_match_timeout(active_match.id)
+            await redis_client.delete(f"date:timeout:{active_match.id}")
+        except Exception as exc:
+            logger.warning(f"Failed to clear timeouts during auto-heal: {exc}")
+            
+        await db_session.commit()
+        logger.info(f"Auto-healed ghost DB match {active_match.id} for user {tg_id}")
+        healed = True
+
+    # ۳. پاکسازی کش ردیس (خروج اجباری از صف)
+    redis_state_exists = await redis_client.exists(f"user:state:{tg_id}")
+    if redis_state_exists:
+        await matching_engine.remove_from_queue(tg_id)
+        logger.info(f"Auto-healed ghost Redis state for user {tg_id}")
+        healed = True
+        
+    return healed
 

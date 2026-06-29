@@ -61,24 +61,38 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
 
         profile_card = build_unified_profile_card(user, is_own_profile=True)
 
-        inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
-            [InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")]
-        ])
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        is_user_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
 
-        # ---- ارسال عکس (با سیستم شکارچی ارور) ----
+        inline_rows = [
+            [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")]
+        ]
+        
+        # دکمه VIP فقط برای کاربران ویژه نمایش داده می‌شود
+        if is_user_vip:
+            inline_rows.append([InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")])
+            
+        inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
+
+# ---- ارسال عکس (با سیستم شکارچی ارور) ----
         photo_id = getattr(user, 'profile_photo_file_id', None)
         photo_sent = False
         if photo_id:
             try:
-                if len(profile_card) > 1024:
-                    await message.answer_photo(photo=photo_id)
-                    await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
-                else:
+                try:
+                    # تلگرام لیمیت 1024 را روی متن نهایی اعمال می‌کند نه کدهای HTML
                     await message.answer_photo(photo=photo_id, caption=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
+                except TelegramBadRequest as e:
+                    if "caption is too long" in str(e).lower():
+                        # فقط اگر متن قابل مشاهده واقعاً طولانی بود، جدا ارسال شود
+                        await message.answer_photo(photo=photo_id)
+                        await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
+                    else:
+                        raise e
                 photo_sent = True
             except Exception as photo_err:
                 err_str = str(photo_err)
+                
                 if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
                     logger.warning(f"Invalid Photo ID for user {tg_id}. Clearing from DB.")
                     user.profile_photo_file_id = None
