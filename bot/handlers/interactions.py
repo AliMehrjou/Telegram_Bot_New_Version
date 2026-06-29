@@ -168,31 +168,31 @@ async def view_partner_profile(call: CallbackQuery, db_session: AsyncSession) ->
 
 @router.message(F.text == ReplyBtn.PHASE_USER_PROFILE)
 async def view_partner_profile_from_reply_btn(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    # ... (کدهای اولیه تابع دست نخورده باقی می‌ماند) ...
+    # ... کدهای بالای تابع که دست نخورده باقی می‌ماند ...
 
+    # 💡 اصلاح: استفاده از user.tg_id به جای target_id
     block_result = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == message.from_user.id,
-            BlockList.blocked_id == target_id,
+            BlockList.blocked_id == user.tg_id,
         )
     )
     is_blocked = block_result.scalar_one_or_none() is not None
     
     try:
-        already_friend = await crud.is_friend(db_session, message.from_user.id, target_id)
+        already_friend = await crud.is_friend(db_session, message.from_user.id, user.tg_id)
     except Exception:
         already_friend = False
 
-    # 💡 تغییر این خط: ارسال in_active_match=True برای مخفی کردن دکمه‌های اضافی
+    # 💡 ارسال in_active_match=True برای مخفی کردن دکمه‌های انتقال سکه و دایرکت
     action_kb = get_user_action_keyboard(
-        target_id, 
+        user.tg_id, 
         is_blocked=is_blocked, 
         is_friend=already_friend, 
         in_active_match=True
     )
     
     await _send_profile_card(target_chat_id=message.from_user.id, user=user, action_kb=action_kb)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – End Date Early (and Extracted Helpers)
