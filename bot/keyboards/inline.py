@@ -141,7 +141,7 @@ def get_end_chat_confirm_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=InlineBtn.CANCEL_RETURN, callback_data="cancel_end_chat", icon_custom_emoji_id="5427009714745517609", style="success")]
     ])
 
-def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_friend: bool = False) -> InlineKeyboardMarkup:
+def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_friend: bool = False, in_active_match: bool = False) -> InlineKeyboardMarkup:
     block_text = InlineBtn.ACTION_UNBLOCK if is_blocked else InlineBtn.ACTION_BLOCK
     block_style = "success" if is_blocked else "danger"
     block_callback = f"unblock_user_{target_tg_id}" if is_blocked else f"block_user_{target_tg_id}"
@@ -151,15 +151,23 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
     friend_callback = f"remove_friend_{target_tg_id}" if is_friend else f"add_friend_{target_tg_id}"
     friend_emoji = "5471954395719539651" if is_friend else "5370867268051806190"
 
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DATE, callback_data=f"req_date_{target_tg_id}", icon_custom_emoji_id="5359370246190801956", style="primary"),
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_CHAT, callback_data=f"req_chat_{target_tg_id}", icon_custom_emoji_id="5465300082628763143", style="primary")
-        ],
-        [
-            InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}", icon_custom_emoji_id="5472019095106886003", style="primary"),
-            InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary")
-        ],
+    inline_keyboard = []
+    
+    # 💡 اگر کاربر وسط چت/دیت نیست، دکمه‌های درخواست و انتقال سکه نمایش داده شوند
+    if not in_active_match:
+        inline_keyboard.extend([
+            [
+                InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DATE, callback_data=f"req_date_{target_tg_id}", icon_custom_emoji_id="5359370246190801956", style="primary"),
+                InlineKeyboardButton(text=InlineBtn.ACTION_REQ_CHAT, callback_data=f"req_chat_{target_tg_id}", icon_custom_emoji_id="5465300082628763143", style="primary")
+            ],
+            [
+                InlineKeyboardButton(text=InlineBtn.ACTION_REQ_DIRECT, callback_data=f"req_direct_{target_tg_id}", icon_custom_emoji_id="5472019095106886003", style="primary"),
+                InlineKeyboardButton(text=InlineBtn.ACTION_TRANSFER_COIN, callback_data=f"transfer_coin_{target_tg_id}", icon_custom_emoji_id="5472030678633684592", style="primary")
+            ]
+        ])
+        
+    # 💡 دکمه‌های همیشگی (کامنت، لایک، اد فرند، بلاک، ریپورت) که همیشه باید باشند
+    inline_keyboard.extend([
         [
             InlineKeyboardButton(text=friend_text, callback_data=friend_callback, icon_custom_emoji_id=friend_emoji, style=friend_style),
             InlineKeyboardButton(text=InlineBtn.ACTION_LIKE, callback_data=f"like_user_{target_tg_id}", icon_custom_emoji_id="5449505950283078474", style="primary")
@@ -168,6 +176,8 @@ def get_user_action_keyboard(target_tg_id: int, is_blocked: bool = False, is_fri
         [InlineKeyboardButton(text=block_text, callback_data=block_callback, icon_custom_emoji_id="5472308992514464048", style=block_style)],
         [InlineKeyboardButton(text=InlineBtn.ACTION_REPORT, callback_data=f"report_user_{target_tg_id}", icon_custom_emoji_id="5467928559664242360", style="danger")]
     ])
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 def get_report_reasons_keyboard(reported_tg_id: int) -> InlineKeyboardMarkup:
     reasons = [

@@ -109,8 +109,10 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
         )
     
     # آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
+# آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
     last_seen_text = ""
-    if not is_own_profile and hasattr(user, 'last_active') and user.last_active:
+    # 💡 شرطِ پنهان بودن برای خود کاربر رو برداشتم تا کارکرد سیستم رو ببینی
+    if hasattr(user, 'last_active') and user.last_active:
         try:
             last_active_dt = user.last_active
             # فرونشاندن ماهیت خام دیتا عودتی از MySQL به ساختار آگاهِ UTC
@@ -122,20 +124,32 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
             local_time = last_active_dt.astimezone(tehran_tz)
             now_tehran = datetime.now(tehran_tz)
             
-            diff = (now_tehran - local_time).total_seconds()
+            # جلوگیری از منفی شدن زمان به دلیل اختلاف میلی‌ثانیه‌ای سرورها
+            diff = max(0, (now_tehran - local_time).total_seconds())
+            
+            # تابع کمکی برای فارسی کردن اعداد خروجی (خیلی تو ظاهر ربات تاثیر داره)
+            def to_persian_num(text):
+                trans = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+                return str(text).translate(trans)
+            
+            time_str = to_persian_num(local_time.strftime('%H:%M'))
+            
+            # استفاده از ایموجی پریمیوم هماهنگ با بقیه بخش‌های پروفایل
+            prefix = "\n<tg-emoji emoji-id=\"5424885441100782420\">👀</tg-emoji> <b>آخرین بازدید:</b> "
             
             if diff < 300:  # کمتر از ۵ دقیقه
-                last_seen_text = "\n⏱ <b>آخرین بازدید:</b> آنلاین 🟢"
+                last_seen_text = prefix + "آنلاین 🟢"
             elif diff < 3600:  # کمتر از ۱ ساعت
                 mins = max(1, int(diff // 60))
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {mins} دقیقه پیش"
+                last_seen_text = prefix + f"{to_persian_num(mins)} دقیقه پیش"
             elif diff < 86400 and now_tehran.date() == local_time.date():  # امروز
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> امروز {local_time.strftime('%H:%M')}"
+                last_seen_text = prefix + f"امروز {time_str}"
             elif diff < 172800 and (now_tehran.date() - local_time.date()).days == 1:  # دیروز
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> دیروز {local_time.strftime('%H:%M')}"
+                last_seen_text = prefix + f"دیروز {time_str}"
             else:  # روزهای قبل به شمسی
                 jalali_date = jdatetime.datetime.fromgregorian(datetime=local_time)
-                last_seen_text = f"\n⏱ <b>آخرین بازدید:</b> {jalali_date.strftime('%Y/%m/%d')}"
+                date_str = to_persian_num(jalali_date.strftime('%Y/%m/%d'))
+                last_seen_text = prefix + f"{date_str}"
         except Exception as e:
             logger.warning(f"Could not compute last seen timezone calibration: {e}")
     

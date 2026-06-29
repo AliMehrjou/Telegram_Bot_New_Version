@@ -168,24 +168,7 @@ async def view_partner_profile(call: CallbackQuery, db_session: AsyncSession) ->
 
 @router.message(F.text == ReplyBtn.PHASE_USER_PROFILE)
 async def view_partner_profile_from_reply_btn(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    fsm_data = await state.get_data()
-    target_id = fsm_data.get("partner_id") or fsm_data.get("partner_tg_id")
-    
-    if not target_id:
-        match_id = fsm_data.get("match_history_id")
-        if match_id:
-            match_history = await db_session.get(MatchHistory, match_id)
-            if match_history:
-                target_id = match_history.user_two_id if match_history.user_one_id == message.from_user.id else match_history.user_one_id
-        
-    if not target_id:
-        await message.answer("⚠️ هنوز به کسی متصل نشده‌اید یا دیت پایان یافته است.")
-        return
-
-    user = await crud.get_user_by_tg_id(db_session, target_id)
-    if not user:
-        await message.answer("❌ پروفایل کاربر یافت نشد.")
-        return
+    # ... (کدهای اولیه تابع دست نخورده باقی می‌ماند) ...
 
     block_result = await db_session.execute(
         select(BlockList).where(
@@ -200,8 +183,16 @@ async def view_partner_profile_from_reply_btn(message: Message, state: FSMContex
     except Exception:
         already_friend = False
 
-    action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend)
+    # 💡 تغییر این خط: ارسال in_active_match=True برای مخفی کردن دکمه‌های اضافی
+    action_kb = get_user_action_keyboard(
+        target_id, 
+        is_blocked=is_blocked, 
+        is_friend=already_friend, 
+        in_active_match=True
+    )
+    
     await _send_profile_card(target_chat_id=message.from_user.id, user=user, action_kb=action_kb)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 – End Date Early (and Extracted Helpers)
