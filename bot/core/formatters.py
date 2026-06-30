@@ -6,7 +6,8 @@ from typing import Optional
 from datetime import datetime, timezone
 import pytz
 import jdatetime
-
+import re
+from aiogram.types import InlineKeyboardButton
 logger = logging.getLogger(__name__)
 
 def _safe_format_var(value: str) -> str:
@@ -108,33 +109,31 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
             f"<tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
         )
     
-    # آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
 # آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
     last_seen_text = ""
-    # 💡 شرطِ پنهان بودن برای خود کاربر رو برداشتم تا کارکرد سیستم رو ببینی
     if hasattr(user, 'last_active') and user.last_active:
         try:
             last_active_dt = user.last_active
-            # فرونشاندن ماهیت خام دیتا عودتی از MySQL به ساختار آگاهِ UTC
+            # اگر زمان ذخیره شده در دیتابیس naive است، فرض می‌کنیم UTC است
             if last_active_dt.tzinfo is None:
                 last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
                 
-            # انتقال جهت جغرافیایی زمان به آسیا/تهران
+            # تبدیل به ساعت ایران
             tehran_tz = pytz.timezone('Asia/Tehran')
             local_time = last_active_dt.astimezone(tehran_tz)
-            now_tehran = datetime.now(tehran_tz)
             
-            # جلوگیری از منفی شدن زمان به دلیل اختلاف میلی‌ثانیه‌ای سرورها
+            # 💡 تغییر مهم: گرفتن زمان حال در حالت UTC و سپس تبدیل به تهران برای دقت ۱۰۰٪
+            now_utc = datetime.now(timezone.utc)
+            now_tehran = now_utc.astimezone(tehran_tz)
+            
+            # جلوگیری از منفی شدن اختلاف به دلیل تأخیر سرور
             diff = max(0, (now_tehran - local_time).total_seconds())
             
-            # تابع کمکی برای فارسی کردن اعداد خروجی (خیلی تو ظاهر ربات تاثیر داره)
             def to_persian_num(text):
                 trans = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
                 return str(text).translate(trans)
             
             time_str = to_persian_num(local_time.strftime('%H:%M'))
-            
-            # استفاده از ایموجی پریمیوم هماهنگ با بقیه بخش‌های پروفایل
             prefix = "\n<tg-emoji emoji-id=\"5424885441100782420\">👀</tg-emoji> <b>آخرین بازدید:</b> "
             
             if diff < 300:  # کمتر از ۵ دقیقه
@@ -152,6 +151,7 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
                 last_seen_text = prefix + f"{date_str}"
         except Exception as e:
             logger.warning(f"Could not compute last seen timezone calibration: {e}")
+
     
     # ──── ۴. مونتاژ نهایی با محافظت در برابر خطاهای فرمت ────
     try:
@@ -178,3 +178,59 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
     except Exception as e:
         logger.error(f"Error formatting profile string: {e}", exc_info=True)
         return "⚠️ خطا در اعمال مقادیر پروفایل."
+    
+def chunk_html_text(text: str, max_length: int = 950) -> list[str]:
+    """
+    متن را بدون به هم ریختن تگ‌های HTML به قطعات کوچکتر می‌شکند.
+    """
+    lines = text.split("\n")
+    pages = []
+    current_page = ""
+    open_tags = []
+    
+    tag_pattern = re.compile(r'<(/?)(b|i|u|s|code|pre|tg-emoji[^>]*)>')
+    
+    for line in lines:
+        if len(current_page) + len(line) + 1 > max_length:
+            if not current_page:
+                pages.append(line[:max_length])
+                current_page = line[max_length:] + "\n"
+                continue
+            
+            closing_tags = "".join([f"</{t.split()[0]}>" for t in reversed(open_tags)])
+            pages.append(current_page.strip() + closing_tags)
+            
+            opening_tags = "".join([f"<{t}>" for t in open_tags])
+            current_page = opening_tags + line + "\n"
+        else:
+            current_page += line + "\n"
+        
+        for match in tag_pattern.finditer(line):
+            is_closing = match.group(1) == '/'
+            tag_name = match.group(2)
+            if not is_closing:
+                open_tags.append(tag_name)
+            else:
+                if open_tags and open_tags[-1].startswith(tag_name):
+                    open_tags.pop()
+
+    if current_page.strip():
+        closing_tags = "".join([f"</{t.split()[0]}>" for t in reversed(open_tags)])
+        pages.append(current_page.strip() + closing_tags)
+        
+    return pages
+
+def get_pagination_row(target_id: int, current_page: int, total_pages: int, is_own: bool) -> list:
+    """ردیف دکمه‌های شیشه‌ای برای صفحه‌بندی پروفایل"""
+    nav_row = []
+    is_own_int = 1 if is_own else 0
+    
+    if current_page > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"prof_page:{target_id}:{current_page - 1}:{is_own_int}"))
+    
+    nav_row.append(InlineKeyboardButton(text=f"📄 {current_page + 1} از {total_pages}", callback_data="ignore"))
+    
+    if current_page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"prof_page:{target_id}:{current_page + 1}:{is_own_int}"))
+        
+    return nav_row

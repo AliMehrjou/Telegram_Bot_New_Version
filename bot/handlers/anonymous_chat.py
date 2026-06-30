@@ -376,6 +376,7 @@ async def register_chat_consent(
         try:
             partner_fsm_data = await partner_ctx.get_data()
             # Partner رو از waiting_for_approval خارج کن
+            await partner_ctx.set_state(None)  # FIX: set_state(None) قبل از clear() ضروری است
             await partner_ctx.clear()
         except Exception as exc:
             logger.warning("Could not clear FSM for partner %d after rejection: %s", partner_id, exc)
@@ -477,6 +478,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
             "⚠️ مکالمه به اتمام رسیده است یا خطایی رخ داد.",
             reply_markup=get_main_menu_keyboard(),
         )
+        await state.set_state(None)  # FIX: خروج کامل از anonymous_chat_active
         await state.clear()
         return
 
@@ -508,6 +510,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
         except TelegramForbiddenError:
             logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
             await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+            await state.set_state(None)  # FIX: خروج کامل از anonymous_chat_active
             await state.clear()
         except TelegramAPIError as exc:
             logger.error(f"Telegram API Error relaying text from {tg_id} to {partner_id}: {exc}")
@@ -546,6 +549,7 @@ async def route_anonymous_chat_message(message: Message, state: FSMContext) -> N
     except TelegramForbiddenError:
         logger.warning(f"Partner {partner_id} blocked the bot during chat with {tg_id}")
         await message.reply("⚠️ پارتنر ربات را بلاک کرده است و اتصال قطع شد.")
+        await state.set_state(None)  # FIX: خروج کامل از anonymous_chat_active
         await state.clear()
     except TelegramAPIError as exc:
         logger.error(f"Telegram API Error relaying media from {tg_id} to {partner_id}: {exc}")

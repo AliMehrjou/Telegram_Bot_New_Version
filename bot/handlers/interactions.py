@@ -20,7 +20,7 @@ from matching_bot_project.bot.handlers.matching import handle_successful_match
 from matching_bot_project.bot.handlers.anonymous_chat import activate_anonymous_chat_session
 from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.constants import ReplyBtn, SystemMsg
-from matching_bot_project.bot.core.formatters import build_unified_profile_card
+from matching_bot_project.bot.core.formatters import build_unified_profile_card, chunk_html_text, get_pagination_row
 from matching_bot_project.bot.core.loader import bot, dating_scheduler, dp, redis_client
 from matching_bot_project.bot.keyboards.inline import (
     get_end_chat_confirm_keyboard,
@@ -77,54 +77,30 @@ def _build_profile_card(user, compatibility: Optional[int] = None) -> str:
     return build_unified_profile_card(user, is_own_profile=False, compatibility=compatibility)
 
 async def _send_profile_card(target_chat_id: int, user, action_kb: InlineKeyboardMarkup) -> None:
-    """
-    Helper function to uniformly send a user's profile card, photo, and voice
-    to a specific chat ID without breaking HTML tags or losing button attachments.
-    """
     profile_card = _build_profile_card(user)
+    pages = chunk_html_text(profile_card, max_length=950)
     photo_id = getattr(user, 'profile_photo_file_id', None)
+    
+    # ساخت دکمه‌ها
+    inline_rows = list(action_kb.inline_keyboard) if action_kb else []
+    if len(pages) > 1:
+        nav_row = get_pagination_row(target_id=user.tg_id, current_page=0, total_pages=len(pages), is_own=False)
+        inline_rows.insert(0, nav_row)
+        
+    final_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
     
     try:
         if photo_id:
-            # 💡 اصلاح: اگر طول متن هماهنگ با کپشن تلگرام بود، یکجا ارسال شود
-            if len(profile_card) <= 1024:
-                await bot.send_photo(
-                    chat_id=target_chat_id,
-                    photo=photo_id,
-                    caption=profile_card,
-                    parse_mode="HTML",
-                    reply_markup=action_kb,
-                )
-            else:
-                # 💡 اگر متن طولانی بود، ابتدا عکس ارسال شده و بلافاصله متن کامل همراه با کیبورد فرستاده می‌شود
-                await bot.send_photo(chat_id=target_chat_id, photo=photo_id)
-                await bot.send_message(
-                    chat_id=target_chat_id,
-                    text=profile_card,
-                    parse_mode="HTML",
-                    reply_markup=action_kb,
-                )
+            await bot.send_photo(chat_id=target_chat_id, photo=photo_id, caption=pages[0], parse_mode="HTML", reply_markup=final_kb)
         else:
-            # پروفایل‌های بدون عکس
-            await bot.send_message(
-                chat_id=target_chat_id,
-                text=profile_card,
-                parse_mode="HTML",
-                reply_markup=action_kb,
-            )
+            await bot.send_message(chat_id=target_chat_id, text=pages[0], parse_mode="HTML", reply_markup=final_kb)
             
         profile_voice = getattr(user, 'profile_voice_file_id', None)
         if profile_voice:
-            await bot.send_voice(
-                chat_id=target_chat_id,
-                voice=profile_voice,
-                caption="🎵 <b>آهنگ/وویس پروفایل</b>",
-                parse_mode="HTML"
-            )
-
+            await bot.send_voice(chat_id=target_chat_id, voice=profile_voice, caption="🎵 <b>آهنگ/وویس پروفایل</b>", parse_mode="HTML")
     except Exception as exc:
         logger.error("Failed to send profile message to chat %s: %s", target_chat_id, exc)
-
+    
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 1 – View Profile
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,9 +144,23 @@ async def view_partner_profile(call: CallbackQuery, db_session: AsyncSession) ->
 
 @router.message(F.text == ReplyBtn.PHASE_USER_PROFILE)
 async def view_partner_profile_from_reply_btn(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
-    # ... کدهای بالای تابع که دست نخورده باقی می‌ماند ...
+    
+    # ۱. پیدا کردن دیت یا چت فعال فعلی کاربر
+    active_match = await crud.get_active_match(db_session, message.from_user.id)
+    if not active_match:
+        await message.answer("⚠️ شما در حال حاضر در دیت یا چت فعالی نیستید.")
+        return
 
-    # 💡 اصلاح: استفاده از user.tg_id به جای target_id
+    # ۲. استخراج آیدی تلگرام طرف مقابل (پارتنر)
+    partner_id = active_match.user_two_id if active_match.user_one_id == message.from_user.id else active_match.user_one_id
+
+    # ۳. دریافت اطلاعات کاربر مقابل از دیتابیس (تعریف متغیر user که مفقود شده بود)
+    user = await crud.get_user_by_tg_id(db_session, partner_id)
+    if not user:
+        await message.answer("❌ اطلاعات پارتنر یافت نشد.")
+        return
+
+    # 💡 حالا که user را پیدا کردیم، ادامه کدهای شما بدون مشکل اجرا می‌شود
     block_result = await db_session.execute(
         select(BlockList).where(
             BlockList.blocker_id == message.from_user.id,

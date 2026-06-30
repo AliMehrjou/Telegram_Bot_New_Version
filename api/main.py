@@ -14,20 +14,21 @@ from matching_bot_project.bot.handlers.admin import _daily_report_loop
 from matching_bot_project.services.scheduler import OnlineStatusWorker
 from matching_bot_project.services.reengagement import ReEngagementWorker
 
+# ── StateLockMiddleware ───────────────────────────────────────────────────────
+from matching_bot_project.bot.middlewares.state_lock import StateLockMiddleware
+
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Handles critical microservice startup and teardown lifecycles:
-    - Creates database tables if they don't exist (with retry logic).
-    - Connects to the Redis queuing pools.
-    - Configures Telegram Bot Webhook URLs securely.
-    - Launches background activity polling tasks.
-    """
-    
-    # ۱. ساخت جداول دیتابیس با مکانیزم Retry و Exponential Backoff برای پایداری در داکر
+    # ── Register StateLockMiddleware روی هر دو نوع event ────────────────────
+    # باید روی message و callback_query هر دو register شود.
+    # outer_middleware یعنی قبل از هر handler دیگری اجرا می‌شود.
+    dp.message.outer_middleware(StateLockMiddleware())
+    dp.callback_query.outer_middleware(StateLockMiddleware())
+
+    # ۱. ساخت جداول دیتابیس
     logger.info("Initializing database tables...")
     max_retries = 5
     for attempt in range(1, max_retries + 1):
@@ -40,33 +41,27 @@ async def lifespan(app: FastAPI):
             if attempt == max_retries:
                 logger.critical(f"Fatal error: Could not connect to database after {max_retries} attempts.")
                 raise e
-            
-            delay = 2 ** attempt  # 2s, 4s, 8s, 16s
+            delay = 2 ** attempt
             logger.warning(f"Database connection failed (Attempt {attempt}/{max_retries}): {e}. Retrying in {delay}s...")
             await asyncio.sleep(delay)
-    
-    # ۲. اجرای سیدر بانک سوالات (با نام متد اصلاح‌شده و بدون کامیت داخلی)
+
+    # ۲. سیدر بانک سوالات
     async with async_session_factory() as session:
         await seed_question_bank_if_empty(session)
 
-    # Core engine bindings
+    # ۳. اتصال به سرویس‌های اصلی
     await matching_engine.connect()
-    
-    # Active 3-mins date timeout scanner activation
     dating_scheduler.start_polling()
 
-    # راه‌اندازی سرویس پاکسازی وضعیت آنلاین (Sync Offline Users)
     online_worker = OnlineStatusWorker(async_session_factory, idle_minutes=5)
     online_worker.start_polling()
 
-    # راه‌اندازی سرویس ری‌اینگیجمنت (ping کاربران بی‌تحرک هر ۳ روز)
     reengagement_worker = ReEngagementWorker(async_session_factory, bot)
     reengagement_worker.start_polling()
 
-    # ایجاد تسک بک‌گراند برای گزارش روزانه
     asyncio.create_task(_daily_report_loop(async_session_factory))
 
-    # ۳. مدیریت وبهوک بر اساس متغیر محیطی صریح (ENVIRONMENT) و توکن اختصاصی وبهوک
+    # ۴. تنظیم webhook
     if getattr(settings, "ENVIRONMENT", "development").lower() == "production":
         webhook_url = f"{settings.BASE_URL}{settings.WEBHOOK_PATH}"
         logger.info(f"Setting Telegram webhook url: {webhook_url}")
@@ -74,27 +69,22 @@ async def lifespan(app: FastAPI):
             url=webhook_url,
             allowed_updates=["message", "callback_query", "my_chat_member"],
             drop_pending_updates=True,
-            secret_token=settings.WEBHOOK_SECRET_TOKEN  # استفاده از توکن اختصاصی وبهوک
+            secret_token=settings.WEBHOOK_SECRET_TOKEN,
         )
-        
     else:
         logger.warning(
-            f"Running in {getattr(settings, 'ENVIRONMENT', 'development').upper()}/POLLING mode. Deleting active webhooks to prevent conflicts..."
+            f"Running in {getattr(settings, 'ENVIRONMENT', 'development').upper()}/POLLING mode. Deleting active webhooks..."
         )
         try:
-            await bot.delete_webhook(
-                drop_pending_updates=True,
-                request_timeout=60
-            )
+            await bot.delete_webhook(drop_pending_updates=True, request_timeout=60)
             logger.info("Webhook deleted successfully.")
         except TelegramNetworkError as e:
             logger.warning(f"Telegram unreachable while deleting webhook: {e}")
         except Exception:
             logger.exception("Unexpected error while deleting webhook")
 
-    yield # حد فاصل اجرای Lifespan و Teardown
-    
-    # Tear-down connections
+    yield
+
     await reengagement_worker.stop()
     await matching_engine.disconnect()
     await bot.session.close()
@@ -102,15 +92,13 @@ async def lifespan(app: FastAPI):
     logger.info("Lifespan teardown finished successfully.")
 
 
-# Instantiating server base
 app = FastAPI(
     title="Telegram Matchmaker API",
     description="Backend microservice handling Webhook loops and matching dashboards.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# Enable CORS for browser integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -119,13 +107,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Route attachment
 app.include_router(webhook.router)
 app.include_router(admin.router)
 
 
 @app.get("/health")
 async def check_health_status():
-    """Provides instant status telemetry for external monitors."""
     return {"status": "healthy", "service": "match_bot", "engine": "alive"}
-

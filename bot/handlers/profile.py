@@ -18,10 +18,11 @@ from matching_bot_project.database.queries import crud
 from matching_bot_project.bot.core.config import settings
 
 from matching_bot_project.bot.core.constants import ReplyBtn
-from matching_bot_project.bot.core.formatters import build_unified_profile_card
+from matching_bot_project.bot.core.formatters import build_unified_profile_card, chunk_html_text, get_pagination_row
 from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
 from matching_bot_project.database.models.models import BlockList
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -59,40 +60,44 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
             await db_session.commit()
             await db_session.refresh(user)  
 
+        # ساخت کارت پروفایل اصلی و صفحه‌بندی
         profile_card = build_unified_profile_card(user, is_own_profile=True)
+        pages = chunk_html_text(profile_card, max_length=950)
 
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         is_user_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
 
+        # ساخت دکمه‌های اصلی پروفایل
         inline_rows = [
             [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")]
         ]
         
-        # دکمه VIP فقط برای کاربران ویژه نمایش داده می‌شود
         if is_user_vip:
             inline_rows.append([InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")])
             
+        # 📄 اضافه کردن دکمه‌های صفحه‌بندی به ردیف اول (اگر صفحات بیش از ۱ بود)
+        if len(pages) > 1:
+            nav_row = get_pagination_row(target_id=user.tg_id, current_page=0, total_pages=len(pages), is_own=True)
+            inline_rows.insert(0, nav_row)
+            
         inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
-# ---- ارسال عکس (با سیستم شکارچی ارور) ----
+        # ---- ارسال عکس و صفحه اول متن ----
         photo_id = getattr(user, 'profile_photo_file_id', None)
         photo_sent = False
+        
         if photo_id:
             try:
-                try:
-                    # تلگرام لیمیت 1024 را روی متن نهایی اعمال می‌کند نه کدهای HTML
-                    await message.answer_photo(photo=photo_id, caption=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
-                except TelegramBadRequest as e:
-                    if "caption is too long" in str(e).lower():
-                        # فقط اگر متن قابل مشاهده واقعاً طولانی بود، جدا ارسال شود
-                        await message.answer_photo(photo=photo_id)
-                        await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
-                    else:
-                        raise e
+                # ارسال فقط و فقط صفحه اول به عنوان کپشن
+                await message.answer_photo(
+                    photo=photo_id, 
+                    caption=pages[0], 
+                    parse_mode=ParseMode.HTML, 
+                    reply_markup=inline_kb
+                )
                 photo_sent = True
             except Exception as photo_err:
                 err_str = str(photo_err)
-                
                 if "DOCUMENT_INVALID" in err_str or "wrong file identifier" in err_str:
                     logger.warning(f"Invalid Photo ID for user {tg_id}. Clearing from DB.")
                     user.profile_photo_file_id = None
@@ -100,11 +105,15 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
                 else:
                     logger.warning(f"Photo failed for unknown reason: {photo_err}")
 
-        # اگر عکس ارسال نشد (یا خراب بود و پاک شد)، پروفایل متنی رو بفرست
+        # اگر عکس ارسال نشد (یا خراب بود)، پروفایل متنی ارسال می‌شود
         if not photo_sent:
-            await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=inline_kb)
+            await message.answer(
+                text=pages[0], 
+                parse_mode=ParseMode.HTML, 
+                reply_markup=inline_kb
+            )
 
-        # ---- ارسال آهنگ / وویس (با سیستم شکارچی ارور) ----
+        # ---- ارسال آهنگ / وویس ----
         voice_id = getattr(user, 'profile_voice_file_id', None)
         if voice_id:
             try:
@@ -320,11 +329,10 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
         await message.answer("⚠️ کاربری با این آیدی یافت نشد یا پروفایلش تکمیل نیست.")
         return
 
-    # بررسی اینکه آیا کاربر دکمه‌ی آیدی خودش را زده یا شخص دیگری
     is_own_profile = (message.from_user.id == target_user.tg_id)
     profile_card = build_unified_profile_card(target_user, is_own_profile=is_own_profile)
 
-    # ساخت کیبورد بر اساس مالکیت پروفایل
+    # ساخت کیبورد خام بر اساس مالکیت پروفایل
     if is_own_profile:
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")],
@@ -332,7 +340,6 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
         ])
         profile_card += "\n💡 <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
     else:
-        # بررسی وضعیت بلاک بودن و دوستی برای نمایش دکمه‌های صحیح
         block_result = await db_session.execute(
             select(BlockList).where(
                 BlockList.blocker_id == message.from_user.id,
@@ -346,36 +353,46 @@ async def view_profile_by_public_id(message: Message, db_session: AsyncSession):
         except Exception:
             already_friend = False
 
-        # کیبورد اکشن‌های پروفایل — دکمه کامنت داخل get_user_action_keyboard هست
         markup = get_user_action_keyboard(
             target_tg_id=target_user.tg_id,
             is_blocked=is_blocked,
             is_friend=already_friend
         )
 
-    # ارسال مدیا یا متن ساختاریافته‌ی پروفایل
-    if target_user.profile_photo_file_id:
+    # 📄 صفحه‌بندی هوشمند متن پروفایل
+    pages = chunk_html_text(profile_card, max_length=950)
+    
+    # استخراج ردیف‌های دکمه و افزودن صفحه‌بندی
+    inline_rows = list(markup.inline_keyboard) if markup else []
+    if len(pages) > 1:
+        nav_row = get_pagination_row(target_id=target_user.tg_id, current_page=0, total_pages=len(pages), is_own=is_own_profile)
+        inline_rows.insert(0, nav_row)
+        
+    final_markup = InlineKeyboardMarkup(inline_keyboard=inline_rows)
+
+    # ---- ارسال فقط صفحه اول با عکس یا به صورت متنی ----
+    photo_id = getattr(target_user, 'profile_photo_file_id', None)
+    photo_sent = False
+    
+    if photo_id:
         try:
-            # کنترل طول کپشن برای جلوگیری از شکستن تگ‌های HTML
-            if len(profile_card) <= 1024:
-                await message.answer_photo(
-                    photo=target_user.profile_photo_file_id,
-                    caption=profile_card,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=markup
-                )
-            else:
-                await message.answer_photo(photo=target_user.profile_photo_file_id)
-                await message.answer(
-                    text=profile_card,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=markup
-                )
+            await message.answer_photo(
+                photo=photo_id,
+                caption=pages[0],
+                parse_mode=ParseMode.HTML,
+                reply_markup=final_markup
+            )
+            photo_sent = True
         except Exception as e:
-            logger.error(f"Failed to send profile photo: {e}")
-            await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
-    else:
-        await message.answer(text=profile_card, parse_mode=ParseMode.HTML, reply_markup=markup)
+            logger.error(f"Failed to send profile photo for public id: {e}")
+
+    # اگر کاربر عکس نداشت یا فایل عکس نامعتبر بود
+    if not photo_sent:
+        await message.answer(
+            text=pages[0],
+            parse_mode=ParseMode.HTML,
+            reply_markup=final_markup
+        )
 
     # ارسال وویس/آهنگ پروفایل هدف در صورت وجود
     profile_voice = getattr(target_user, 'profile_voice_file_id', None)
@@ -538,4 +555,72 @@ async def send_referral_banner(call: CallbackQuery, db_session: AsyncSession):
         parse_mode=ParseMode.HTML,
         reply_markup=back_kb,
     )
+    await call.answer()
+
+@router.callback_query(F.data.startswith("prof_page:"))
+async def handle_profile_pagination(call: CallbackQuery, db_session: AsyncSession):
+    # تجزیه داده‌های کلیک شده
+    parts = call.data.split(":")
+    target_id = int(parts[1])
+    page_index = int(parts[2])
+    is_own = bool(int(parts[3]))
+    
+    # ۱. دریافت مجدد اطلاعات کاربر و ساخت دوباره صفحات
+    target_user = await crud.get_user_by_tg_id(db_session, target_id)
+    if not target_user:
+        return await call.answer("❌ پروفایل این کاربر یافت نشد.", show_alert=True)
+        
+    profile_card = build_unified_profile_card(target_user, is_own_profile=is_own)
+    pages = chunk_html_text(profile_card, max_length=950)
+    
+    # جلوگیری از باگ اگر طول صفحات تغییر کرده باشد
+    if page_index >= len(pages):
+        page_index = len(pages) - 1
+        
+    # ۲. بازسازی دکمه‌های اصلی کاربر (ویرایش، بلاک، لایک و ...)
+    if is_own:
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        is_user_vip = target_user.is_vip or (target_user.vip_expires_at and target_user.vip_expires_at > now_utc)
+        inline_rows = [[InlineKeyboardButton(text="📝 ویرایش پروفایل", callback_data="edit_profile_triggered")]]
+        if is_user_vip:
+            inline_rows.append([InlineKeyboardButton(text="💎 بخش ویژه VIP", callback_data="vip_panel")])
+    else:
+        # ساخت مجدد کیبورد مربوط به پروفایل دیگران
+        block_result = await db_session.execute(
+            select(BlockList).where(BlockList.blocker_id == call.from_user.id, BlockList.blocked_id == target_user.tg_id)
+        )
+        is_blocked = block_result.scalar_one_or_none() is not None
+        try:
+            already_friend = await crud.is_friend(db_session, call.from_user.id, target_user.tg_id)
+        except Exception:
+            already_friend = False
+            
+        from matching_bot_project.bot.keyboards.inline import get_user_action_keyboard
+        base_kb = get_user_action_keyboard(target_user.tg_id, is_blocked=is_blocked, is_friend=already_friend)
+        inline_rows = list(base_kb.inline_keyboard)
+        
+    # ۳. متصل کردن دکمه‌های صفحه‌بندی برای صفحه جدید
+    if len(pages) > 1:
+        from matching_bot_project.bot.core.formatters import get_pagination_row
+        nav_row = get_pagination_row(target_id, page_index, len(pages), is_own)
+        inline_rows.insert(0, nav_row)
+        
+    new_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
+    
+    # ۴. ویرایش متن پیام (بدون ارسال پیام جدید)
+    try:
+        if call.message.photo or call.message.document:
+            await call.message.edit_caption(caption=pages[page_index], parse_mode=ParseMode.HTML, reply_markup=new_kb)
+        else:
+            await call.message.edit_text(text=pages[page_index], parse_mode=ParseMode.HTML, reply_markup=new_kb)
+    except TelegramBadRequest as e:
+        if "is not modified" not in str(e).lower():
+            logger.error(f"Error editing profile page: {e}")
+            
+    await call.answer()
+
+
+@router.callback_query(F.data == "ignore")
+async def ignore_callback(call: CallbackQuery):
+    """جلوگیری از لودینگ چرخان روی دکمه شماره صفحه"""
     await call.answer()

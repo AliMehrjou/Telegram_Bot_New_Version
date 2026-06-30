@@ -45,12 +45,14 @@ class DbSessionMiddleware(BaseMiddleware):
                             # Update DB state and set Redis TTL only if the cache key has expired
                             if not await redis_client.exists(redis_key):
                                 user.is_online = True
-                                user.last_active = datetime.now(timezone.utc)
+                                # 💡 اصلاح ۱: حذف tzinfo برای جلوگیری از تبدیل‌های ناخواسته توسط درایور دیتابیس
+                                user.last_active = datetime.now(timezone.utc).replace(tzinfo=None)
                                 await redis_client.setex(redis_key, 300, "1")
 
-                                # FIXED: Send the change to DB without concluding the transaction
-                                # so downstream handlers still govern the commit/rollback logic.
-                                await session.flush()
+                                # 💡 اصلاح ۲: استفاده از commit به جای flush
+                                # چون هندلرهای فقط-خواندنی commit نمی‌کنند، تغییرات زمان اینجا از بین می‌رفت.
+                                # اینجا وضعیت session تمیز است و کامیت کردن آن امن است.
+                                await session.commit()
 
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)

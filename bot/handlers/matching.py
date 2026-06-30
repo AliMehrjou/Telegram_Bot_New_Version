@@ -349,7 +349,9 @@ async def enter_match_queue(
 
     # ── 11. Valid match found ────────────────────────────────────────────────
     partner_ctx = get_user_state(matched_partner_id)
+    await partner_ctx.set_state(None)  # FIX: خروج کامل از waiting_in_queue برای partner
     await partner_ctx.clear()
+    await state.set_state(None)  # FIX: خروج کامل از waiting_in_queue برای caller
     await state.clear()
 
     match_success = await handle_successful_match(db_session, tg_id, matched_partner_id)
@@ -357,7 +359,7 @@ async def enter_match_queue(
         await _settle_coins_after_match(db_session, user, cost, matched_partner_id)
 
 
-@router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_"))
+@router.callback_query(VIPStates.waiting_for_age_filter, F.data.startswith("vip_age_filter_"))
 async def process_vip_age_filter(
     call: CallbackQuery,
     state: FSMContext,
@@ -365,7 +367,8 @@ async def process_vip_age_filter(
 ) -> None:
     """Processes the VIP age filter selection and delegates to the matching engine."""
     
-    data_parts = call.data.removeprefix("vip_age_").split("_")
+    # تغییر دوم: اینجا هم باید کل پیشوند رو حذف کنی تا فقط دیتای اصلی بمونه
+    data_parts = call.data.removeprefix("vip_age_filter_").split("_")
     
     if data_parts[0] == "all":
         min_age, max_age = 0, 99
@@ -432,7 +435,9 @@ async def process_vip_age_filter(
         return
 
     partner_ctx = get_user_state(matched_partner_id)
+    await partner_ctx.set_state(None)  # FIX: خروج کامل از waiting_in_queue برای partner
     await partner_ctx.clear()
+    await state.set_state(None)  # FIX: خروج کامل از waiting_in_queue برای caller
     await state.clear()
 
     match_success = await handle_successful_match(db_session, tg_id, matched_partner_id)
@@ -478,6 +483,7 @@ async def _abort_match_initialisation(
     for uid in (user_one_id, user_two_id):
         ctx = get_user_state(uid)
         try:
+            await ctx.set_state(None)  # FIX: خروج کامل از QuestionnaireStates/ChatStates
             await ctx.clear()
         except Exception as exc:
             logger.error("Could not clear FSM state for user %s during match abort: %s", uid, exc)
@@ -567,6 +573,7 @@ async def handle_successful_match(
         for uid in (user_one_id, user_two_id):
             ctx = get_user_state(uid)
             try:
+                await ctx.set_state(None)  # FIX: خروج کامل از waiting_for_questions_to_start
                 await ctx.clear()
             except Exception as exc:
                 logger.error("Could not clear FSM state for user %s: %s", uid, exc)
