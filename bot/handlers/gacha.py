@@ -75,7 +75,14 @@ async def process_open_lootbox(call: CallbackQuery, db_session: AsyncSession):
     
     if rand_val < 0.05: # 5% شانس
         reward = "👑 1 عدد سهمیه مچ VIP!"
-        user.vip_quota += 1
+        # آپدیت اتمیک برای جلوگیری از Lost Update در صورت درخواست‌های هم‌زمان
+        # (مشابه الگوی استفاده‌شده برای lootbox_count در بالا)
+        await db_session.execute(
+            sa_update(User)
+            .where(User.tg_id == user.tg_id)
+            .values(vip_quota=User.vip_quota + 1)
+        )
+        user.vip_quota += 1  # هماهنگ‌سازی شیء در حافظه برای استفاده در ادامه‌ی همین درخواست
     elif rand_val < 0.25: # 20% شانس
         reward = "🪙 5 عدد سکه طلایی!"
         await crud.process_coin_transaction(db_session, user, 5, "جایزه لوت‌باکس (صندوقچه)")
