@@ -402,7 +402,7 @@ async def start_gps_edit(call: CallbackQuery, state: FSMContext):
     await state.set_state(ProfileEditStates.waiting_for_gps)  # ← state اختصاصی
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📍 ارسال لوکیشن من", request_location=True)],
-        [KeyboardButton(text="🔙 برگشت به منوی اصلی")]
+        [KeyboardButton(text=ReplyBtn.BACK_TO_MENU)]  # 👈 از متغیر ثابت استفاده شد
     ], resize_keyboard=True, one_time_keyboard=True)
     
     await call.message.delete()

@@ -150,7 +150,8 @@ async def complete_user_registration(
     
     # Process Referral Reward
     if user.referrer_id:
-        stmt = select(User).where(User.id == user.referrer_id)
+        # ✅ فرم صحیح:
+        stmt = select(User).where(User.tg_id == user.referrer_id)
         result = await session.execute(stmt)
         referrer = result.scalar_one_or_none()
         
@@ -262,7 +263,7 @@ async def create_user_report(
     reason: str,
     match_history_id: Optional[int] = None
 ) -> UserReport:
-    """Creates a new report record for a user."""
+    """Creates a new report record for a user and handles auto-banning."""
     report_record = UserReport(
         reporter_id=reporter_id,
         reported_id=reported_id,
@@ -275,9 +276,15 @@ async def create_user_report(
     reported_user = await get_user_by_tg_id(session, reported_id)
     if reported_user:
         reported_user.report_count += 1
+        
+        # بن خودکار اکانت در صورتی که تعداد گزارش‌ها به حد نصاب (مثلاً ۵) برسد
+        if reported_user.report_count >= 5:
+            reported_user.is_banned = True
+            logger.info(f"User {reported_id} has been auto-banned due to reaching {reported_user.report_count} reports.")
 
     await session.flush()
     return report_record
+
 
 
 async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass: bool) -> UserLike:

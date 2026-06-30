@@ -10,6 +10,7 @@ from sqlalchemy import select
 from aiogram.types import TelegramObject
 from matching_bot_project.database.session import async_session_factory
 from matching_bot_project.database.models.models import User
+from matching_bot_project.bot.core.loader import redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -38,21 +39,19 @@ class DbSessionMiddleware(BaseMiddleware):
                             logger.info(f"Blocked request from banned user {user_id}")
                             return None
 
-                        redis_client = data.get("redis")
-                        if redis_client:
-                            redis_key = f"user:online:{user_id}"
+                        redis_key = f"user:online:{user_id}"
 
-                            # Update DB state and set Redis TTL only if the cache key has expired
-                            if not await redis_client.exists(redis_key):
-                                user.is_online = True
-                                # 💡 اصلاح ۱: حذف tzinfo برای جلوگیری از تبدیل‌های ناخواسته توسط درایور دیتابیس
-                                user.last_active = datetime.now(timezone.utc).replace(tzinfo=None)
-                                await redis_client.setex(redis_key, 300, "1")
+                        # Update DB state and set Redis TTL only if the cache key has expired
+                        if not await redis_client.exists(redis_key):
+                            user.is_online = True
+                            # 💡 اصلاح ۱: حذف tzinfo برای جلوگیری از تبدیل‌های ناخواسته توسط درایور دیتابیس
+                            user.last_active = datetime.now(timezone.utc).replace(tzinfo=None)
+                            await redis_client.setex(redis_key, 300, "1")
 
-                                # 💡 اصلاح ۲: استفاده از commit به جای flush
-                                # چون هندلرهای فقط-خواندنی commit نمی‌کنند، تغییرات زمان اینجا از بین می‌رفت.
-                                # اینجا وضعیت session تمیز است و کامیت کردن آن امن است.
-                                await session.commit()
+                            # 💡 اصلاح ۲: استفاده از commit به جای flush
+                            # چون هندلرهای فقط-خواندنی commit نمی‌کنند، تغییرات زمان اینجا از بین می‌رفت.
+                            # اینجا وضعیت session تمیز است و کامیت کردن آن امن است.
+                            await session.commit()
 
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)

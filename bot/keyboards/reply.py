@@ -22,7 +22,11 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=ReplyBtn.SUPPORT, icon_custom_emoji_id="5467539229468793355", style="primary"),
                 KeyboardButton(text=ReplyBtn.HELP, icon_custom_emoji_id="5467666648263564704", style="primary")
             ],
-            [KeyboardButton(text=ReplyBtn.MY_COINS, icon_custom_emoji_id="5379600444098093058", style="success")]
+            # 👈 دکمه گاچا در کنار دکمه کیف پول اضافه شد:
+            [
+                KeyboardButton(text=ReplyBtn.MY_COINS, icon_custom_emoji_id="5379600444098093058", style="success"),
+                KeyboardButton(text="🎁 لوت‌باکس و جوایز", icon_custom_emoji_id="5451732530048802485", style="success")
+            ]
         ],
         resize_keyboard=True,
         input_field_placeholder="انتخاب کنید..."

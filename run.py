@@ -12,7 +12,7 @@ from matching_bot_project.bot.handlers import vip
 from matching_bot_project.bot.handlers import (
     start, profile, profile_edit, matching, 
     questionnaire, anonymous_chat, explore, 
-    interactions, admin, discovery, transfer
+    interactions, admin, discovery, transfer, gacha
 )
 from matching_bot_project.bot.handlers import payments
 from matching_bot_project.bot.handlers import comments
@@ -34,8 +34,8 @@ def register_bot_middlewares_and_routers():
     dp.callback_query.middleware(DbSessionMiddleware())
 
     # ----- NEW: State lock middleware (blocks menu during active sessions) -----
-    dp.message.middleware(StateLockMiddleware())
-    dp.callback_query.middleware(StateLockMiddleware())
+    #dp.message.middleware(StateLockMiddleware())
+    #dp.callback_query.middleware(StateLockMiddleware())
 
     # Attach feature handlers to the core stack
     dp.include_router(start.router)
@@ -52,7 +52,7 @@ def register_bot_middlewares_and_routers():
     dp.include_router(transfer.router)
     dp.include_router(payments.router)
     dp.include_router(comments.router)
-
+    dp.include_router(gacha.gacha_router)
     logger.info("Bot handlers and middlewares successfully initialized.")
 
 

@@ -40,7 +40,11 @@ async def view_user_profile(message: Message, db_session: AsyncSession, state: F
     if current_state and ("chat" in current_state.lower() or "matching" in current_state.lower() or "questionnaire" in current_state.lower()):
         return await message.answer("⚠️ شما در حال حاضر در یک فرآیند فعال (چت یا مچینگ) هستید. لطفاً اول آن را پایان دهید.")
 
-    await state.clear()
+    # 👈 اصلاح این بخش برای جلوگیری از پاک شدن استیت جستجو
+    if current_state and "discovery" in current_state.lower():
+        logger.info(f"User {message.from_user.id} viewed profile during discovery. Preserving state.")
+    else:
+        await state.clear()
 
     try:
         tg_id = message.from_user.id

@@ -2,11 +2,10 @@ import string
 import random
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Column
+
+from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Column, Float, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from matching_bot_project.database.session import Base
-from sqlalchemy import Float
-from sqlalchemy import Index
 
 def generate_random_public_id(length=6):
     characters = string.ascii_letters + string.digits
@@ -15,15 +14,19 @@ def generate_random_public_id(length=6):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
-    
+    # 🔥 اینجا به SQLAlchemy و MySQL می‌فهمانیم که پیش از هر کاری، روی tg_id یک ایندکس یکتا بساز
     __table_args__ = (
         Index("ix_user_online_last_active", "is_online", "last_active"),
         Index("ix_user_vip_expires_at", "vip_expires_at"),
+        UniqueConstraint("tg_id", name="uq_users_tg_id"),
     )
 
-    # آیدی منحصربه‌فرد برای نمایش به بقیه (اضافه شده)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    # 💡 مقادیر unique و index از اینجا حذف شدند، چون در __table_args__ اعمالشان کردیم
+    tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    
+    # آیدی منحصربه‌فرد برای نمایش به بقیه
     public_id: Mapped[str] = mapped_column(String(20), unique=True, index=True, default=generate_random_public_id, nullable=False)
     
     username: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
@@ -58,7 +61,7 @@ class User(Base):
     report_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     trust_score: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     
-    # سیستم سایلنت و مخفی بودن (آپدیت شده)
+    # سیستم سایلنت و مخفی بودن
     invisible_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     silent_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -69,24 +72,25 @@ class User(Base):
     bio: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     interests: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
-    # ذخیره تعداد لایک‌ها برای پرفورمنس بالاتر دیتابیس (اضافه شده)
+    # ذخیره تعداد لایک‌ها برای پرفورمنس بالاتر دیتابیس
     likes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Activity & Status
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_active: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     
-    re_engaged_at:     Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    re_engage_blocked: Mapped[bool]               = mapped_column(Boolean, default=False, nullable=False)
-    # Referral system
-    referrer_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    re_engaged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    re_engage_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    # 💡 Referral system (اکنون به درستی به tg_id رفرنس می‌دهد)
+    referrer_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="SET NULL"), nullable=True)
     completed_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
     # Relationships
-    referred_users = relationship("User", backref="referrer", remote_side=[id])
+    referred_users = relationship("User", backref="referrer", remote_side=[tg_id])
 
     pref_min_age: Mapped[Optional[int]] = mapped_column(Integer, default=18, nullable=True)
     pref_max_age: Mapped[Optional[int]] = mapped_column(Integer, default=99, nullable=True)
@@ -97,22 +101,16 @@ class User(Base):
     location_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     
 class CoinTransaction(Base):
-    """
-    Logs all economy activities: earning from invites, spending on matches/DMs.
-    """
     __tablename__ = "coin_transactions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
-    amount: Mapped[int] = mapped_column(Integer, nullable=False) # Positive (earned) or Negative (spent)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class FriendList(Base):
-    """
-    Stores users added to the 'My Friends' section.
-    """
     __tablename__ = "friend_lists"
     __table_args__ = (UniqueConstraint("user_id", "friend_id", name="uq_user_friend"),)
 
@@ -123,9 +121,6 @@ class FriendList(Base):
 
 
 class BlockList(Base):
-    """
-    Stores blocked users to prevent future matches or messages.
-    """
     __tablename__ = "block_lists"
     __table_args__ = (UniqueConstraint("blocker_id", "blocked_id", name="uq_blocker_blocked"),)
 
@@ -205,7 +200,6 @@ class UserReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
-# ================== کدهای افزودنی ==================
 class CoinPackage(Base):
     __tablename__ = "coin_packages"
     
@@ -222,8 +216,8 @@ class CoinPurchaseOrder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_tg_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False)
     package_id: Mapped[int] = mapped_column(Integer, ForeignKey("coin_packages.id"), nullable=False)
-    payment_method: Mapped[str] = mapped_column(String(20), nullable=False)  # "card_to_card" | "gateway"
-    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # pending | approved | rejected
+    payment_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     receipt_photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gateway_authority: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
@@ -231,11 +225,6 @@ class CoinPurchaseOrder(Base):
 
 
 class ProfileComment(Base):
-    """
-    کامنت‌های پروفایل کاربران.
-    هر کاربر فقط یه کامنت روی هر پروفایل می‌تونه داشته باشه (ویرایش‌پذیر).
-    صاحب پروفایل می‌تونه کامنت‌های ناخواسته رو پاک کنه.
-    """
     __tablename__ = "profile_comments"
     __table_args__ = (
         UniqueConstraint("author_tg_id", "target_tg_id", name="uq_author_target_comment"),
@@ -244,11 +233,9 @@ class ProfileComment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # نویسنده کامنت
     author_tg_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False
     )
-    # صاحب پروفایلی که کامنت روش نوشته شده
     target_tg_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False, index=True
     )

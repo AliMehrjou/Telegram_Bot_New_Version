@@ -14,19 +14,17 @@ from matching_bot_project.bot.handlers.admin import _daily_report_loop
 from matching_bot_project.services.scheduler import OnlineStatusWorker
 from matching_bot_project.services.reengagement import ReEngagementWorker
 
-# ── StateLockMiddleware ───────────────────────────────────────────────────────
-from matching_bot_project.bot.middlewares.state_lock import StateLockMiddleware
-
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Register StateLockMiddleware روی هر دو نوع event ────────────────────
-    # باید روی message و callback_query هر دو register شود.
-    # outer_middleware یعنی قبل از هر handler دیگری اجرا می‌شود.
-    dp.message.outer_middleware(StateLockMiddleware())
-    dp.callback_query.outer_middleware(StateLockMiddleware())
+    # 💡 توجه: StateLockMiddleware دیگر اینجا register نمی‌شود.
+    # این middleware از قبل، یک‌بار و فقط یک‌بار، در run.py داخل
+    # register_bot_middlewares_and_routers() ثبت می‌شود. ثبت آن در اینجا
+    # هم باعث می‌شد برای هر آپدیت دو بار اجرا شود (یک‌بار به‌عنوان outer_middleware
+    # و یک‌بار به‌عنوان middleware معمولی)، که رفتار غیرمنتظره و قفل‌شدن مکرر
+    # منو ایجاد می‌کرد.
 
     # ۱. ساخت جداول دیتابیس
     logger.info("Initializing database tables...")

@@ -498,23 +498,24 @@ async def block_user(call: CallbackQuery, db_session: AsyncSession) -> None:
     success, msg = await execute_user_blocking(db_session, caller_id, target_id)
 
     if success:
-        limit_key = f"user:blocks_today:{caller_id}"
-        blocks_count_str = await redis_client.get(limit_key)
-        blocks_count = int(blocks_count_str) if blocks_count_str else 0
-
-        pipe = redis_client.pipeline()
-        pipe.incr(limit_key)
-        if blocks_count == 0:
+        # کلید رهگیری بلاک شدن‌ها برای فرد خاطی (نه فردی که گزارش می‌دهد)
+        limit_key = f"user:got_blocked_today:{target_id}"
+        
+        # افزایش اتمیک شمارنده برای جلوگیری از Race Condition
+        blocks_count = await redis_client.incr(limit_key)
+        
+        # اگر اولین بار است که امروز بلاک می‌شود، انقضای کلید را برای پایان شب تنظیم کن
+        if blocks_count == 1:
             now = datetime.now(timezone.utc)
             midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             seconds_to_midnight = int((midnight - now).total_seconds())
-            pipe.expire(limit_key, seconds_to_midnight)
+            await redis_client.expire(limit_key, seconds_to_midnight)
 
-        if blocks_count + 1 >= 3:
-            pipe.setex(f"user:block_cooldown:{caller_id}", 86400, "1")
+        # اگر کاربر ۳ بار توسط افراد مختلف مسدود شد، به مدت ۲۴ ساعت محروم شود
+        if blocks_count >= 3:
+            await redis_client.setex(f"user:block_cooldown:{target_id}", 86400, "1")
 
-        await pipe.execute()
-
+        # تغییر پویای دکمه‌ها در UI
         if call.message and call.message.reply_markup:
             new_kb = []
             for row in call.message.reply_markup.inline_keyboard:
@@ -533,6 +534,7 @@ async def block_user(call: CallbackQuery, db_session: AsyncSession) -> None:
                 logger.error(f"Unexpected error editing reply markup: {e}")
 
     await call.answer(msg, show_alert=True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 4 – Direct Message Request
