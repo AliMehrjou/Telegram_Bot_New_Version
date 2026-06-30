@@ -36,38 +36,35 @@ class DbSessionMiddleware(BaseMiddleware):
                     result = await session.execute(select(User).where(User.tg_id == user_id))
                     user = result.scalar_one_or_none()
 
-                    if user:
-                        if getattr(user, "is_banned", False):
-                            logger.info(f"Blocked request from banned user {user_id}")
-                            await self._notify_banned_user(event)
-                            return None
+                if user:
+                    if getattr(user, "is_banned", False):
+                        logger.info(f"Blocked request from banned user {user_id}")
+                        await self._notify_banned_user(event)
+                        return None
 
-                        # 💡 اصلاح: استفاده از SET NX اتمیک به‌جای exists+setex جداگانه
-                        # تا race condition بین دو ریکوئست همزمان از یک کاربر رخ ندهد.
-                        redis_key = f"user:online:{user_id}"
-                        acquired = await redis_client.set(redis_key, "1", ex=300, nx=True)
+                    # آپدیت زمان آخرین فعالیت و وضعیت آنلاین
+                    # باگ فیکس شد: حذف NX چون باعث می‌شد در ۵ دقیقه آخرین بازدید آپدیت نشه
+                    redis_key = f"user:online:{user_id}"
+                    await redis_client.set(redis_key, "1", ex=300)
 
-                        if acquired:
-                            user.is_online = True
-                            # حذف tzinfo برای جلوگیری از تبدیل‌های ناخواسته توسط درایور دیتابیس
-                            user.last_active = datetime.now(timezone.utc).replace(tzinfo=None)
+                    user.is_online = True
+                    user.last_active = datetime.now(timezone.utc).replace(tzinfo=None)
 
-                            # 💡 اصلاح: commit این بخش جدا و ایزوله شده تا خطای آن
-                            # (مثلاً قطعی موقت دیتابیس) کل پردازش پیام کاربر را متوقف نکند.
-                            # این فقط یک آپدیت "آخرین فعالیت" است؛ اهمیتش کمتر از خود handler است.
-                            try:
-                                await session.commit()
-                            except Exception as commit_exc:
-                                logger.warning(
-                                    "Failed to persist online-status for user %s (non-fatal): %s",
-                                    user_id, commit_exc,
-                                )
-                                await session.rollback()
-                                # آزاد کردن کلید ردیس تا تلاش بعدی دوباره امتحان کند
-                                try:
-                                    await redis_client.delete(redis_key)
-                                except Exception:
-                                    pass
+                    # 💡 commit این بخش جدا و ایزوله شده تا خطای آن
+                    # کل پردازش پیام کاربر را متوقف نکند.
+                    try:
+                        await session.commit()
+                    except Exception as commit_exc:
+                        logger.warning(
+                            "Failed to persist online-status for user %s (non-fatal): %s",
+                            user_id, commit_exc,
+                        )
+                        await session.rollback()
+                        # آزاد کردن کلید ردیس تا تلاش بعدی دوباره امتحان کند
+                        try:
+                            await redis_client.delete(redis_key)
+                        except Exception:
+                            pass
 
                 # Handlers are strictly responsible for their own session.commit()
                 return await handler(event, data)

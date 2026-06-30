@@ -109,48 +109,48 @@ def build_unified_profile_card(user, is_own_profile: bool = False,
             f"<tg-emoji emoji-id=\"5427009714745517609\">💡</tg-emoji> <i>شما در حال مشاهده پروفایل خودتان هستید.</i>"
         )
     
-# آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
-    last_seen_text = ""
-    if hasattr(user, 'last_active') and user.last_active:
-        try:
-            last_active_dt = user.last_active
-            # اگر زمان ذخیره شده در دیتابیس naive است، فرض می‌کنیم UTC است
-            if last_active_dt.tzinfo is None:
-                last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
+    # آخرین بازدید (محاسبه هوشمند بر اساس منطقه زمانی ایران و قالب شمسی)
+        last_seen_text = ""
+        if hasattr(user, 'last_active') and user.last_active:
+            try:
+                last_active_dt = user.last_active
+                # اگر زمان ذخیره شده در دیتابیس naive است، فرض می‌کنیم UTC است
+                if last_active_dt.tzinfo is None:
+                    last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
+                    
+                # تبدیل به ساعت ایران
+                tehran_tz = pytz.timezone('Asia/Tehran')
+                local_time = last_active_dt.astimezone(tehran_tz)
                 
-            # تبدیل به ساعت ایران
-            tehran_tz = pytz.timezone('Asia/Tehran')
-            local_time = last_active_dt.astimezone(tehran_tz)
-            
-            # 💡 تغییر مهم: گرفتن زمان حال در حالت UTC و سپس تبدیل به تهران برای دقت ۱۰۰٪
-            now_utc = datetime.now(timezone.utc)
-            now_tehran = now_utc.astimezone(tehran_tz)
-            
-            # جلوگیری از منفی شدن اختلاف به دلیل تأخیر سرور
-            diff = max(0, (now_tehran - local_time).total_seconds())
-            
-            def to_persian_num(text):
-                trans = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
-                return str(text).translate(trans)
-            
-            time_str = to_persian_num(local_time.strftime('%H:%M'))
-            prefix = "\n<tg-emoji emoji-id=\"5424885441100782420\">👀</tg-emoji> <b>آخرین بازدید:</b> "
-            
-            if diff < 300:  # کمتر از ۵ دقیقه
-                last_seen_text = prefix + "آنلاین 🟢"
-            elif diff < 3600:  # کمتر از ۱ ساعت
-                mins = max(1, int(diff // 60))
-                last_seen_text = prefix + f"{to_persian_num(mins)} دقیقه پیش"
-            elif diff < 86400 and now_tehran.date() == local_time.date():  # امروز
-                last_seen_text = prefix + f"امروز {time_str}"
-            elif diff < 172800 and (now_tehran.date() - local_time.date()).days == 1:  # دیروز
-                last_seen_text = prefix + f"دیروز {time_str}"
-            else:  # روزهای قبل به شمسی
-                jalali_date = jdatetime.datetime.fromgregorian(datetime=local_time)
-                date_str = to_persian_num(jalali_date.strftime('%Y/%m/%d'))
-                last_seen_text = prefix + f"{date_str}"
-        except Exception as e:
-            logger.warning(f"Could not compute last seen timezone calibration: {e}")
+                # 💡 تغییر مهم: گرفتن زمان حال در حالت UTC و سپس تبدیل به تهران برای دقت ۱۰۰٪
+                now_utc = datetime.now(timezone.utc)
+                now_tehran = now_utc.astimezone(tehran_tz)
+                
+                # جلوگیری از منفی شدن اختلاف به دلیل تأخیر سرور
+                diff = max(0, (now_tehran - local_time).total_seconds())
+                
+                def to_persian_num(text):
+                    trans = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+                    return str(text).translate(trans)
+                
+                time_str = to_persian_num(local_time.strftime('%H:%M'))
+                prefix = "\n<tg-emoji emoji-id=\"5424885441100782420\">👀</tg-emoji> <b>آخرین بازدید:</b> "
+                
+                if diff < 300:  # کمتر از ۵ دقیقه
+                    last_seen_text = prefix + "آنلاین 🟢"
+                elif diff < 3600:  # کمتر از ۱ ساعت
+                    mins = max(1, int(diff // 60))
+                    last_seen_text = prefix + f"{to_persian_num(mins)} دقیقه پیش"
+                elif diff < 86400 and now_tehran.date() == local_time.date():  # امروز
+                    last_seen_text = prefix + f"امروز {time_str}"
+                elif diff < 172800 and (now_tehran.date() - local_time.date()).days == 1:  # دیروز
+                    last_seen_text = prefix + f"دیروز {time_str}"
+                else:  # روزهای قبل به شمسی
+                    jalali_date = jdatetime.datetime.fromgregorian(datetime=local_time)
+                    date_str = to_persian_num(jalali_date.strftime('%Y/%m/%d'))
+                    last_seen_text = prefix + f"{date_str}"
+            except Exception as e:
+                logger.warning(f"Could not compute last seen timezone calibration: {e}")
 
     
     # ──── ۴. مونتاژ نهایی با محافظت در برابر خطاهای فرمت ────

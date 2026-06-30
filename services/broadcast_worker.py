@@ -15,7 +15,7 @@ class BroadcastWorker:
     def __init__(self, bot: Bot):
         self.bot = bot
 
-    async def broadcast_message(
+        async def broadcast_message(
         self, 
         user_ids: List[int], 
         text: Optional[str] = None, 
@@ -38,7 +38,6 @@ class BroadcastWorker:
         logger.info("Starting async broadcast to %d users.", len(user_ids))
 
         # Bounded concurrency: allow up to 20 concurrent requests
-        # This keeps us well within Telegram's global ~30 messages/sec limit
         semaphore = asyncio.Semaphore(20)
 
         async def _send_to_user(tg_id: int):
@@ -58,7 +57,6 @@ class BroadcastWorker:
                 except TelegramForbiddenError:
                     logger.warning("Broadcast blocked by user %s", tg_id)
                     blocked_count += 1
-                    # Await the external callback to update the database
                     if on_blocked:
                         try:
                             await on_blocked(tg_id)
@@ -71,14 +69,16 @@ class BroadcastWorker:
                     logger.error("Unexpected error sending to %s: %s", tg_id, e)
                     error_count += 1
                 finally:
-                    # Pacing mechanism: brief sleep inside the worker before releasing the semaphore
                     if delay_ms > 0:
                         await asyncio.sleep(delay_ms / 1000.0)
 
-        # Launch all tasks concurrently, throttled automatically by the semaphore
-        tasks = [_send_to_user(tg_id) for tg_id in user_ids]
-        if tasks:
-            await asyncio.gather(*tasks)
+        # ⭐ پردازش به صورت دسته‌ای (Batch) برای جلوگیری از OOM در کاربران بالا
+        batch_size = 1000
+        for i in range(0, len(user_ids), batch_size):
+            batch = user_ids[i:i + batch_size]
+            tasks = [_send_to_user(tg_id) for tg_id in batch]
+            if tasks:
+                await asyncio.gather(*tasks)
 
         logger.info(
             "Broadcast completed. Success: %d, Blocked: %d, Failed: %d",

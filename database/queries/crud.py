@@ -54,32 +54,42 @@ async def process_coin_transaction(
                 total_spent_coins=User.total_spent_coins + deduction
             )
         )
-        result = await session.execute(stmt)
+        
+        # غیرفعال کردن همگام‌سازی خودکار SQLAlchemy
+        result = await session.execute(stmt, execution_options={"synchronize_session": False})
         
         if result.rowcount == 0:
             return False # Insufficient funds or user not found
             
-        # Update in-memory object so it reflects reality for the rest of the current request
+        # آپدیت آبجکت در حافظه
         user.coin_balance -= deduction
         user.total_spent_coins += deduction
 
     else:
-        # اعمال ضریب ایونت فقط برای واریزی‌ها (نه کسر سکه)
+        # اعمال ضریب ایونت فقط برای واریزی‌ها
         if not ignore_multiplier:
             try:
-                # خواندن ضریب ایونت فعال از ردیس
                 active_multiplier_str = await redis_client.get("bot:active_event_multiplier")
                 if active_multiplier_str:
                     multiplier = float(active_multiplier_str)
-                    # ضرب کردن و رند کردن به عدد صحیح
                     final_amount = int(final_amount * multiplier)
-                    
-                    # اگر ضریب اعمال شد، به توضیحات تراکنش هم اضافه می‌کنیم
                     if multiplier > 1.0:
                         description += f" (ضریب رویداد ×{multiplier})"
             except Exception as e:
                 logger.error(f"Error fetching event multiplier from Redis: {e}")
                 
+        # ⭐ آپدیت اتمیک برای واریز سکه (جلوگیری از Lost Update در ترافیک بالا)
+        stmt = (
+            update(User)
+            .where(User.tg_id == user.tg_id)
+            .values(
+                coin_balance=User.coin_balance + final_amount,
+                total_earned_coins=User.total_earned_coins + final_amount
+            )
+        )
+        await session.execute(stmt, execution_options={"synchronize_session": False})
+        
+        # آپدیت آبجکت در حافظه
         user.coin_balance += final_amount
         user.total_earned_coins += final_amount
         
@@ -90,8 +100,6 @@ async def process_coin_transaction(
     )
     session.add(transaction)
     return True
-
-
 
 async def create_user(
     session: AsyncSession, 
@@ -299,10 +307,8 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     )
     result = await session.execute(stmt)
     
-    # MySQL rowcount: 1 (new insert), 2 (updated existing row), 0 (no change/duplicate data)
-    # This helps avoid double-counting likes for rapid duplicate requests.
-    # Limitation: This relies on MySQL's default rowcount behavior and doesn't handle Like -> Pass decrements.
-    if not is_pass and result.rowcount in (1, 2):
+    # فقط زمانی که رکورد جدیدی واقعاً INSERT شده (rowcount == 1) شمارنده را ببر بالا
+    if not is_pass and result.rowcount == 1:
         await session.execute(
             update(User)
             .where(User.tg_id == liked_id)
@@ -316,7 +322,6 @@ async def save_like(session: AsyncSession, liker_id: int, liked_id: int, is_pass
     )
     res = await session.execute(fetch_stmt)
     return res.scalar_one_or_none()
-
 
 async def update_silent_mode(session: AsyncSession, tg_id: int, silent_until: Optional[datetime]) -> bool:
     """آپدیت زمان سایلنت مود برای جلوگیری از دریافت نوتیفیکیشن مچ"""
@@ -583,17 +588,18 @@ async def get_received_like_count(session: AsyncSession, tg_id: int) -> int:
 async def add_friend(session: AsyncSession, user_id: int, friend_id: int) -> bool:
     from sqlalchemy.exc import IntegrityError
     try:
-        session.add(FriendList(user_id=user_id, friend_id=friend_id))
-        await session.flush()
+        # استفاده از تراکنش تودرتو (Savepoint) برای جلوگیری از خراب شدن سایر کوئری‌ها
+        async with session.begin_nested():
+            session.add(FriendList(user_id=user_id, friend_id=friend_id))
         return True
     except IntegrityError:
-        await session.rollback()
         return False
 
 
 async def transfer_coins(session: AsyncSession, from_tg_id: int, to_tg_id: int, amount: int) -> tuple[bool, str]:
     if amount <= 0:
         return False, "مقدار انتقال باید بیشتر از صفر باشد."
+        
     sender   = await get_user_by_tg_id(session, from_tg_id)
     receiver = await get_user_by_tg_id(session, to_tg_id)
     if not sender:
@@ -602,7 +608,14 @@ async def transfer_coins(session: AsyncSession, from_tg_id: int, to_tg_id: int, 
         return False, "حساب گیرنده یافت نشد."
     if sender.coin_balance < amount:
         return False, f"موجودی کافی نیست. موجودی فعلی: {sender.coin_balance} سکه."
-    await process_coin_transaction(session, sender, -amount, f"انتقال سکه به کاربر {to_tg_id}", ignore_multiplier=True)
+        
+    # کسر سکه از فرستنده (چک کردن خروجی تابع برای جلوگیری از باگ رایس کاندیشن)
+    success = await process_coin_transaction(session, sender, -amount, f"انتقال سکه به کاربر {to_tg_id}", ignore_multiplier=True)
+    
+    if not success:
+        return False, "تراکنش ناموفق بود (احتمالاً موجودی در لحظه کافی نبوده است)."
+        
+    # واریز سکه به گیرنده (فقط در صورتی که کسر موفقیت‌آمیز بوده)
     await process_coin_transaction(session, receiver, +amount, f"دریافت سکه از کاربر {from_tg_id}", ignore_multiplier=True)
     return True, f"✅ {amount} سکه با موفقیت منتقل شد."
 
@@ -640,16 +653,26 @@ async def find_interest_match_candidates(
         User.tg_id.not_in(blockers_of_caller),
         or_(*[User.interests.like(f"%{i}%") for i in interests_list])
     ]
-# ================== کدهای جایگزین (بخش اعمال order_by) ==================
+
     if target_gender:
         conditions.append(func.lower(User.gender) == target_gender.lower())
 
-    # تغییر order_by به جای func.rand()
-    stmt   = select(User).where(*conditions).order_by(User.last_active.desc()).limit(limit)
+    # گرفتن استخر بزرگتر (مثلا 100 نفر اول) برای مرتب‌سازی دقیق در پایتون
+    stmt   = select(User).where(*conditions).order_by(User.last_active.desc()).limit(100)
     result = await session.execute(stmt)
     candidates = list(result.scalars().all())
 
     caller_set = set(interests_list)
+
+    def _shared_count(u: User) -> int:
+        if not u.interests:
+            return 0
+        return len(set(u.interests.split(",")).intersection(caller_set))
+
+    candidates.sort(key=_shared_count, reverse=True)
+    
+    # برگرداندن فقط به اندازه درخواستی (limit)
+    return candidates[:limit]
 
     def _shared_count(u: User) -> int:
         if not u.interests:
