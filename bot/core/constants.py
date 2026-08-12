@@ -400,11 +400,6 @@ class Messages:
         "چه کاری برات انجام بدم؟ از منوی پایین انتخاب کن 👇"
     )
 
-    UNKNOWN_MESSAGE_INACTIVE = (
-        "متوجه نشدم :/\n\n"
-        "کانال رسمی گپوگرام 🤖 (اخبار،آپدیت ها و ترفند ها)\n\n"
-        "چه کاری برات انجام بدم؟ از منوی پایین انتخاب کن 👇"
-    )
 
     # When user starts searching while already in queue
     ALREADY_IN_QUEUE = (
