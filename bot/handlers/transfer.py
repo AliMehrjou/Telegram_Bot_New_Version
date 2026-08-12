@@ -637,6 +637,9 @@ async def view_profile_by_transfer_token(call: CallbackQuery, db_session):
         pass
 
     photo_id = getattr(sender, 'profile_photo_file_id', None)
+    photo_sent = False
+    
+    # ارسال عکس و کپشن (حذف کلمه return مسدودکننده)
     if photo_id:
         try:
             await call.message.answer_photo(
@@ -645,15 +648,29 @@ async def view_profile_by_transfer_token(call: CallbackQuery, db_session):
                 parse_mode="HTML",
                 reply_markup=markup,
             )
-            return
+            photo_sent = True
         except Exception as e:
             logger.warning("view_profile_token: photo send failed: %s", e)
 
-    await call.message.answer(
-        text=profile_card,
-        parse_mode="HTML",
-        reply_markup=markup,
-    )
+    # اگر عکس نداشت، فقط متن ارسال می‌شود
+    if not photo_sent:
+        await call.message.answer(
+            text=profile_card,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        
+    # --- اضافه شدن منطق ارسال وویس (گرامافون) ---
+    profile_voice = getattr(sender, 'profile_voice_file_id', None)
+    if profile_voice:
+        try:
+            await call.message.answer_voice(
+                voice=profile_voice,
+                caption="🎵 <b>آهنگ/وویس پروفایل فرستنده</b>",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send sender's profile voice: {e}")
     
 @router.callback_query(F.data == "coins_transfer")
 async def manual_transfer_start(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):

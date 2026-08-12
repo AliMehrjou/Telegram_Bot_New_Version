@@ -444,14 +444,23 @@ async def handle_start_command(
         try:
             pending_ref = await redis_client.get(f"pending_ref:{tg_id}")
             if pending_ref:
-                ref_id_candidate = int(pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref)
-                if ref_id_candidate != tg_id:
-                    referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
-                    if referrer:
-                        referrer_id = referrer.tg_id
+                ref_candidate_str = pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref
+                
+                # پشتیبانی همزمان از لینک‌های قدیمی (عددی) و لینک‌های جدید V3 (حروف و عدد)
+                if ref_candidate_str.isdigit():
+                    referrer = await crud.get_user_by_tg_id(db_session, int(ref_candidate_str))
+                else:
+                    from sqlalchemy import select
+                    from matching_bot_project.database.models.models import User
+                    res = await db_session.execute(select(User).where(User.referral_code == ref_candidate_str))
+                    referrer = res.scalar_one_or_none()
+
+                if referrer and referrer.tg_id != tg_id:
+                    referrer_id = referrer.tg_id
+                    
                 await redis_client.delete(f"pending_ref:{tg_id}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error processing pending_ref during onboarding: {e}")
 
         try:
             user = await crud.create_user(
@@ -465,6 +474,7 @@ async def handle_start_command(
         except IntegrityError:
             await db_session.rollback()
             user = await crud.get_user_by_tg_id(db_session, tg_id)
+
 
     # ارسال پیام خوش‌آمدگویی و نمایش دکمه قوانین
     await message.answer(
@@ -1081,15 +1091,24 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
         except Exception as exc:
             logger.warning("callback start: Redis failure reading pending_ref: %s", exc)
             pending_ref = None
+            
         if pending_ref:
             try:
-                ref_id_candidate = int(pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref)
-                if ref_id_candidate != tg_id:
-                    referrer = await crud.get_user_by_tg_id(db_session, ref_id_candidate)
-                    if referrer:
-                        referrer_id = referrer.tg_id
-            except Exception:
-                pass
+                ref_candidate_str = pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref
+                
+                if ref_candidate_str.isdigit():
+                    referrer = await crud.get_user_by_tg_id(db_session, int(ref_candidate_str))
+                else:
+                    from sqlalchemy import select
+                    from matching_bot_project.database.models.models import User
+                    res = await db_session.execute(select(User).where(User.referral_code == ref_candidate_str))
+                    referrer = res.scalar_one_or_none()
+
+                if referrer and referrer.tg_id != tg_id:
+                    referrer_id = referrer.tg_id
+            except Exception as exc:
+                logger.error(f"Error finding referrer in callback: {exc}")
+                
             try:
                 await redis_client.delete(f"pending_ref:{tg_id}")
             except Exception as exc:
@@ -1111,11 +1130,8 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
             logger.error("Error creating user after force join: %s", exc)
             await call.message.answer("⚠️ خطای سرور. لطفاً دوباره /start رو بفرست.")
             return
-            
-        if not user:
-            await call.message.answer("⚠️ خطای سیستمی. لطفاً مجدداً /start را ارسال کنید.")
-            return
-
+        
+        
     # 🟢 تغییر اصلی: بررسی اینکه آیا کاربر از طریق لینک ناشناس آمده است یا خیر
     try:
         pending_anon = await redis_client.get(f"pending_anon:{tg_id}")

@@ -458,10 +458,25 @@ async def start_voice_edit(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(ProfileEditStates.waiting_for_voice, F.voice | F.audio)
 async def process_new_voice(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     
+    # استخراج اطلاعات فایل صوتی
     if message.voice:
         file_id = message.voice.file_id
+        file_size = message.voice.file_size
+        duration = message.voice.duration
     else:
         file_id = message.audio.file_id
+        file_size = message.audio.file_size
+        duration = message.audio.duration
+
+    # 🛡️ گارد محافظتی ۱: محدودیت حجم (حداکثر ۵ مگابایت)
+    MAX_SIZE_BYTES = 5 * 1024 * 1024
+    if file_size and file_size > MAX_SIZE_BYTES:
+        return await message.answer("⚠️ حجم فایل صوتی شما خیلی زیاد است! لطفاً فایلی با حجم کمتر از ۵ مگابایت ارسال کنید.")
+
+    # 🛡️ گارد محافظتی ۲: محدودیت زمان (حداکثر ۶۰ ثانیه)
+    MAX_DURATION_SECONDS = 60
+    if duration and duration > MAX_DURATION_SECONDS:
+        return await message.answer("⚠️ زمان فایل صوتی شما خیلی طولانی است! لطفاً یک ویس یا تکه‌ای از یک آهنگ (زیر ۶۰ ثانیه) ارسال کنید.")
 
     tg_id = message.from_user.id
     
@@ -481,6 +496,7 @@ async def process_new_voice(message: Message, state: FSMContext, db_session: Asy
         await message.answer(f"تبریک میگم! پروفایل شما تکمیل شد و {reward} تا سکه به حساب کاربریت اضافه شد.")
         
     await state.clear()
+
 
 
 @router.message(ProfileEditStates.waiting_for_voice)

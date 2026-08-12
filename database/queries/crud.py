@@ -1278,13 +1278,11 @@ async def transfer_coins(session: AsyncSession, from_tg_id: int, to_tg_id: int, 
 # ══════════════════════════════════════════════════════════════
 # XP & Leveling
 # ══════════════════════════════════════════════════════════════
-
 async def add_xp_to_user(session: AsyncSession, tg_id: int, amount: int) -> bool:
     """
-    Adds XP to a user safely using row-level locking (FOR UPDATE) to prevent race conditions.
-    Returns True if the user leveled up (and got a lootbox), False otherwise.
+    Adds XP to a user safely using row-level locking (FOR UPDATE).
+    Supports multiple level-ups at once via a while loop.
     """
-    # استفاده از قفل ردیفی برای جلوگیری از تداخل در ترافیک بالا
     stmt = select(User).where(User.tg_id == tg_id).with_for_update()
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
@@ -1292,20 +1290,26 @@ async def add_xp_to_user(session: AsyncSession, tg_id: int, amount: int) -> bool
     if not user:
         return False
         
+    # 🛡️ جلوگیری از باگ لول صفر (در صورت نقص مقادیر پیش‌فرض دیتابیس)
+    if user.level < 1:
+        user.level = 1
+        
     user.xp_points += amount
-    next_level_xp = user.level * 100 
+    leveled_up = False
     
-    if user.xp_points >= next_level_xp:
-        user.level += 1
-        user.lootbox_count += 1 
-        user.xp_points -= next_level_xp 
-        
-        await session.flush()
-        return True  # لول آپ شد!
-        
+    # 🔄 حلقه while برای هندل کردن چند لول‌آپ همزمان (وقتی XP جایزه زیاد است)
+    while True:
+        next_level_xp = user.level * 100 
+        if user.xp_points >= next_level_xp:
+            user.level += 1
+            user.lootbox_count += 1 
+            user.xp_points -= next_level_xp 
+            leveled_up = True
+        else:
+            break
+            
     await session.flush()
-    return False
-
+    return leveled_up
 
 # ══════════════════════════════════════════════════════════════
 # Coin Packages & Purchase Orders

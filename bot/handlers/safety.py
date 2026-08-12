@@ -83,7 +83,7 @@ async def prompt_report_reasons(call: CallbackQuery, state: FSMContext, db_sessi
     await call.answer()
 
 
-@router.message(ReportStates.waiting_for_evidence_before_reason, F.forward_date)
+@router.message(ReportStates.waiting_for_evidence_before_reason, F.forward_date | F.photo)
 async def handle_evidence_for_safety(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     match_id = data.get("match_id")
@@ -104,10 +104,10 @@ async def handle_evidence_for_safety(message: Message, state: FSMContext) -> Non
         reply_markup=get_safety_report_reasons_keyboard(reported_id, match_id)
     )
 
-
-@router.message(ReportStates.waiting_for_evidence_before_reason, F.text)
+@router.message(ReportStates.waiting_for_evidence_before_reason, F.text & ~F.forward_date)
 async def handle_evidence_text_warning(message: Message) -> None:
-    await message.answer("⚠️ لطفاً پیام حریف خاطی را فوروارد کنید، نوشتن متن آزاد به عنوان مدرک معتبر نیست.")
+    await message.answer("⚠️ لطفاً پیام کاربر خاطی را فوروارد کنید یا اسکرین‌شات بفرستید، نوشتن متن آزاد به عنوان مدرک معتبر نیست.")
+
 
 
 @router.callback_query(StateFilter(ReportStates.selecting_reason, ReportStates.waiting_for_evidence_before_reason), F.data == "report_cancel")

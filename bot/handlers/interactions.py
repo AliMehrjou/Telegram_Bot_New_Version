@@ -1084,7 +1084,8 @@ async def _submit_report(
         except Exception as e:
             logger.error(f"Failed to send report notification to admin {admin_id}: {e}")
 
-@router.message(ReportStates.waiting_for_report_description, F.content_type.in_({'text', 'photo', 'document'}))
+# استفاده از فیلترهای صریح و استاندارد aiogram به جای content_type
+@router.message(ReportStates.waiting_for_report_description, F.text | F.photo | F.document)
 async def handle_report_evidence(message: Message, state: FSMContext, db_session: AsyncSession) -> None:
     data = await state.get_data()
     reported_id = data.get("reported_id")
@@ -1092,17 +1093,11 @@ async def handle_report_evidence(message: Message, state: FSMContext, db_session
     
     if not reported_id or not reason_code:
         await _restore_previous_state(state, db_session, message.from_user.id)
-        return
+        return await message.answer("⚠️ اطلاعات گزارش منقضی شده است. لطفاً دوباره تلاش کنید.")
 
-    description = ""
-    evidence_msg = None
-
-    if message.text and not message.forward_date:
-        description = message.text
-    else:
-        evidence_msg = message
-        if message.caption:
-            description = message.caption
+    # استخراج هوشمند متن یا کپشن عکس
+    description = message.text or message.caption or "بدون متن (فقط تصویر/فایل)"
+    evidence_msg = message if (message.photo or message.document or message.forward_date) else None
 
     # ثبت گزارش در دیتابیس و ارسال به ادمین‌ها
     await _submit_report(
@@ -1162,12 +1157,19 @@ async def handle_report_evidence(message: Message, state: FSMContext, db_session
         return
 
     # 🛡️ آپدیت ورودی‌های ریستور (اگر کاربر از داخل پروفایل و خارج از دیت گزارش داده بود)
-    await _restore_previous_state(state, db_session, message.from_user.id)
+    prev_state = await _restore_previous_state(state, db_session, message.from_user.id)
+    
+    # تنظیم کیبورد مناسب بر اساس استیت قبلی
+    from matching_bot_project.bot.keyboards.reply import get_chat_phase_keyboard, get_main_menu_keyboard
+    if prev_state == ChatStates.anonymous_chat_active.state:
+        kb = get_chat_phase_keyboard()
+    else:
+        kb = get_main_menu_keyboard()
     
     if reason_code == "bot_fake":
-        await message.answer("✅ گزارش شما مبنی بر فیک بودن این حساب ثبت شد. ادمین‌ها به زودی این مورد را بررسی خواهند کرد.", reply_markup=get_main_menu_keyboard())
+        await message.answer("✅ گزارش شما مبنی بر فیک بودن این حساب ثبت شد. ادمین‌ها به زودی این مورد را بررسی خواهند کرد.", reply_markup=kb)
     else:
-        await message.answer("✅ گزارش شما به همراه مدارک با موفقیت ثبت شد و در اسرع وقت بررسی خواهد شد. با تشکر از همکاری شما.", reply_markup=get_main_menu_keyboard())
+        await message.answer("✅ گزارش شما به همراه مدارک با موفقیت ثبت شد و در اسرع وقت بررسی خواهد شد. با تشکر از همکاری شما.", reply_markup=kb)
 
 
 @router.callback_query(F.data == "report_cancel")

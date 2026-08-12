@@ -303,7 +303,7 @@ async def show_vip_main_menu(message: Message, db_session: AsyncSession) -> None
     await message.answer(text, reply_markup=get_vip_subscription_plans_keyboard(plans))
 
 
-@router.callback_query(F.data.startswith("vip_buy_"))
+@router.callback_query(F.data.startswith("vip_buy_") & ~(F.data == "vip_buy_cancel"))
 async def vip_buy_plan(call: CallbackQuery, db_session: AsyncSession, state):
     """User selected a VIP plan — show payment options."""
     plan_code = call.data.replace("vip_buy_", "")
