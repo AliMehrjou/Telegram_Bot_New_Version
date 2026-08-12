@@ -40,7 +40,7 @@ from matching_bot_project.bot.keyboards.reply import (
     get_main_menu_keyboard,
     get_chat_phase_keyboard,
 )
-from matching_bot_project.bot.states.states import ChatStates, CoinTransferStates
+from matching_bot_project.bot.states.states import ChatStates, CoinTransferStates, ManualTransferStates
 from matching_bot_project.database.queries.crud import get_user_by_tg_id
 from matching_bot_project.database.models.models import User, BlockList
 from matching_bot_project.bot.core.constants import ReplyBtn
