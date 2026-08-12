@@ -130,8 +130,12 @@ async def send_referral_banner(call: CallbackQuery, db_session):
         return await call.answer("⚠️ کاربر یافت نشد.", show_alert=True)
 
     bot_name = str(settings.BOT_USERNAME).replace("@", "")
-    tg_id = call.from_user.id
-    invite_link = f"https://t.me/{bot_name}?start=ref_{tg_id}_{filter_param}" if filter_param else f"https://t.me/{bot_name}?start=ref_{tg_id}"
+    
+    # 👈 تغییر مهم: گرفتن کد اختصاصی ۸ کاراکتری به جای tg_id
+    code = await referral_engine.ensure_referral_code(db_session, call.from_user.id)
+    
+    # 👈 تغییر مهم: استفاده از code به جای tg_id در لینک
+    invite_link = f"https://t.me/{bot_name}?start=ref_{code}_{filter_param}" if filter_param else f"https://t.me/{bot_name}?start=ref_{code}"
 
     final_text = banner_text.format(invite_link=invite_link)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت به بنرها", callback_data="referral_banners")]])

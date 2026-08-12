@@ -446,13 +446,18 @@ async def handle_start_command(
             if pending_ref:
                 ref_candidate_str = pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref
                 
+                # 👈 بخش اصلاح‌شده: تمیز کردن کد از پیشوند ref_ و فیلترهای اضافی
+                if ref_candidate_str.startswith("ref_"):
+                    ref_candidate_str = ref_candidate_str[4:]
+                actual_ref_code = ref_candidate_str.split('_')[0]
+                
                 # پشتیبانی همزمان از لینک‌های قدیمی (عددی) و لینک‌های جدید V3 (حروف و عدد)
-                if ref_candidate_str.isdigit():
-                    referrer = await crud.get_user_by_tg_id(db_session, int(ref_candidate_str))
+                if actual_ref_code.isdigit():
+                    referrer = await crud.get_user_by_tg_id(db_session, int(actual_ref_code))
                 else:
                     from sqlalchemy import select
                     from matching_bot_project.database.models.models import User
-                    res = await db_session.execute(select(User).where(User.referral_code == ref_candidate_str))
+                    res = await db_session.execute(select(User).where(User.referral_code == actual_ref_code))
                     referrer = res.scalar_one_or_none()
 
                 if referrer and referrer.tg_id != tg_id:
@@ -483,7 +488,6 @@ async def handle_start_command(
         parse_mode="HTML",
     )
     await state.set_state(OnboardingStates.waiting_for_terms_acceptance)
-
 
 @router.callback_query(OnboardingStates.waiting_for_terms_acceptance, F.data == "terms_show")
 async def show_terms_for_acceptance(call: CallbackQuery) -> None:
@@ -1096,12 +1100,17 @@ async def process_check_membership_callback(call: CallbackQuery, state: FSMConte
             try:
                 ref_candidate_str = pending_ref.decode('utf-8') if isinstance(pending_ref, bytes) else pending_ref
                 
-                if ref_candidate_str.isdigit():
-                    referrer = await crud.get_user_by_tg_id(db_session, int(ref_candidate_str))
+                # 👈 بخش اصلاح‌شده: تمیز کردن کد از پیشوند ref_ و فیلترهای اضافی
+                if ref_candidate_str.startswith("ref_"):
+                    ref_candidate_str = ref_candidate_str[4:]
+                actual_ref_code = ref_candidate_str.split('_')[0]
+                
+                if actual_ref_code.isdigit():
+                    referrer = await crud.get_user_by_tg_id(db_session, int(actual_ref_code))
                 else:
                     from sqlalchemy import select
                     from matching_bot_project.database.models.models import User
-                    res = await db_session.execute(select(User).where(User.referral_code == ref_candidate_str))
+                    res = await db_session.execute(select(User).where(User.referral_code == actual_ref_code))
                     referrer = res.scalar_one_or_none()
 
                 if referrer and referrer.tg_id != tg_id:
