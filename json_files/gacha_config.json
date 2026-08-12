@@ -1,0 +1,42 @@
+{
+  "menu_texts": {
+    "title": "<tg-emoji emoji-id=\"5458799228719472718\">🌟</tg-emoji> <b>سیستم پاداش و گاچا بلایند دیت</b>\n\n",
+    "level_text": "<tg-emoji emoji-id=\"5332547853304734597\">🎖</tg-emoji> سطح (Level): <b>{level}</b>\n",
+    "xp_text": "<tg-emoji emoji-id=\"5472164874886846699\">✨</tg-emoji> نوار تجربه: {bar} ({xp}/{max_xp} XP)\n",
+    "lootbox_text": "<tg-emoji emoji-id=\"5199749070830197566\">🎁</tg-emoji> صندوقچه‌های باز نشده: <b>{lootbox} عدد</b>\n\n",
+    "footer": "<tg-emoji emoji-id=\"5472146462362048818\">💡</tg-emoji> <i>با فعالیت در ربات (مچ شدن، لایک کردن و...) XP بگیر تا لول‌آپ بشی و صندوقچه جایزه بگیری!</i>"
+  },
+  "buttons": {
+    "open_lootbox": "<tg-emoji emoji-id=\"5330115548900501467\">🔑</tg-emoji> باز کردن یک صندوقچه",
+    "back_to_menu": "<tg-emoji emoji-id=\"5469735272017043817\">👈</tg-emoji> بازگشت به منو"
+  },
+  "rewards": [
+    {
+      "chance": 0.05,
+      "type": "vip_quota",
+      "amount": 1,
+      "message": "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> 1 عدد سهمیه مچ VIP!"
+    },
+    {
+      "chance": 0.20,
+      "type": "coins",
+      "amount": 5,
+      "message": "<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> 5 عدد سکه طلایی!"
+    },
+    {
+      "chance": 0.35,
+      "type": "coins",
+      "amount": 2,
+      "message": "<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> 2 عدد سکه طلایی!"
+    },
+    {
+      "chance": 0.40,
+      "type": "xp",
+      "amount": 50,
+      "message": "<tg-emoji emoji-id=\"5472164874886846699\">✨</tg-emoji> 50 امتیاز XP ویژه!"
+    }
+  ],
+  "animations": {
+    "opening_text": "<tg-emoji emoji-id=\"5436040291507247633\">🎉</tg-emoji> <b>صندوقچه در حال باز شدن است...</b>\n\n<tg-emoji emoji-id=\"5472164874886846699\">✨</tg-emoji> <tg-emoji emoji-id=\"5472164874886846699\">✨</tg-emoji> <tg-emoji emoji-id=\"5472164874886846699\">✨</tg-emoji>\n\n<tg-emoji emoji-id=\"5199749070830197566\">🎁</tg-emoji> تبریک! شما برنده شدید:\n<b>{reward}</b>"
+  }
+}

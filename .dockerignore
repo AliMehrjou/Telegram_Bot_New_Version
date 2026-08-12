@@ -1,0 +1,65 @@
+# FIX PHASE1-CRIT-19: .dockerignore was claimed in PATCH_NOTES_v2.md but never
+# actually committed. Without it, `COPY . /app/...` in Dockerfile bakes .env,
+# __pycache__, tests, *.md, .git, etc. into the image — leaking secrets and
+# bloating image size.
+
+# ─── Secrets & env ───────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── VCS & IDE ──────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ─── Tests & docs ───────────────────────────────────────────────────────────
+tests/
+*.md
+!DEPLOYMENT.md
+PATCH_NOTES*
+docs/
+
+# ─── Backups & logs ─────────────────────────────────────────────────────────
+*.log
+*.log.*
+*.sql.gz
+backups/
+*.bak
+
+# ─── Local runtime artifacts ────────────────────────────────────────────────
+*.sqlite3
+*.db
+downloads/
+tmp/
+
+# ─── Build / CI ─────────────────────────────────────────────────────────────
+Dockerfile
+docker-compose*.yml
+.dockerignore
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# ─── OS junk ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

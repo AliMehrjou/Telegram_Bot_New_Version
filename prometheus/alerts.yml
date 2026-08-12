@@ -1,0 +1,85 @@
+# Alerting rules for Matching Bot v3.1
+# These trigger alerts when key metrics cross thresholds.
+
+groups:
+  - name: match_bot_alerts
+    rules:
+      # ─── Service down ──────────────────────────────────────────────────────
+      - alert: MatchBotDown
+        expr: up{job="match_bot_app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Match Bot is down"
+          description: "Prometheus cannot scrape the FastAPI app for more than 1 minute."
+
+      # ─── High error rate ───────────────────────────────────────────────────
+      - alert: HighErrorRate
+        expr: rate(http_request_duration_seconds_count{endpoint="/api/v1/webhook"}[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High webhook request rate"
+          description: "Webhook is receiving >100 requests/sec for 5 minutes."
+
+      # ─── DB pool exhaustion ────────────────────────────────────────────────
+      - alert: DBPoolExhaustion
+        expr: db_pool_checked_out / db_pool_size > 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DB connection pool nearly exhausted"
+          description: "More than 90% of DB connections are checked out for 5 minutes."
+
+      # ─── Slow DB queries ───────────────────────────────────────────────────
+      - alert: SlowDBQueries
+        expr: rate(db_query_duration_seconds_sum[5m]) / rate(db_query_duration_seconds_count[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Average DB query > 500ms"
+          description: "Average DB query duration exceeds 500ms for 5 minutes."
+
+      # ─── Match queue backing up ────────────────────────────────────────────
+      - alert: MatchQueueBacklog
+        expr: bot_match_queue_size > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Match queue has >1000 users waiting"
+          description: "Users are waiting too long for matches."
+
+      # ─── Broadcast taking too long ─────────────────────────────────────────
+      - alert: BroadcastStuck
+        expr: bot_broadcast_in_progress > 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Broadcast running for >2 hours"
+          description: "A broadcast has been running for more than 2 hours."
+
+      # ─── High memory usage (Redis) ─────────────────────────────────────────
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used / (2 * 1024 * 1024 * 1024) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory > 90% of 2GB limit"
+          description: "Redis is using more than 90% of its 2GB maxmemory."
+
+      # ─── Payment failures ──────────────────────────────────────────────────
+      - alert: PaymentFailures
+        expr: rate(bot_payments_processed_total{status="failed"}[10m]) > 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment failures > 1 per 10 min"
+          description: "Multiple payment failures detected."

@@ -1,0 +1,49 @@
+{
+  "gifts": [
+    {
+      "code": "teddy",
+      "display_name": "تدی‌خرسی",
+      "emoji": "🧸",
+      "price_coins": 5,
+      "description": "یک تدی‌خرسی نرم و دوست‌داشتنی برای ابراز علاقه",
+      "is_active": true,
+      "sort_order": 1
+    },
+    {
+      "code": "rose",
+      "display_name": "گل رز",
+      "emoji": "🌹",
+      "price_coins": 3,
+      "description": "یک شاخه گل رز قرمز برای روزهای خاص",
+      "is_active": true,
+      "sort_order": 2
+    },
+    {
+      "code": "chocolate",
+      "display_name": "شکلات",
+      "emoji": "🍫",
+      "price_coins": 4,
+      "description": "یک قالب شکلات شیرین برای شیرین‌کام‌ها",
+      "is_active": true,
+      "sort_order": 3
+    },
+    {
+      "code": "ring",
+      "display_name": "انگشتر",
+      "emoji": "💍",
+      "price_coins": 30,
+      "description": "یک انگشتر ارزشمند برای قلب‌های گرم",
+      "is_active": true,
+      "sort_order": 4
+    },
+    {
+      "code": "diamond",
+      "display_name": "الماس",
+      "emoji": "💎",
+      "price_coins": 50,
+      "description": "گیفت ویژه و لوکس برای نشان دادن ارزش ویژه",
+      "is_active": true,
+      "sort_order": 5
+    }
+  ]
+}

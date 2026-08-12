@@ -1,0 +1,86 @@
+{
+  "pages": [
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>کنترل و وضعیت کاربران</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5373012449597335010\">👤</tg-emoji> <b>مدیریت کاربران:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5188217332748527444\">🔍</tg-emoji> <code>/userinfo [id]</code> ▫️ <i>استعلام وضعیت کامل کاربر</i>\n<tg-emoji emoji-id=\"5411175424455613715\">🚩</tg-emoji> <code>/banuser [id]</code> ▫️ <i>مسدودسازی فوری کاربر متخلف (دیت/چت فعال هم قطع می‌شود)</i>\n<tg-emoji emoji-id=\"5364112491381006601\">🆓</tg-emoji> <code>/unbanuser [id]</code> ▫️ <i>رفع مسدودیت کاربر</i>\n<tg-emoji emoji-id=\"5471952986970267163\">💎</tg-emoji> <code>/setvip [id] [days]</code> ▫️ <i>اعطای اشتراک ویژه VIP</i>\n<tg-emoji emoji-id=\"5264727218734524899\">🔄</tg-emoji> <code>/resetprofile [id]</code> ▫️ <i>پاکسازی و ریست پروفایل کاربر</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5472146462362048818\">💡</tg-emoji> <i>راهنما: برای نمایش همین صفحات در ربات از دستور <code>/help_admin</code> استفاده کنید.</i>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>بخش مالی، بسته‌ها، گیفت‌ها و کارت</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5379600444098093058\">🪙</tg-emoji> <b>مدیریت مستقیم سکه:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5375296873982604963\">💰</tg-emoji> <code>/addcoins [id] [amount]</code> ▫️ <i>شارژ حساب کاربر (بدون اعمال ضریب رویداد)</i>\n<tg-emoji emoji-id=\"5361748661640372834\">📉</tg-emoji> <code>/removecoins [id] [amount]</code> ▫️ <i>کسر سکه از کاربر (حداکثر تا سقف موجودی)</i>\n<tg-emoji emoji-id=\"5199749070830197566\">🎁</tg-emoji> <code>/addcoinsall [amount]</code> ▫️ <i>هدیه عمومی به همه کاربران + برودکست</i>\n<tg-emoji emoji-id=\"5471952986970267163\">💎</tg-emoji> <code>/addcoinsvip [amount]</code> ▫️ <i>هدیه ویژه به کاربران VIP + برودکست</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5471952986970267163\">💎</tg-emoji> <b>مدیریت قیمت VIP:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <code>/setvipprice [1w/2w/1m] [قیمت]</code> ▫️ <i>تغییر قیمت پلن‌های اشتراک VIP</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5431499171045581032\">🛒</tg-emoji> <b>مدیریت بسته‌های فروشگاهی:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5361979468887893611\">🆕</tg-emoji> <code>/addpackage [سکه] [قیمت]</code> ▫️ <i>ساخت بسته جدید</i>\n<tg-emoji emoji-id=\"5431736674147114227\">🗂</tg-emoji> <code>/packages</code> ▫️ <i>لیست تمام بسته‌های تعریف شده</i>\n<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <code>/editpackage [id] [قیمت جدید]</code> ▫️ <i>ویرایش قیمت یک بسته</i>\n<tg-emoji emoji-id=\"5264727218734524899\">🔄</tg-emoji> <code>/togglepackage [id]</code> ▫️ <i>فعال/غیرفعال‌سازی وضعیت بسته</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5199749070830197566\">🎁</tg-emoji> <b>مدیریت گیفت‌ها:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5361979468887893611\">🆕</tg-emoji> <code>/addgift</code> ▫️ <i>ساخت گیفت جدید برای فروشگاه به‌صورت مرحله‌ای</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5422683699130933153\">🪪</tg-emoji> <b>مدیریت شماره کارت پرداخت:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5188217332748527444\">🔍</tg-emoji> <code>/cardinfo</code> ▫️ <i>نمایش شماره کارت و صاحب‌حساب فعال</i>\n<tg-emoji emoji-id=\"5472308992514464048\">🔐</tg-emoji> <code>/setcard</code> ▫️ <i>تغییر شماره کارت (شماره ← نام ← تاییدیه)</i>\n<tg-emoji emoji-id=\"5264727218734524899\">🔄</tg-emoji> <code>/resetcard</code> ▫️ <i>بازگشت به پیش‌فرض .env</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>سفارش‌های خرید کارت‌به‌کارت</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5334882760735598374\">🧾</tg-emoji> <b>بررسی و تأیید فیش واریزی:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5188217332748527444\">🔍</tg-emoji> <code>/orders</code> ▫️ <i>لیست سفارش‌های در انتظار تأیید (کارت‌به‌کارت)</i>\n<tg-emoji emoji-id=\"5334673106202010226\">📄</tg-emoji> <code>/order [order_id]</code> ▫️ <i>مشاهده جزئیات کامل سفارش + عکس فیش + دکمه تأیید/رد</i></blockquote>",
+      "<tg-emoji emoji-id=\"5472146462362048818\">💡</tg-emoji> <i>سفارش‌ها معمولاً پس از ارسال عکس فیش توسط کاربر، همراه با دکمه‌های «✅ تأیید واریز» و «❌ رد کردن» مستقیماً برای ادمین‌ها ارسال می‌شوند؛ این دستورات برای پیگیری بعدی سفارش‌ها هستند.</i>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>رویدادها و پیام‌ها</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5436040291507247633\">🎉</tg-emoji> <b>سیستم رویدادها (Events):</b>",
+      "<blockquote><tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <code>/event_create</code> ▫️ <i>ساخت رویداد جدید با ضریب سکه (روی همه دریافتی‌ها اعمال می‌شود)</i>\n<tg-emoji emoji-id=\"5420315771991497307\">🔥</tg-emoji> <code>/event_list</code> ▫️ <i>مشاهده رویداد فعال فعلی</i>\n<tg-emoji emoji-id=\"5411520005386806155\">🏁</tg-emoji> <code>/event_end</code> ▫️ <i>پایان دادن فوری به رویداد فعال</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5469903029144657419\">📣</tg-emoji> <b>اطلاع‌رسانی و پیام‌ها:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5435933711893797296\">🎊</tg-emoji> <code>/broadcast</code> ▫️ <i>ارسال پیام همگانی (متن/عکس/ویدیو) به همه کاربران</i>\n<tg-emoji emoji-id=\"5465300082628763143\">💬</tg-emoji> <code>/pbroadcast</code> ▫️ <i>ارسال پیام شخصی‌سازی‌شده با فیلتر (جنسیت، شهر، سن، VIP) و متغیرهای {name} {city} {coins} {age}</i></blockquote>",
+      "<tg-emoji emoji-id=\"5472019095106886003\">💌</tg-emoji> <b>پشتیبانی و تیکت‌ها:</b>",
+      "<blockquote>▫️ <i>پاسخ به تیکت‌ها از طریق دکمه شیشه‌ای زیر پیام کاربر انجام می‌شود.</i>\n▫️ <i>همچنین امکان <b>مسدودسازی سریع (Ban)</b> و <b>رفع مسدودیت (Unban)</b> کاربر مستقیماً از طریق دکمه‌های شیشه‌ای پشتیبانی فراهم است.</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>آمار و اسپانسرها</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5431577498364158238\">📊</tg-emoji> <b>تحلیل و مانیتورینگ:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5373001317042101552\">📈</tg-emoji> <code>/adminstats</code> ▫️ <i>داشبورد زنده (ثبت‌نام‌ها، ساعات فعال، استان‌ها، نرخ تبدیل چت)</i>\n<tg-emoji emoji-id=\"5472404950673791399\">🧮</tg-emoji> <code>/report</code> ▫️ <i>گزارش جامع فوری امروز سیستم (کاربران، مچینگ، رویداد فعال)</i>\n<tg-emoji emoji-id=\"5413704112220949842\">⏰</tg-emoji> <code>/report_auto</code> ▫️ <i>فعال/غیرفعال کردن دریافت خودکار گزارش، هر شب ساعت ۲۳:۵۹ UTC</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5375129357373165375\">🔗</tg-emoji> <b>مدیریت اسپانسرها (Force Join):</b>",
+      "<blockquote><tg-emoji emoji-id=\"5361979468887893611\">🆕</tg-emoji> <code>/addsponsor [id] [link]</code> ▫️ <i>افزودن کانال اسپانسر جدید (نیازمند عضویت ادمین ربات در کانال)</i>\n<tg-emoji emoji-id=\"5229113891081956317\">➖</tg-emoji> <code>/removesponsor [id]</code> ▫️ <i>حذف کانال از لیست جوین اجباری</i>\n<tg-emoji emoji-id=\"5431736674147114227\">🗂</tg-emoji> <code>/sponsors</code> ▫️ <i>مشاهده لیست کانال‌های اسپانسر فعال</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>بانک سوالات پرسشنامه</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> <b>افزودن دستی سوال:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5334673106202010226\">✏️</tg-emoji> <code>/addquestion</code> ▫️ <i>افزودن یک سوال ۲ یا ۴ گزینه‌ای به‌صورت مرحله‌ای (متن، گزینه‌ها، دسته‌بندی، پیش‌نمایش و تأیید)</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5433811242135331842\">📥</tg-emoji> <b>آپلود فایل Excel (توصیه‌شده برای حجم بالا):</b>",
+      "<blockquote><tg-emoji emoji-id=\"5433811242135331842\">📥</tg-emoji> <code>/importquestions</code> ▫️ <i>آپلود فایل .xlsx و import خودکار با پیش‌نمایش و اعتبارسنجی هر ردیف</i>\n<tg-emoji emoji-id=\"5431736674147114227\">🗂</tg-emoji> <code>/question_template</code> ▫️ <i>دریافت فایل نمونه Excel با ستون‌بندی صحیح برای پر کردن</i></blockquote>",
+      "",
+      "<tg-emoji emoji-id=\"5472146462362048818\">💡</tg-emoji> <b>نکات:</b>",
+      "<blockquote>⚠️ <i>حداکثر ۸۰ سوال در بانک قابل ذخیره‌ست.</i>\n💡 <i>سوالات ۲ گزینه‌ای: ستون‌های گزینه ج و د را خالی بگذارید.</i>\n💡 <i>سوالات ۴ گزینه‌ای: همه چهار گزینه را پر کنید (هر دو یا هیچ‌کدام از ج/د).</i>\n💡 <i>هر مچ به‌صورت تصادفی ۲۰ سوال از این بانک انتخاب می‌کند.</i></blockquote>"
+    ],
+    [
+      "<tg-emoji emoji-id=\"5467406098367521267\">👑</tg-emoji> <b>پنل پیشرفته مدیریت</b>",
+      "✦ <i>کمپین‌های بنری و گزارشات تخلف</i> ✦\n━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "<tg-emoji emoji-id=\"5373012449597335010\">🖼</tg-emoji> <b>مدیریت بنرهای سکه رایگان:</b>",
+      "<blockquote><tg-emoji emoji-id=\"5361979468887893611\">🆕</tg-emoji> <code>/newbanner</code> ▫️ <i>ساخت کمپین بنر جدید (سکه رایگان)</i>\n<tg-emoji emoji-id=\"5431736674147114227\">🗂</tg-emoji> <code>/banners</code> ▫️ <i>مشاهده لیست کمپین‌های بنری و آمار فورواردها</i></blockquote>",
+      "<tg-emoji emoji-id=\"5472146462362048818\">💡</tg-emoji> <i>بررسی و تایید/رد بنرهای فوروارد شده توسط کاربران جهت دریافت سکه رایگان، از طریق دکمه‌های شیشه‌ای ارسال شده برای ادمین انجام می‌شود.</i>",
+      "",
+      "<tg-emoji emoji-id=\"5411175424455613715\">⚠️</tg-emoji> <b>گزارشات تخلف کاربران (Reports):</b>",
+      "<blockquote>▫️ <i>سیستم گزارش تخلفات به صورت خودکار پیام‌ها را برای ادمین ارسال می‌کند.</i>\n▫️ <i>بررسی، تأیید (همراه با پاداش به گزارش‌دهنده و اخطار/بن متخلف) یا رد گزارش‌ها از طریق دکمه‌های شیشه‌ای زیر همان پیام انجام می‌پذیرد.</i></blockquote>"
+    ]
+  ]
+}

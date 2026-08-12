@@ -1,0 +1,264 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Production docker-compose for Matching Bot v3.1 (200K+ users)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Services:
+# 1. mysql_primary  — primary MySQL (writes)
+# 2. mysql_replica  — read replica (SELECT queries)
+# 3. redis_cache    — Redis (FSM, queues, cache) — 2GB
+# 4. fastapi_bot    — FastAPI app (scales to N replicas)
+# 5. arq_worker     — background job worker (scales to N replicas)
+# 6. nginx          — TLS termination + load balancer
+# 7. prometheus     — metrics scraper
+# 8. grafana        — dashboards (optional)
+#
+# Scaling:
+#   docker-compose up -d --scale fastapi_bot=4 --scale arq_worker=2
+#
+# Required env vars (in .env):
+#   - All v3 settings (see .env.example)
+#   - BOT_SHARD_TOKENS (comma-separated, 5-10 bot tokens)
+#   - DB_REPLICA_URL or DB_REPLICA_HOST
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─── MySQL Primary (writes) ────────────────────────────────────────────────
+  mysql_primary:
+    image: mysql:8.0
+    container_name: match_mysql_primary
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql_primary_data:/var/lib/mysql
+      - ./mysql/primary.cnf:/etc/mysql/conf.d/primary.cnf:ro
+    networks:
+      - match_bot_network
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --innodb-buffer-pool-size=2G
+      --max-connections=500
+      --innodb-log-file-size=512M
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ─── MySQL Replica (reads) ─────────────────────────────────────────────────
+  mysql_replica:
+    image: mysql:8.0
+    container_name: match_mysql_replica
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql_replica_data:/var/lib/mysql
+      - ./mysql/replica.cnf:/etc/mysql/conf.d/replica.cnf:ro
+    networks:
+      - match_bot_network
+    depends_on:
+      mysql_primary:
+        condition: service_healthy
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --server-id=2
+      --relay-log=relay-bin
+      --read-only=1
+      --innodb-buffer-pool-size=2G
+      --max-connections=500
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ─── Redis (FSM, queues, cache) ────────────────────────────────────────────
+  redis_cache:
+    image: redis:7-alpine
+    container_name: match_redis_cache
+    restart: always
+    # 2GB maxmemory for 200K users (~3KB per active user × 200K = 600MB +
+    # FSM, queues, cache = ~1.5GB total)
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis_data:/data
+    networks:
+      - match_bot_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  # ─── FastAPI app (scales to N replicas) ────────────────────────────────────
+  fastapi_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DB_HOST: mysql_primary
+      DB_REPLICA_HOST: mysql_replica
+      REDIS_HOST: redis_cache
+      ARQ_REDIS_HOST: redis_cache
+    expose:
+      - "8000"
+    depends_on:
+      mysql_primary:
+        condition: service_healthy
+      mysql_replica:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+    networks:
+      - match_bot_network
+    deploy:
+      #replicas: 4
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ─── arq worker (background jobs, scales to N replicas) ────────────────────
+  arq_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DB_HOST: mysql_primary
+      DB_REPLICA_HOST: mysql_replica
+      REDIS_HOST: redis_cache
+      ARQ_REDIS_HOST: redis_cache
+    command: ["arq", "matching_bot_project.services.arq_worker.WorkerSettings"]
+    depends_on:
+      mysql_primary:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+    networks:
+      - match_bot_network
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ─── Nginx (TLS termination + load balancer) ───────────────────────────────
+  # تغییر ۱: کل بلاک nginx از کامنت خارج شد و پورت به درستی تنظیم شد.
+  nginx:
+    image: nginx:alpine
+    container_name: match_nginx
+    restart: always
+    ports:
+      - "80:80"        # تغییر: تصحیح پورت 8080 به 80
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      - fastapi_bot    # همچنان پابرجاست
+    networks:
+      - match_bot_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ─── Prometheus (metrics scraper) ──────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: match_prometheus
+    restart: always
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - match_bot_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ─── Grafana (dashboards, optional) ────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: match_grafana
+    restart: always
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - match_bot_network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  match_bot_network:
+    driver: bridge
+
+volumes:
+  mysql_primary_data:
+  mysql_replica_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

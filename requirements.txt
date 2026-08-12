@@ -1,0 +1,34 @@
+aiogram==3.15.0
+fastapi==0.110.0
+uvicorn==0.28.0
+sqlalchemy[asyncio]==2.0.29
+redis==5.0.3
+alembic==1.13.1
+python-dotenv==1.0.1
+pydantic-settings==2.2.1
+async-timeout==4.0.3
+httpx==0.27.0
+cryptography==42.0.5
+# FIX M-24 (HIGH-25): pin aiohttp-socks upper bound; tested range 0.10.x — 0.11.x.
+aiohttp-socks>=0.10.0,<0.12.0
+# FIX M-24: pin asyncmy to the tested version.
+asyncmy==0.2.9
+openpyxl>=3.1.0
+pytz==2024.1
+jdatetime==5.0.0
+# v3 NEW: geopy for distance calculation (used by distance_filter service)
+geopy>=2.4.0
+# v3 NEW: tldextract for comprehensive URL filtering in anonymous_chat (security)
+tldextract>=5.1.0
+# v3.1 SCALING: arq for async background job queue (broadcasts, reminders)
+arq>=0.26.0
+# v3.1 SCALING: prometheus_client for /metrics endpoint
+prometheus-client>=0.20.0
+# v3.1 SCALING: PyYAML for parsing nginx configs (used in tests)
+PyYAML>=6.0
+# FIX PHASE5-HIGH-52: Pillow for EXIF stripping on profile photos.
+# Guards against GPS/camera-serial leakage when photos are proxied through
+# the bot for moderation or thumbnailing.
+Pillow>=10.0.0,<12.0.0
+geopy
+GeoAlchemy2

@@ -1,0 +1,20 @@
+{
+  "1w": {
+    "code": "1w",
+    "label": "اشتراک ۱ هفته‌ای",
+    "duration_days": 7,
+    "price_toman": 30000
+  },
+  "2w": {
+    "code": "2w",
+    "label": "اشتراک ۲ هفته‌ای",
+    "duration_days": 14,
+    "price_toman": 55000
+  },
+  "1m": {
+    "code": "1m",
+    "label": "اشتراک ۱ ماهه",
+    "duration_days": 30,
+    "price_toman": 95000
+  }
+}

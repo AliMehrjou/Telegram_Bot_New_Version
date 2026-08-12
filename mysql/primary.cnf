@@ -1,0 +1,87 @@
+# MySQL Primary config (writes)
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX PHASE3-CRIT-02 / H-08 / H-09 / H-10 + M-tz:
+#   1. default-time-zone='+00:00' added so MySQL stores TIMESTAMPs in UTC and
+#      returns them as UTC. Without this, naive DATETIME columns returned by
+#      asyncmy are interpreted in the server's local timezone (often IRST =
+#      +03:30), causing comparison errors with `datetime.now(timezone.utc)`.
+#   2. innodb-flush-log-at-trx-commit = 1 (was 2) — required for ACID. With
+#      value 2, a crash can lose up to 1 second of committed transactions.
+#      On a payment system, this is unacceptable.
+#   3. sync_binlog = 1 added — required for crash-safe replication. Without
+#      it, binlog events can be lost on crash, breaking point-in-time recovery.
+#   4. wait-timeout raised from 600 to 1800 so SQLAlchemy's pool_recycle=1800
+#      (which is now < wait-timeout) doesn't get "MySQL server has gone away".
+#   5. gtid-mode + enforce-gtid-consistency added for crash-safe failover.
+#   6. expire-logs-days (deprecated in 8.0) replaced with
+#      binlog_expire_logs_seconds.
+#   7. relay-log-recovery + slave-parallel-workers are on the REPLICA cnf.
+# ─────────────────────────────────────────────────────────────────────────────
+[mysqld]
+# ─── Timezone (FIX PHASE3-CRIT-02) ──────────────────────────────────────────
+default-time-zone = '+00:00'
+
+# ─── Replication ────────────────────────────────────────────────────────────
+server-id = 1
+log-bin = mysql-bin
+binlog-format = ROW
+
+# FIX PHASE3-H-09: GTID for crash-safe failover
+gtid-mode = ON
+enforce-gtid-consistency = ON
+
+# FIX PHASE3-M-22: expire-logs-days is deprecated in MySQL 8.0; use the new
+# setting. 7 days = 604800 seconds.
+binlog_expire_logs_seconds = 604800
+max-binlog-size = 256M
+
+# FIX PHASE3-H-09: required for crash-safe binlog (otherwise binlog events
+# can be lost on crash, breaking point-in-time recovery).
+sync_binlog = 1
+
+# ─── InnoDB tuning (for 4GB container) ──────────────────────────────────────
+innodb-buffer-pool-size = 2G
+innodb-log-file-size = 512M
+
+# FIX PHASE3-H-08: was 2 → could lose 1s of committed transactions on crash.
+# Value 1 = flush log buffer to disk at every commit (full ACID). This is
+# mandatory for a payment system.
+innodb-flush-log-at-trx-commit = 1
+
+innodb-flush-method = O_DIRECT
+
+# ─── Connection limits ──────────────────────────────────────────────────────
+max-connections = 500
+max-user-connections = 400
+
+# FIX PHASE3-H-08 (companion): wait-timeout was 600 < SQLAlchemy pool_recycle=1800.
+# A connection idle in the pool for >600s would be killed by MySQL, then the
+# next checkout gets "MySQL server has gone away". Raised to 1800 so it
+# matches pool_recycle exactly (pool_recycle recycles BEFORE wait-timeout fires).
+wait-timeout = 1800
+interactive-timeout = 1800
+
+# ─── Character set ──────────────────────────────────────────────────────────
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# ─── Slow query log ─────────────────────────────────────────────────────────
+slow-query-log = 1
+slow-query-log-file = /var/lib/mysql/slow.log
+long-query-time = 1
+log-queries-not-using-indexes = 1
+
+# FIX PHASE3-M-37: rotate the slow log so it doesn't fill the disk on a busy
+# primary. The container's logrotate or a cron job should send SIGHUP to mysqld
+# after rotation (mysqladmin flush-logs).
+# (External rotation handled by scripts/mysql_backup.sh or logrotate config.)
+
+# ─── Performance ────────────────────────────────────────────────────────────
+innodb-io-capacity = 1000
+innodb-io-capacity-max = 2000
+innodb-read-io-threads = 8
+innodb-write-io-threads = 8
+
+# ─── Crash recovery ─────────────────────────────────────────────────────────
+# Ensure InnoDB performs full recovery on startup after a crash.
+innodb-force-recovery = 0

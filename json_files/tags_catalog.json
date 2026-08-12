@@ -1,0 +1,24 @@
+{
+  "tags": [
+    {"code": "smoker", "display_name": "سیگاری", "emoji": "🚬", "category": "lifestyle", "sort_order": 1},
+    {"code": "non_smoker", "display_name": "غیرسیگاری", "emoji": "🚭", "category": "lifestyle", "sort_order": 2},
+    {"code": "athlete", "display_name": "ورزشکار", "emoji": "⚽", "category": "lifestyle", "sort_order": 3},
+    {"code": "vegetarian", "display_name": "گیاه‌خوار", "emoji": "🥗", "category": "lifestyle", "sort_order": 4},
+    {"code": "bookworm", "display_name": "کتاب‌خوان", "emoji": "📚", "category": "interest", "sort_order": 10},
+    {"code": "cinephile", "display_name": "دوستدار سینما", "emoji": "🎬", "category": "interest", "sort_order": 11},
+    {"code": "musician", "display_name": "موسیقیدان", "emoji": "🎵", "category": "interest", "sort_order": 12},
+    {"code": "gamer", "display_name": "گیمر", "emoji": "🎮", "category": "interest", "sort_order": 13},
+    {"code": "traveler", "display_name": "مسافر", "emoji": "✈️", "category": "interest", "sort_order": 14},
+    {"code": "photographer", "display_name": "عکاس", "emoji": "📷", "category": "interest", "sort_order": 15},
+    {"code": "coffee_lover", "display_name": "قهوه‌نوش", "emoji": "☕", "category": "habit", "sort_order": 20},
+    {"code": "tea_lover", "display_name": "چی‌نوش", "emoji": "🫖", "category": "habit", "sort_order": 21},
+    {"code": "night_owl", "display_name": "شب‌بیدار", "emoji": "🦉", "category": "habit", "sort_order": 22},
+    {"code": "early_bird", "display_name": "سحرخیز", "emoji": "🌅", "category": "habit", "sort_order": 23},
+    {"code": "tall", "display_name": "قد بلند", "emoji": "📏", "category": "physical", "sort_order": 30},
+    {"code": "introvert", "display_name": "خجالتی", "emoji": "🤫", "category": "personality", "sort_order": 40},
+    {"code": "extrovert", "display_name": "اجتماعی", "emoji": "🗣️", "category": "personality", "sort_order": 41},
+    {"code": "funny", "display_name": "شوخ‌طبع", "emoji": "😄", "category": "personality", "sort_order": 42},
+    {"code": "serious", "display_name": "جدی", "emoji": "😐", "category": "personality", "sort_order": 43},
+    {"code": "romantic", "display_name": "احساساتی", "emoji": "💖", "category": "personality", "sort_order": 44}
+  ]
+}

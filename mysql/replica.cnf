@@ -1,0 +1,80 @@
+# MySQL Replica config (read-only)
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX PHASE3-CRIT-02 / H-08 / H-09 / H-10 + L-04/L-05 + M-tz:
+#   1. default-time-zone='+00:00' (same rationale as primary).
+#   2. wait-timeout raised to 1800 to match SQLAlchemy pool_recycle.
+#   3. binlog_expire_logs_seconds replaces deprecated expire-logs-days.
+#   4. relay-log-recovery added for crash-safe replication (otherwise the
+#      replica may skip transactions after a crash).
+#   5. slave-parallel-workers added for faster replication (multi-threaded
+#      replica SQL thread).
+#   6. GTID enabled (matches primary) for crash-safe failover.
+#   7. log-slave-updates kept (needed so the replica can itself be a primary
+#      for cascading replication, and for point-in-time recovery on the replica).
+# ─────────────────────────────────────────────────────────────────────────────
+[mysqld]
+# ─── Timezone (FIX PHASE3-CRIT-02) ──────────────────────────────────────────
+default-time-zone = '+00:00'
+
+# ─── Replication ────────────────────────────────────────────────────────────
+server-id = 2
+relay-log = relay-bin
+read-only = 1
+log-slave-updates = 1
+
+# FIX PHASE3-H-09: GTID for crash-safe failover (must match primary).
+gtid-mode = ON
+enforce-gtid-consistency = ON
+
+# FIX PHASE3-M-22: replace deprecated expire-logs-days.
+binlog_expire_logs_seconds = 604800
+
+# FIX PHASE3-L-04: crash-safe replica — if the replica crashes, on restart
+# it re-fetches any transactions that were in the relay log but not yet
+# applied, instead of skipping them.
+relay-log-recovery = ON
+
+# FIX PHASE3-L-05: multi-threaded replica SQL thread for faster replication.
+# DATABASE-level parallelism (one worker per database) is the safest for
+# mixed workloads. LOGICAL_CLOCK is more aggressive but requires binlog
+# transaction dependencies; it works on MySQL 8.0+.
+slave_parallel_workers = 8
+slave_parallel_type = LOGICAL_CLOCK
+slave_preserve_commit_order = ON
+
+# ─── InnoDB tuning (same as primary) ────────────────────────────────────────
+innodb-buffer-pool-size = 2G
+innodb-log-file-size = 512M
+
+# Replica doesn't serve writes, so flush-at-trx-commit=2 is acceptable here
+# (slight durability loss for higher write throughput on replication apply).
+# If the replica serves as a hot standby for failover, change to 1.
+innodb-flush-log-at-trx-commit = 2
+innodb-flush-method = O_DIRECT
+
+# ─── Connection limits (replicas serve read traffic, so more connections) ───
+max-connections = 500
+# FIX PHASE3-M-30: max-user-connections on a replica must leave room for the
+# replication SQL thread + connection. Reduced from 400 to 380 to reserve
+# ~20 connections for replication overhead + monitoring.
+max-user-connections = 380
+
+# FIX PHASE3-H-08 (companion): wait-timeout raised to match pool_recycle.
+wait-timeout = 1800
+interactive-timeout = 1800
+
+# ─── Character set ──────────────────────────────────────────────────────────
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# ─── Slow query log ─────────────────────────────────────────────────────────
+slow-query-log = 1
+slow-query-log-file = /var/lib/mysql/slow.log
+long-query-time = 1
+log-queries-not-using-indexes = 1
+
+# ─── Performance ────────────────────────────────────────────────────────────
+innodb-io-capacity = 1000
+innodb-io-capacity-max = 2000
+innodb-read-io-threads = 8
+innodb-write-io-threads = 4

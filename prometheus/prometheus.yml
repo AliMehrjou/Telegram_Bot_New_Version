@@ -1,0 +1,52 @@
+# Prometheus configuration for Matching Bot v3.1
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'match-bot-prod'
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # ─── FastAPI app metrics ───────────────────────────────────────────────────
+  - job_name: 'match_bot_app'
+    metrics_path: /metrics
+    static_configs:
+      # nginx load-balances /metrics across all fastapi_bot replicas.
+      # If you want per-replica metrics, scrape each replica directly.
+      - targets: ['nginx:80']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'fastapi_cluster'
+
+  # ─── Nginx metrics (optional) ─────────────────────────────────────────────
+  # If you enable stub_status in nginx.conf, scrape it here.
+  # - job_name: 'nginx'
+  #   static_configs:
+  #     - targets: ['nginx:80/stub_status']
+
+  # ─── MySQL metrics (requires mysqld_exporter) ─────────────────────────────
+  # - job_name: 'mysql_primary'
+  #   static_configs:
+  #     - targets: ['mysql_exporter_primary:9104']
+  # - job_name: 'mysql_replica'
+  #   static_configs:
+  #     - targets: ['mysql_exporter_replica:9104']
+
+  # ─── Redis metrics (requires redis_exporter) ──────────────────────────────
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis_exporter:9121']
+
+  # ─── arq worker metrics (would need separate exporter) ────────────────────
+  # Currently arq does not expose Prometheus metrics directly.
+  # You can use `arq-prometheus` package or build a custom exporter.
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - 'alertmanager:9093'
