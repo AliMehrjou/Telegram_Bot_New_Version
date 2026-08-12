@@ -252,46 +252,67 @@ async def delete_account_command(message: Message):
     await message.answer(f"{P_WARN_HTML} <b>آیا از حذف اکانت خود مطمئن هستید؟</b>\nتمام اطلاعات، مچ‌ها و امتیازات شما برای همیشه پاک خواهد شد.", reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data == "confirm_delete_account")
-async def confirm_delete_account_handler(call: CallbackQuery, db_session: AsyncSession):
+async def confirm_delete_account_handler(call: CallbackQuery, db_session: AsyncSession, state: FSMContext):
     user = await crud.get_user_by_tg_id(db_session, call.from_user.id)
     
-    if user:
-        try:
-            # --- متوقف کردن دیت قبل از حذف اکانت ---
-            active_match = await crud.get_active_match(db_session, user.tg_id)
-            if active_match:
-                active_match.is_active = False
-                active_match.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                
-                partner_id = active_match.user_two_id if active_match.user_one_id == user.tg_id else active_match.user_one_id
-                
-                partner_ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id))
-                await partner_ctx.set_state(None)
-                await partner_ctx.clear()
-                
-                try:
-                    await redis_client.delete(f"user:state:{partner_id}")
-                    await bot.send_message(
-                        chat_id=partner_id,
-                        text="⚠️ <b>دیت متوقف شد!</b>\nپارتنر شما اکانت خود را در ربات حذف کرد.",
-                        parse_mode="HTML",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                except Exception:
-                    pass
-            # --------------------------------------
+    if not user:
+        # اگر کاربر پیدا نشد همون اول خارج می‌شیم تا کد الکی تو در تو نشه (Early Return)
+        return await call.answer("⚠️ حساب کاربری شما یافت نشد یا قبلاً حذف شده است.", show_alert=True)
 
-            await crud.mark_account_deleted(db_session, user.tg_id)
-            await db_session.delete(user)
-            await db_session.commit()
-        except Exception as e:
-            await db_session.rollback()
-            logger.error(f"Error during account deletion for {call.from_user.id}: {e}")
-            return await call.answer("خطایی در حذف اکانت رخ داد. لطفاً دوباره تلاش کنید.", show_alert=True)
+    try:
+        # --- ۱. متوقف کردن دیت/چت فعال ---
+        active_match = await crud.get_active_match(db_session, user.tg_id)
+        if active_match:
+            active_match.is_active = False
+            active_match.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
             
-    await call.message.edit_text(f"{P_CHECK_HTML} <b>اکانت شما و تمامی اطلاعاتتان با موفقیت حذف شد.</b>\nبرای استفاده مجدد /start را بفرستید.", parse_mode=ParseMode.HTML)
-    
-    
+            partner_id = active_match.user_two_id if active_match.user_one_id == user.tg_id else active_match.user_one_id
+            
+            # پاکسازی استیت پارتنر
+            partner_ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id))
+            await partner_ctx.set_state(None)
+            await partner_ctx.clear()
+            
+            try:
+                await redis_client.delete(f"user:state:{partner_id}")
+                await bot.send_message(
+                    chat_id=partner_id,
+                    text="⚠️ <b>دیت متوقف شد!</b>\nپارتنر شما اکانت خود را در ربات حذف کرد.",
+                    parse_mode="HTML",
+                    reply_markup=get_main_menu_keyboard()
+                )
+            except Exception as e:
+                logger.warning(f"Could not notify partner {partner_id} about account deletion: {e}")
+        # --------------------------------------
+
+        # --- ۲. پاکسازی کامل کاربر از صف‌های ردیس و ماشین حالت (FSM) ---
+        try:
+            from matching_bot_project.bot.core.loader import matching_engine
+            await matching_engine.remove_from_queue(user.tg_id)
+            await redis_client.delete(f"user:state:{user.tg_id}")
+            await state.clear()
+        except Exception as e:
+            logger.error(f"Error clearing Redis/FSM for deleted user {user.tg_id}: {e}")
+        # --------------------------------------
+
+        # --- ۳. حذف از دیتابیس ---
+        await crud.mark_account_deleted(db_session, user.tg_id)
+        await db_session.delete(user)
+        await db_session.commit()
+
+        # پیام موفقیت‌آمیز بودن حذف
+        await call.message.edit_text(
+            f"{P_CHECK_HTML} <b>اکانت شما و تمامی اطلاعاتتان با موفقیت حذف شد.</b>\n"
+            "برای استفاده مجدد /start را بفرستید.", 
+            parse_mode=ParseMode.HTML
+        )
+
+    except Exception as e:
+        await db_session.rollback()
+        logger.error(f"Error during account deletion for {call.from_user.id}: {e}", exc_info=True)
+        await call.answer("خطایی در حذف اکانت رخ داد. لطفاً دوباره تلاش کنید.", show_alert=True)
+        
+
 @router.callback_query(F.data == "close_menu")
 async def close_menu_handler(call: CallbackQuery):
     await call.message.delete()
