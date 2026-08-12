@@ -128,29 +128,44 @@ async def cancel_profile_editing(message: Message, state: FSMContext):
 async def show_edit_menu(call: CallbackQuery, state: FSMContext):
     await state.clear() 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="تغییر نام", callback_data="change_name", icon_custom_emoji_id="5373012449597335010", style="primary"),
-                InlineKeyboardButton(text="ویرایش بیوگرافی", callback_data="change_bio", icon_custom_emoji_id="5470060791883374114", style="primary")
-            ],
-            [
-                InlineKeyboardButton(text="تغییر علایق", callback_data="change_interests", icon_custom_emoji_id="5467583879948803288", style="primary"),
-                InlineKeyboardButton(text="تغییر عکس", callback_data="change_photo", icon_custom_emoji_id="5375074927252621134", style="primary")
-            ],
-            [
-                InlineKeyboardButton(text="وضعیت تأهل", callback_data="change_marital", icon_custom_emoji_id="5402100905883488232", style="primary"),
-                InlineKeyboardButton(text="تغییر آهنگ", callback_data="change_voice", icon_custom_emoji_id="5188621441926438751", style="primary")
-            ],
-            [
-                InlineKeyboardButton(text="استان/شهر", callback_data="change_location", icon_custom_emoji_id="5399898266265475100", style="primary"),
-                InlineKeyboardButton(text="لوکیشن دقیق", callback_data="change_gps", icon_custom_emoji_id="5433825729060018456", style="primary")
-            ],
-            [
-                InlineKeyboardButton(text="تغییر سن", callback_data="change_age", icon_custom_emoji_id="5370999492914976897", style="primary"),
-                InlineKeyboardButton(text="کامنت‌های من", callback_data=f"view_comments:{call.from_user.id}:0", icon_custom_emoji_id="5465300082628763143", style="primary")
-            ],
-        ])
+        [
+            InlineKeyboardButton(text="تغییر نام", callback_data="change_name", icon_custom_emoji_id="5373012449597335010", style="primary"),
+            InlineKeyboardButton(text="ویرایش بیوگرافی", callback_data="change_bio", icon_custom_emoji_id="5470060791883374114", style="primary")
+        ],
+        [
+            InlineKeyboardButton(text="تغییر علایق", callback_data="change_interests", icon_custom_emoji_id="5467583879948803288", style="primary"),
+            InlineKeyboardButton(text="تغییر عکس", callback_data="change_photo", icon_custom_emoji_id="5375074927252621134", style="primary")
+        ],
+        [
+            InlineKeyboardButton(text="وضعیت تأهل", callback_data="change_marital", icon_custom_emoji_id="5402100905883488232", style="primary"),
+            InlineKeyboardButton(text="تغییر آهنگ", callback_data="change_voice", icon_custom_emoji_id="5188621441926438751", style="primary")
+        ],
+        [
+            InlineKeyboardButton(text="استان/شهر", callback_data="change_location", icon_custom_emoji_id="5399898266265475100", style="primary"),
+            InlineKeyboardButton(text="لوکیشن دقیق", callback_data="change_gps", icon_custom_emoji_id="5433825729060018456", style="primary")
+        ],
+        [
+            InlineKeyboardButton(text="تغییر سن", callback_data="change_age", icon_custom_emoji_id="5370999492914976897", style="primary"),
+            InlineKeyboardButton(text="کامنت‌های من", callback_data=f"view_comments:{call.from_user.id}:0", icon_custom_emoji_id="5465300082628763143", style="primary")
+        ],
+    ])
 
-
+    # --- بخش اضافه شده برای رفع باگ قفل شدن دکمه ---
+    
+    # متوقف کردن حالت لودینگ دکمه
+    await call.answer()
+    
+    # از آنجایی که پیام قبلی ممکن است عکس باشد (کارت پروفایل)، بهتر است آن را حذف کرده و یک پیام جدید بفرستیم
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+        
+    await call.message.answer(
+        "⚙️ <b>ویرایش پروفایل</b>\n\nلطفاً بخشی که می‌خواهید ویرایش کنید را انتخاب کنید:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
 
 @router.callback_query(F.data == "change_bio")
 async def start_bio_edit(call: CallbackQuery, state: FSMContext) -> None:
