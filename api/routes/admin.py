@@ -13,6 +13,7 @@ from matching_bot_project.database.queries.crud import get_user_by_tg_id, proces
 from matching_bot_project.bot.core.loader import bot
 from matching_bot_project.services.broadcast_worker import BroadcastWorker
 from matching_bot_project.bot.core.config import settings
+from matching_bot_project.database.session import get_read_db_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin Control Panel"])
