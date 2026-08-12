@@ -27,7 +27,6 @@ from matching_bot_project.bot.keyboards.reply import get_main_menu_keyboard
 from matching_bot_project.database.models.models import User
 from matching_bot_project.database.queries import crud
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-خب 
 logger = logging.getLogger(__name__)
 router = Router()
 
