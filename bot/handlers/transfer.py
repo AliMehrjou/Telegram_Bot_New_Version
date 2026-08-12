@@ -655,16 +655,6 @@ async def view_profile_by_transfer_token(call: CallbackQuery, db_session):
         reply_markup=markup,
     )
     
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.state import StatesGroup, State
-
-# تعریف یک State جدید برای دریافت شناسه عمومی (public_id)
-class ManualTransferStates(StatesGroup):
-    waiting_for_target_id = State()
-
-# (اگر کلاس ManualTransferStates را در بالای فایل ایمپورت نکرده‌ای، این ایمپورت باید باشد)
-from matching_bot_project.bot.states.states import ManualTransferStates
-
 @router.callback_query(F.data == "coins_transfer")
 async def manual_transfer_start(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     """شروع فرایند انتقال دستی با شناسه اختصاصی ربات"""

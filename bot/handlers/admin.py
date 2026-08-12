@@ -896,7 +896,7 @@ async def cq_stats(call: CallbackQuery, db_read_session: AsyncSession):
         await call.message.answer("Active Hours tracking requires complex grouping. Not fully implemented yet.")
 
     elif action == "stats_top_prov":
-        result = await db_session.execute(
+        result = await db_read_session.execute(
             select(User.province, func.count(User.id).label('count'))
             .where(User.province != None)
             .group_by(User.province)
@@ -908,8 +908,8 @@ async def cq_stats(call: CallbackQuery, db_read_session: AsyncSession):
         await call.message.answer(text)
 
     elif action == "stats_conv_rate":
-        total_matches = await db_session.scalar(select(func.count(MatchHistory.id)))
-        successful_chats = await db_session.scalar(select(func.count(MatchHistory.id)).where(MatchHistory.chat_approved == True))
+        total_matches = await db_read_session.scalar(select(func.count(MatchHistory.id)))
+        successful_chats = await db_read_session.scalar(select(func.count(MatchHistory.id)).where(MatchHistory.chat_approved == True))
         rate = (successful_chats / total_matches * 100) if total_matches else 0
         await call.message.answer(f"Chat Conversion Rate: {rate:.2f}% ({successful_chats}/{total_matches})")
 
@@ -1241,13 +1241,14 @@ async def confirm_broadcast_action(call: CallbackQuery, state: FSMContext, db_se
         await state.clear()
         return await call.answer("⚠️ خطا: پیام در حافظه یافت نشد. دوباره امتحان کنید.", show_alert=True)
         
+    await call.answer() # 👈 افزوده شدن answer برای توقف لودینگ دکمه
+    
     # تشخیص اینکه آیا دکمه پین زده شده یا خیر
     pin_in_chats = (call.data == "broadcast_confirm_pin")
     
-    user_ids = []
-    stream_result = await db_session.stream_scalars(select(User.tg_id).execution_options(yield_per=1000))
-    async for tg_id in stream_result:
-        user_ids.append(tg_id)
+    # 👈 فیکس: استفاده از روش ایمن و استاندارد برای واکشی کاربران
+    result = await db_session.execute(select(User.tg_id))
+    user_ids = [int(r) for r in result.scalars().all()]
 
     if not user_ids:
         await state.clear()
@@ -1430,10 +1431,9 @@ async def event_confirm(call: CallbackQuery, state: FSMContext, db_session: Asyn
     )
  
     # بهینه‌سازی استخراج آیدی یوزرها برای نوتیفیکیشن ایونت
-    user_ids = []
-    stream_result = await db_session.stream_scalars(select(User.tg_id).execution_options(yield_per=1000))
-    async for tg_id in stream_result:
-        user_ids.append(tg_id)
+# بهینه‌سازی استخراج آیدی یوزرها برای نوتیفیکیشن ایونت
+    result = await db_session.execute(select(User.tg_id))
+    user_ids = [int(r) for r in result.scalars().all()]
  
     notification_text = (
         f"🎉 <b>رویداد ویژه شروع شد!</b>\n\n"
@@ -1712,10 +1712,9 @@ async def pbroadcast_confirm(call: CallbackQuery, state: FSMContext, db_session:
         parse_mode="HTML",
     )
     
-    users_raw_data = []
-    stream_result = await db_session.stream_tuples(stmt.execution_options(yield_per=1000))
-    async for row in stream_result:
-        users_raw_data.append(row)
+    # 👈 فیکس: تغییر به execute معمولی برای جلوگیری از کرش دیتابیس
+    result = await db_session.execute(stmt)
+    users_raw_data = list(result.all())
         
     if not users_raw_data:
         await call.message.answer("⚠️ عملیات پایان یافت اما هیچ کاربری با این فیلترها در دیتابیس یافت نشد.")

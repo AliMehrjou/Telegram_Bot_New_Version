@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
+from matching_bot_project.bot.handlers.vip import _is_vip_active
 import html
 from matching_bot_project.bot.handlers.questionnaire import (
     build_progress_bar, TOTAL_QUESTIONS,
@@ -342,7 +343,7 @@ async def enter_match_queue(
             return
 
     # 💎 بررسی وضعیت VIP و رایگان کردن هزینه‌ها در ظاهر و باطن
-    is_vip_active = user.is_vip and (user.vip_expires_at and user.vip_expires_at > now_utc)
+    is_vip_active = _is_vip_active(user)
     if is_vip_active and cost > 0:
         cost_display = "رایگان (ویژه VIP 💎)"
         cost = 0  # صفر کردن هزینه پردازشی
@@ -900,7 +901,7 @@ async def request_rematch(call: CallbackQuery, state: FSMContext, db_session: As
     tg_id = call.from_user.id
     user = await crud.get_user_by_tg_id(db_session, tg_id)
     
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    is_vip_active = _is_vip_active(user)
     is_vip_active = user.is_vip and (user.vip_expires_at and user.vip_expires_at > now_utc)
     
     if not is_vip_active:
@@ -933,4 +934,15 @@ async def request_rematch(call: CallbackQuery, state: FSMContext, db_session: As
         # اصلاح لحن
         await call.answer("⚠️ متأسفانه ارتباط پارتنر شما با ربات قطع شده است.", show_alert=True)
     
+    await call.answer()
+
+
+@router.callback_query(F.data == "cancel_vip_filter")
+async def cancel_vip_filter_handler(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer("❌ عملیات مچینگ لغو شد.", reply_markup=get_main_menu_keyboard())
     await call.answer()

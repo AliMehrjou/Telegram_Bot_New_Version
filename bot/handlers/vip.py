@@ -367,24 +367,32 @@ async def vip_pay_card(call: CallbackQuery, db_session: AsyncSession, state: FSM
     await call.message.edit_text(text)
     await call.answer()
 
-@router.callback_query(F.data.in_({"vip_buy_cancel", "close_vip_panel"}))
-async def vip_buy_cancel(call: CallbackQuery, state: FSMContext):
-    """لغو و بستن ایمن پنل‌های VIP"""
+
+@router.callback_query(F.data == "close_vip_panel")
+async def close_vip_panel_handler(call: CallbackQuery, state: FSMContext):
+    """بستن ایمن پنل اصلی VIP"""
     await state.clear()
     try:
-        # تلاش برای پاک کردن کامل پیام پنل
         await call.message.delete()
-    except TelegramBadRequest:
-        # اگر تلگرام اجازه حذف نداد، حداقل کیبورد را برمی‌داریم تا دکمه‌ها غیرفعال شوند
+    except Exception:
         try:
             await call.message.edit_text("❌ پنل بسته شد.", reply_markup=None)
         except Exception:
             pass
-    except Exception:
-        pass
-    
-    await call.answer("بسته شد.", show_alert=False)
+    await call.answer("پنل بسته شد.", show_alert=False)
 
+@router.callback_query(F.data == "vip_buy_cancel")
+async def vip_buy_cancel_handler(call: CallbackQuery, state: FSMContext):
+    """لغو فرآیند خرید اشتراک VIP"""
+    await state.clear()
+    try:
+        await call.message.delete()
+    except Exception:
+        try:
+            await call.message.edit_text("❌ عملیات خرید لغو شد.", reply_markup=None)
+        except Exception:
+            pass
+    await call.answer("عملیات لغو شد.", show_alert=False)
 
 @router.callback_query(F.data.startswith("vip_pay_gateway_"))
 async def vip_pay_gateway(call: CallbackQuery, db_session: AsyncSession, state: FSMContext):

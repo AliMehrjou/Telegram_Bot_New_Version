@@ -30,6 +30,7 @@ from matching_bot_project.bot.core.config import settings
 from matching_bot_project.bot.core.constants import ReplyBtn, Messages as SystemMsg
 from matching_bot_project.bot.core.formatters import build_unified_profile_card, chunk_html_text, get_pagination_row
 from matching_bot_project.bot.core.loader import bot, dating_scheduler, dp, redis_client
+from matching_bot_project.bot.handlers.vip import _is_vip_active
 from matching_bot_project.bot.keyboards.inline import (
     get_end_chat_confirm_keyboard,
     get_end_date_confirm_keyboard,
@@ -168,8 +169,8 @@ async def view_partner_profile(call: CallbackQuery, db_session: AsyncSession) ->
     caller_active_match = await crud.get_active_match(db_session, call.from_user.id)
     action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend, in_active_match=(caller_active_match is not None))
 
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
+    is_target_vip = _is_vip_active(user)
+
     if is_target_vip and call.from_user.id != target_id:
         key = f"user:{target_id}:viewers"
         await redis_client.zadd(key, {str(call.from_user.id): time.time()})
@@ -204,8 +205,8 @@ async def view_partner_profile_by_pub_id(call: CallbackQuery, db_session: AsyncS
     in_active_match = await crud.is_active_match_partner(db_session, call.from_user.id, target_id)
     action_kb = get_user_action_keyboard(target_id, is_blocked=is_blocked, is_friend=already_friend, in_active_match=in_active_match)
 
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_target_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
+    is_target_vip = _is_vip_active(user)
+
     if is_target_vip and call.from_user.id != target_id:
         key = f"user:{target_id}:viewers"
         await redis_client.zadd(key, {str(call.from_user.id): time.time()})
@@ -1345,8 +1346,7 @@ async def handle_requests_to_users(call: CallbackQuery, state: FSMContext, db_se
     await auto_heal_ghost_state(caller_id, state, db_session)
     
     caller = await crud.get_user_by_tg_id(db_session, caller_id)
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_vip = caller.is_vip and (not caller.vip_expires_at or caller.vip_expires_at > now_utc)
+    is_vip = _is_vip_active(caller)
 
     # 💎 اصلاحات کارفرما: بررسی VIP
     if not is_vip and (not caller or caller.coin_balance < 1):
@@ -1441,9 +1441,7 @@ async def accept_user_request(call: CallbackQuery, state: FSMContext, db_session
     target_id = call.from_user.id
 
     caller = await crud.get_user_by_tg_id(db_session, caller_id)
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_caller_vip = caller.is_vip and (not caller.vip_expires_at or caller.vip_expires_at > now_utc)
-
+    is_caller_vip = _is_vip_active(caller)
     if not is_caller_vip and (not caller or caller.coin_balance < 1):
         await call.answer("❌ موجودی سکه فرستنده کافی نیست. ارتباط برقرار نشد.", show_alert=True)
         try:

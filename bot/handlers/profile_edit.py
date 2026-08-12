@@ -533,16 +533,12 @@ async def process_gps_location(message: Message, state: FSMContext, db_session: 
     lng = message.location.longitude
     tg_id = message.from_user.id
     
-    user = await crud.get_user_by_tg_id(db_session, tg_id)
-    if user:
-        user.location_lat = lat
-        user.location_lng = lng
-        await db_session.commit()
-        
+    # 👈 فیکس: استفاده از crud.update_user_location برای ساخت هندسه مکانی در دیتابیس تا کاربر در رادار دیده شود
+    success = await crud.update_user_location(db_session, tg_id, lat, lng)
+    if success:
         # --- Profile Completion Step ---
         await profile_completion_service.mark_step_done(db_session, tg_id, "gps")
         reward = await profile_completion_service.try_award_completion_reward(db_session, tg_id)
-        # -------------------------------
         
         await message.answer("✅ لوکیشن شما با موفقیت روی نقشه ثبت شد.", reply_markup=get_main_menu_keyboard())
         

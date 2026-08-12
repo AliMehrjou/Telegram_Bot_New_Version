@@ -225,9 +225,9 @@ class MatchingEngine:
         caller_min_age: Optional[int] = 0,
         caller_max_age: Optional[int] = 99,
         caller_interests_str: Optional[str] = "",
-        caller_lat: Optional[float] = None,     # 🌟 پارامتر جدید
-        caller_lng: Optional[float] = None,     # 🌟 پارامتر جدید
-        is_nearby_search: bool = False          # 🌟 پارامتر جدید
+        caller_lat: Optional[float] = None,
+        caller_lng: Optional[float] = None,
+        is_nearby_search: bool = False
     ) -> Optional[int]:
         await self.connect()
 
@@ -235,6 +235,7 @@ class MatchingEngine:
         target_keys = self._get_target_queue_keys(gender, target_gender, province)
 
         caller_interests = set(caller_interests_str.split(",")) if caller_interests_str else set()
+        caller_interests.discard("")
         caller_age = int(caller_age or 0)
         caller_min_age = int(caller_min_age or 0)
         caller_max_age = int(caller_max_age or 99)
@@ -244,21 +245,25 @@ class MatchingEngine:
             if queue_len == 0:
                 continue
 
-            MAX_SCAN_LIMIT = min(queue_len, 100)
-            BATCH_SIZE = 20
+            # افزایش ظرفیت اسکن و استفاده از سایز دسته‌های بزرگ‌تر
+            MAX_SCAN_LIMIT = min(queue_len, 1000)
+            BATCH_SIZE = 50
+            
+            # شمارش کاربرانی که واقعاً پردازش شده‌اند (برای عبور از افراد فاقد شرایط بدون سوزاندن لیمیت)
+            valid_candidates_checked = 0
+            MAX_VALID_CHECKS = 100
 
             for offset in range(0, MAX_SCAN_LIMIT, BATCH_SIZE):
-                end_idx = queue_len - offset - 1
-                start_idx = max(0, queue_len - offset - BATCH_SIZE)
-
-                if end_idx < 0:
+                if valid_candidates_checked >= MAX_VALID_CHECKS:
                     break
+
+                # خواندن از سر صف (ایندکس 0 = جدیدترین افراد) تا ریسک برخورد با دد-کانکشن‌ها کم شود
+                start_idx = offset
+                end_idx = offset + BATCH_SIZE - 1
 
                 candidates_batch = await self.redis.lrange(target_queue_key, start_idx, end_idx)
                 if not candidates_batch:
-                    continue
-
-                candidates_batch.reverse()
+                    break
 
                 for candidate_id_str in candidates_batch:
                     candidate_id = int(candidate_id_str)
@@ -271,41 +276,46 @@ class MatchingEngine:
                     peeked_state = await self.redis.hgetall(candidate_state_key)
 
                     if not peeked_state or peeked_state.get("status") != "queuing":
+                        # پاکسازی درجا برای کاربرانی که استیت آن‌ها خراب یا منقضی شده
                         await self.redis.lrem(target_queue_key, 0, candidate_id_str)
                         continue
+                    
+                    valid_candidates_checked += 1
 
-                    # 🌟 [شروع منطق فیلتر مسافت با GPS]
+                    # 🌟 [منطق فیلتر مسافت با GPS]
                     if is_nearby_search and caller_lat is not None and caller_lng is not None:
                         cand_lat_str = peeked_state.get("lat", "")
                         cand_lng_str = peeked_state.get("lng", "")
                         
                         if not cand_lat_str or not cand_lng_str:
-                            continue  # کاربر مقابل لوکیشن ندارد
+                            continue  
                             
                         try:
                             cand_lat = float(cand_lat_str)
                             cand_lng = float(cand_lng_str)
                             distance = _haversine_distance(caller_lat, caller_lng, cand_lat, cand_lng)
                             
-                            if distance > 50.0:  # شعاع ۵۰ کیلومتری برای مچینگ
+                            if distance > 50.0:  
                                 continue
                         except ValueError:
                             continue
-                    # 🌟 [پایان منطق مسافت]
 
                     candidate_age = int(peeked_state.get("age", 0))
                     candidate_min_age = int(peeked_state.get("min_age_filter", 0))
                     candidate_max_age = int(peeked_state.get("max_age_filter", 99))
-
                     if not (caller_min_age <= candidate_age <= caller_max_age):
                         continue
                     if not (candidate_min_age <= caller_age <= candidate_max_age):
                         continue
 
+                    # 🌟 [اصلاح منطق علایق VIP]
                     if is_vip and caller_interests:
                         peeked_interests_str = peeked_state.get("interests", "")
                         peeked_interests = set(peeked_interests_str.split(",")) if peeked_interests_str else set()
-                        if not caller_interests.intersection(peeked_interests):
+                        peeked_interests.discard("")
+                        
+                        # فقط زمانی رد می‌شود که شخص مقابل علاقه ثبت کرده باشد ولی هیچ اشتراکی نداشته باشند
+                        if peeked_interests and not caller_interests.intersection(peeked_interests):
                             continue
 
                     caller_blocks_key = f"user:{tg_id}:blocks"
@@ -364,6 +374,13 @@ class MatchingEngine:
                     except WatchError:
                         continue
 
+        await self.add_to_queue(
+            tg_id, gender, target_gender, province,
+            interests=caller_interests_str, age=caller_age,
+            min_age_filter=caller_min_age, max_age_filter=caller_max_age,
+            lat=caller_lat, lng=caller_lng 
+        )
+        return None
         # پاس دادن متغیرهای جدید در زمان بازگشت به صف
         await self.add_to_queue(
             tg_id, gender, target_gender, province,

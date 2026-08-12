@@ -1006,6 +1006,7 @@ async def get_filtered_discovery_candidates(
     online_only:    bool                = False,
     limit:          int = 10,
     pool_size:      int = 100, 
+    discovery_filter: Optional[str]     = None, # 👈 این خط باید اضافه شود
 ) -> List[User]:
     caller = await get_user_by_tg_id(session, caller_tg_id)
     if not caller:
@@ -1046,6 +1047,22 @@ async def get_filtered_discovery_candidates(
     ]
     
     # 3. اعمال فیلترهای استاندارد
+    # --- اعمال فیلترهای دیسکاوری ---
+    if discovery_filter == "same_city" and caller.city:
+        conditions.append(User.city == caller.city)
+    elif discovery_filter == "same_province" and caller.province:
+        conditions.append(User.province == caller.province)
+    elif discovery_filter == "same_interests" and caller.interests:
+        interests_list = [i.strip() for i in caller.interests.split(",") if i.strip()]
+        if interests_list:
+            from sqlalchemy import or_
+            conditions.append(or_(*[func.FIND_IN_SET(i, User.interests) > 0 for i in interests_list]))
+    elif discovery_filter == "no_chat":
+        chatted_as_one = select(MatchHistory.user_two_id).where(MatchHistory.user_one_id == caller_tg_id)
+        chatted_as_two = select(MatchHistory.user_one_id).where(MatchHistory.user_two_id == caller_tg_id)
+        conditions.append(User.tg_id.not_in(chatted_as_one))
+        conditions.append(User.tg_id.not_in(chatted_as_two))
+    # --------------------------------
     if gender_filter:
         conditions.append(func.lower(User.gender) == gender_filter.lower())
         

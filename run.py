@@ -46,8 +46,8 @@ def register_bot_middlewares_and_routers():
     # v3 NEW: Like rate limit middleware (1 like per minute)
     dp.callback_query.middleware(LikeRateLimitMiddleware())
 
-    dp.message.middleware(StateLockMiddleware())
-    dp.callback_query.middleware(StateLockMiddleware())
+    # dp.message.middleware(StateLockMiddleware())
+    # dp.callback_query.middleware(StateLockMiddleware())
 
     dp.include_router(guard_router)
 

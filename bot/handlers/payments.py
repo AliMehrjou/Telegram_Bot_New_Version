@@ -232,10 +232,15 @@ async def process_gateway_payment(call: CallbackQuery, state: FSMContext, db_ses
 @router.callback_query(F.data == "cancel_payment")
 async def cancel_payment_flow(call: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     await state.clear()
-    await call.answer("❌ عملیات خرید لغو شد.")
-    
-    
-    await show_store(call, state, db_session)
+    await call.answer("❌ عملیات لغو شد.")
+    try:
+        await call.message.delete()
+    except Exception:
+        # اگر تلگرام اجازه حذف نداد، کیبورد را برمی‌داریم
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
 @router.callback_query(F.data.startswith("verify_receipt_"))
 async def admin_verify_receipt(call: CallbackQuery, db_session: AsyncSession):

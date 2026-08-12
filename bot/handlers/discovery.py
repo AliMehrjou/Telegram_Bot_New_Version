@@ -28,6 +28,7 @@ from matching_bot_project.bot.core.loader import bot, redis_client
 from matching_bot_project.bot.core.constants import ReplyBtn
 from matching_bot_project.bot.handlers.profile_edit import IRAN_DATA
 from matching_bot_project.bot.core.formatters import build_unified_profile_card
+from matching_bot_project.bot.handlers.vip import _is_vip_active
 from matching_bot_project.bot.keyboards.inline import (
     get_discovery_age_keyboard,
     get_discovery_interests_keyboard,
@@ -166,6 +167,7 @@ async def show_discovery_list_page(call_or_message, state: FSMContext, db_sessio
         exclude_ids=[],  # ❌ در حالت لیستی، بازدیدشده‌ها را اینجا حذف نمی‌کنیم تا لیست همیشه پر بماند
         limit=50,        # گرفتن ۵۰ نفر برتر برای ۵ الی ۱۰ صفحه
         pool_size=100,
+        discovery_filter=discovery_filter,
     )
 
     if not candidates:
@@ -583,8 +585,7 @@ async def disc_liked_me(call: CallbackQuery, db_read_session: AsyncSession):
         return
 
     # FIX PHASE5-HIGH-73: check VIP status.
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    is_vip = user.is_vip or (user.vip_expires_at and user.vip_expires_at > now_utc)
+    is_vip = _is_vip_active(user)
 
     liked_me = await get_users_who_liked_me(db_read_session, call.from_user.id, limit=20)
     if not liked_me:

@@ -52,7 +52,7 @@ def get_chat_approval_keyboard() -> InlineKeyboardMarkup:
 def get_active_chat_controls(target_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=InlineBtn.END_ACTIVE_CHAT, callback_data="end_active_chat", icon_custom_emoji_id="5465665476971471368", style="danger")],
-        [InlineKeyboardButton(text=InlineBtn.REPORT_USER, callback_data=f"trigger_report_{target_id}", icon_custom_emoji_id="5411175424455613715", style="danger")]
+        [InlineKeyboardButton(text=InlineBtn.REPORT_USER, callback_data=f"report_user_{target_id}", icon_custom_emoji_id="5411175424455613715", style="danger")]
     ])
 
 # --- Main Menu Sub-menus (Search & Explore) ---
@@ -138,8 +138,8 @@ def get_vip_age_filter_keyboard(match_type: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=InlineBtn.VIP_AGE_25_30, callback_data=f"vip_age_filter_25_30_{match_type}", icon_custom_emoji_id="5451732530048802485", style="primary")],
         [InlineKeyboardButton(text=InlineBtn.VIP_AGE_30_40, callback_data=f"vip_age_filter_30_40_{match_type}", icon_custom_emoji_id="5451732530048802485", style="primary")],
         [InlineKeyboardButton(text=InlineBtn.VIP_AGE_ALL, callback_data=f"vip_age_filter_0_99_{match_type}", icon_custom_emoji_id="5451732530048802485", style="primary")],
-        # 🌟 دکمه رفع بن‌بست
-        [InlineKeyboardButton(text="❌ انصراف", callback_data="close_menu", icon_custom_emoji_id="5465665476971471368", style="danger")]
+        # 👈 فیکس: تغییر callback_data برای مدیریت صحیح لغو
+        [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel_vip_filter", icon_custom_emoji_id="5465665476971471368", style="danger")]
     ])
 
 # ── Onboarding: terms acceptance ───────────────────────────────────────────
